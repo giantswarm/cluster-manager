@@ -1,0 +1,20 @@
+cluster-manager is running.
+{{- if .Values.mcp.enabled }}
+
+  MCP : http://{{ include "cluster-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
+{{- end }}
+{{- if .Values.oauth.enabled }}
+
+Every call must carry a bearer token of the platform identity provider; muster forwards the session's token (forwardToken).
+{{- else }}
+
+Try it:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "cluster-manager.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s localhost:8080{{ .Values.mcp.path }} -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_clusters","arguments":{}}}'
+{{- end }}
+{{- if .Values.muster.mcpServer.enabled }}
+
+muster registers the server as MCPServer "{{ .Values.muster.mcpServer.name }}"; tools appear as x_{{ .Values.muster.mcpServer.name }}_<tool>.
+{{- end }}

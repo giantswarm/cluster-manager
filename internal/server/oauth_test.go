@@ -1,0 +1,382 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"io"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/giantswarm/cluster-manager/internal/api"
+	"github.com/giantswarm/cluster-manager/internal/identity"
+)
+
+// fakeIdP is a minimal OIDC issuer on https://localhost: discovery document
+// and JWKS, enough for mcp-oauth's Dex provider to boot and for forwarded
+// id_tokens to be validated against it — the shape of the platform's Dex.
+type fakeIdP struct {
+	issuer string
+	key    *rsa.PrivateKey
+	caFile string
+	srv    *httptest.Server
+}
+
+const testKID = "test-key"
+
+func newFakeIdP(t *testing.T) *fakeIdP {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	idp := &fakeIdP{key: key}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dex/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                idp.issuer,
+			"authorization_endpoint":                idp.issuer + "/auth",
+			"token_endpoint":                        idp.issuer + "/token",
+			"userinfo_endpoint":                     idp.issuer + "/userinfo",
+			"jwks_uri":                              idp.issuer + "/keys",
+			"response_types_supported":              []string{"code"},
+			"scopes_supported":                      []string{"openid", "email", "profile", "groups", "offline_access"},
+			"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+			"code_challenge_methods_supported":      []string{"S256"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
+		})
+	})
+	mux.HandleFunc("/dex/keys", func(w http.ResponseWriter, _ *http.Request) {
+		jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: testKID, Algorithm: string(jose.RS256), Use: "sig"}}}
+		_ = json.NewEncoder(w).Encode(jwks)
+	})
+	// Dex's userinfo endpoint accepts any JWT Dex signed — an id_token for
+	// another client included — which is why a forwarded id_token whose
+	// audience is not trusted still resolves to a user (without the SSO flag).
+	mux.HandleFunc("/dex/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		tok, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256})
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var claims map[string]any
+		if err := tok.Claims(&key.PublicKey, &claims); err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sub": claims["sub"], "email": claims["email"], "email_verified": claims["email_verified"],
+			"name": claims["name"], "groups": claims["groups"],
+		})
+	})
+
+	// mcp-oauth rejects IP-literal issuers even with private IPs allowed; a
+	// hostname that resolves to loopback (localhost, like the agentlab Dex) is
+	// what AllowPrivateIP is for. httptest's certificate has no localhost SAN,
+	// so mint one.
+	srv := httptest.NewUnstartedServer(mux)
+	cert := selfSignedLocalhost(t)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	idp.srv = srv
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	require.NoError(t, err)
+	idp.issuer = "https://localhost:" + port + "/dex"
+
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600))
+	idp.caFile = caPath
+	return idp
+}
+
+func selfSignedLocalhost(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// idToken mints an id_token the fake IdP signed.
+func (f *fakeIdP) idToken(t *testing.T, aud []string, exp time.Time) string {
+	t.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: f.key},
+		(&jose.SignerOptions{}).WithHeader("kid", testKID).WithType("JWT"))
+	require.NoError(t, err)
+	claims := jwt.Claims{Issuer: f.issuer, Subject: "sub-admin", Audience: jwt.Audience(aud),
+		Expiry: jwt.NewNumericDate(exp), IssuedAt: jwt.NewNumericDate(time.Now().Add(-time.Minute))}
+	extra := map[string]any{"email": "admin@lab.local", "email_verified": true, "name": "Lab Admin", "groups": []string{"platform-admins"}}
+	tok, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()
+	require.NoError(t, err)
+	return tok
+}
+
+func (f *fakeIdP) config(downstream bool) OAuthConfig {
+	return OAuthConfig{
+		BaseURL:            "http://localhost:8080",
+		Provider:           ProviderDex,
+		DexIssuerURL:       f.issuer,
+		DexClientID:        "agent-platform",
+		DexClientSecret:    "lab-only",
+		DexCAFile:          f.caFile,
+		DexAllowPrivateIP:  true,
+		TrustedAudiences:   []string{"agent-platform"},
+		SSOAllowPrivateIPs: true,
+		DownstreamOAuth:    downstream,
+	}
+}
+
+func TestOAuthConfigValidation(t *testing.T) {
+	dexOK := OAuthConfig{BaseURL: "https://mm.example.com", DexIssuerURL: "x", DexClientID: "y", DexClientSecret: "z"}
+	require.Error(t, OAuthConfig{}.Validate())
+	require.Error(t, OAuthConfig{BaseURL: "http://mm.example.com", DexIssuerURL: "x", DexClientID: "y", DexClientSecret: "z"}.Validate(), "plain http only on loopback")
+	require.NoError(t, OAuthConfig{BaseURL: "http://localhost:8080", DexIssuerURL: "x", DexClientID: "y", DexClientSecret: "z"}.Validate())
+	require.NoError(t, dexOK.Validate())
+	require.Error(t, OAuthConfig{BaseURL: "https://mm.example.com", Provider: ProviderDex}.Validate(), "dex needs issuer + client")
+	require.Error(t, OAuthConfig{BaseURL: "https://mm.example.com", Provider: ProviderGoogle, GoogleClientID: "id"}.Validate(), "google needs the secret")
+	require.NoError(t, OAuthConfig{BaseURL: "https://mm.example.com", Provider: ProviderGoogle, GoogleClientID: "id", GoogleClientSecret: "s", TrustedAudiences: []string{"id"}}.Validate())
+	require.Error(t, OAuthConfig{BaseURL: "https://mm.example.com", Provider: "okta"}.Validate(), "unknown provider")
+	bad := dexOK
+	bad.TrustedAudiences = []string{"agent-platform", " "}
+	require.Error(t, bad.Validate(), "empty audience")
+}
+
+// TestForwardedIDTokenBecomesTheCaller is the platform path: muster (or the
+// portal through the gateway) forwards the IdP id_token for the platform
+// client; cluster-manager validates it against the IdP's JWKS and the request
+// carries the caller — and, with downstream OAuth, the caller's token.
+func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
+	idp := newFakeIdP(t)
+	o, err := newOAuth(idp.config(true), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	t.Cleanup(func() { o.shutdown(context.Background()) })
+
+	var seen struct {
+		id    *identity.Identity
+		token string
+		ok    bool
+	}
+	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.id, seen.ok = identity.FromContext(r.Context())
+		seen.token, _ = identity.TokenFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	call := func(bearer string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := call("")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "no token, no API")
+	assert.Contains(t, rec.Header().Get("WWW-Authenticate"), "Bearer", "RFC 9728 challenge")
+
+	forwarded := idp.idToken(t, []string{"agent-platform"}, time.Now().Add(30*time.Minute))
+	rec = call(forwarded)
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	require.True(t, seen.ok, "the caller reaches the handler")
+	assert.Equal(t, "admin@lab.local", seen.id.Email)
+	assert.Equal(t, "sub-admin", seen.id.Subject)
+	assert.Equal(t, []string{"platform-admins"}, seen.id.Groups)
+	assert.Equal(t, identity.SourceSSO, seen.id.Source)
+	assert.Equal(t, forwarded, seen.token, "downstream OAuth: the forwarded id_token is what the Kubernetes API will see")
+
+	// A token minted for some other client (another aggregator, another app)
+	// is not trusted, even though the same IdP signed it.
+	assert.Equal(t, http.StatusUnauthorized, call(idp.idToken(t, []string{"someone-else"}, time.Now().Add(30*time.Minute))).Code)
+	// Expired tokens are rejected.
+	assert.Equal(t, http.StatusUnauthorized, call(idp.idToken(t, []string{"agent-platform"}, time.Now().Add(-time.Minute))).Code)
+	// Garbage is rejected.
+	assert.Equal(t, http.StatusUnauthorized, call("not-a-token").Code)
+}
+
+func TestDownstreamOffKeepsTheServiceAccount(t *testing.T) {
+	idp := newFakeIdP(t)
+	o, err := newOAuth(idp.config(false), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	t.Cleanup(func() { o.shutdown(context.Background()) })
+
+	var caller string
+	var hasToken bool
+	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller = identity.Caller(r.Context())
+		_, hasToken = identity.TokenFromContext(r.Context())
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+idp.idToken(t, []string{"agent-platform"}, time.Now().Add(time.Minute)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "admin@lab.local", caller, "the caller is known and attributed")
+	assert.False(t, hasToken, "but nothing is presented to the Kubernetes API")
+
+	// An id_token for another client resolves through the IdP's userinfo
+	// endpoint; without downstream OAuth that is enough — attributed, served.
+	caller = ""
+	req = httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+idp.idToken(t, []string{"portal-client", "kubernetes"}, time.Now().Add(time.Minute)))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "admin@lab.local", caller)
+}
+
+// TestUntrustedAudienceIsNamedInTheRefusal is the portal-session shape: the
+// IdP signed the token for the portal's own login client plus the audience
+// the kube-apiserver trusts, not for the platform client. mcp-oauth resolves
+// the caller through the IdP's userinfo endpoint, which leaves no token
+// cluster-manager may present downstream, so the request is refused — and the
+// refusal says which audiences the token carried and which are trusted, in
+// the log and in the WWW-Authenticate challenge muster shows. Trusting the
+// audience every forwarded token carries (the chart unions the MCPServer's
+// requiredAudiences in) accepts the same token as a forwarded id_token.
+func TestUntrustedAudienceIsNamedInTheRefusal(t *testing.T) {
+	idp := newFakeIdP(t)
+	portal := idp.idToken(t, []string{"portal-client", "kubernetes"}, time.Now().Add(30*time.Minute))
+
+	serve := func(trusted []string) (func(string) *httptest.ResponseRecorder, *bytes.Buffer, *struct {
+		id    *identity.Identity
+		token string
+		ok    bool
+	}) {
+		cfg := idp.config(true)
+		cfg.TrustedAudiences = trusted
+		var logs bytes.Buffer
+		o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(&logs, nil)))
+		require.NoError(t, err)
+		t.Cleanup(func() { o.shutdown(context.Background()) })
+		seen := &struct {
+			id    *identity.Identity
+			token string
+			ok    bool
+		}{}
+		h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen.id, seen.ok = identity.FromContext(r.Context())
+			seen.token, _ = identity.TokenFromContext(r.Context())
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		return func(bearer string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+			req.Header.Set("Authorization", "Bearer "+bearer)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec
+		}, &logs, seen
+	}
+
+	// Only the platform client is trusted (the chart's fallback without
+	// requiredAudiences): refused, and the refusal names the mismatch.
+	call, logs, seen := serve([]string{"agent-platform"})
+	rec := call(portal)
+	require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.False(t, seen.ok, "the handler is not reached")
+	www := rec.Header().Get("WWW-Authenticate")
+	assert.True(t, strings.HasPrefix(www, "Bearer "), www)
+	assert.Contains(t, www, `resource_metadata="http://localhost:8080/.well-known/oauth-protected-resource`)
+	assert.Contains(t, www, `error="invalid_token"`)
+	assert.Contains(t, www, "audience [portal-client, kubernetes]")
+	assert.Contains(t, www, "trusted audiences [agent-platform]")
+	assert.Contains(t, www, "muster.mcpServer.auth.requiredAudiences")
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "invalid_token", body["error"])
+	assert.Contains(t, body["error_description"], "matches none of the trusted audiences [agent-platform]")
+	assert.Contains(t, logs.String(), "request refused: the bearer is an id_token for audience [portal-client, kubernetes]")
+	assert.Contains(t, logs.String(), "caller=admin@lab.local")
+	assert.Contains(t, logs.String(), "source=oauth")
+	assert.Contains(t, logs.String(), "trustedAudiences=[agent-platform]")
+
+	// A bearer that is no JWT at all cannot be attributed to an audience:
+	// mcp-oauth refuses it before this server sees a caller.
+	assert.Equal(t, http.StatusUnauthorized, call("opaque-token").Code)
+
+	// The audience the MCPServer requires is trusted too: the same token is a
+	// forwarded id_token — SSO caller, token presented downstream.
+	call, logs, seen = serve([]string{"agent-platform", "kubernetes"})
+	rec = call(portal)
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	require.True(t, seen.ok)
+	assert.Equal(t, identity.SourceSSO, seen.id.Source)
+	assert.Equal(t, "admin@lab.local", seen.id.Email)
+	assert.Equal(t, portal, seen.token)
+	assert.NotContains(t, logs.String(), "request refused")
+}
+
+// TestRefusalHeaderIsQuoted keeps token-supplied audiences inside the
+// quoted-string of the WWW-Authenticate challenge.
+func TestRefusalHeaderIsQuoted(t *testing.T) {
+	assert.Equal(t, `a\"b\\c d e`, headerQuoted("a\"b\\c\r\nd\ne"))
+	assert.Nil(t, jwtAudience("opaque"))
+	assert.Nil(t, jwtAudience("a.b.c"))
+}
+
+// TestServerGuardsMCPButNotProbes wires OAuth through the assembled server:
+// probes and the OAuth metadata stay open, the MCP endpoint demands a token.
+func TestServerGuardsMCPButNotProbes(t *testing.T) {
+	idp := newFakeIdP(t)
+	cfg := idp.config(false)
+	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true, OAuth: &cfg}, api.NewMCPServer(nil, "test"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	t.Cleanup(func() { srv.oauth.shutdown(context.Background()) })
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	status := func(method, path, bearer string) int {
+		req, err := http.NewRequest(method, ts.URL+path, nil)
+		require.NoError(t, err)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	assert.Equal(t, http.StatusOK, status(http.MethodGet, "/healthz", ""))
+	assert.Equal(t, http.StatusOK, status(http.MethodGet, "/readyz", ""))
+	assert.Equal(t, http.StatusUnauthorized, status(http.MethodPost, "/mcp", ""), "MCP needs a token")
+	assert.Equal(t, http.StatusNotFound, status(http.MethodGet, "/api/v1/backend", ""), "there is no REST API")
+	assert.Equal(t, http.StatusOK, status(http.MethodGet, "/.well-known/oauth-authorization-server", ""), "metadata stays public")
+}

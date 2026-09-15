@@ -1,0 +1,61 @@
+[
+  {
+    "name": "wc1",
+    "namespace": "org-acme",
+    "organization": "acme",
+    "releaseVersion": "31.0.0",
+    "ownCluster": false,
+    "gpuOperator": {
+      "status": "unknown"
+    },
+    "serving": {
+      "status": "unknown"
+    },
+    "poolReleases": [
+      {
+        "name": "wc1-gpu-a10g",
+        "namespace": "org-acme",
+        "chartVersion": "0.3.0",
+        "ready": true
+      }
+    ],
+    "commitTarget": null
+  },
+  {
+    "name": "wc2",
+    "namespace": "org-acme",
+    "organization": "acme",
+    "releaseVersion": "30.1.0",
+    "ownCluster": false,
+    "gpuOperator": {
+      "status": "unknown"
+    },
+    "serving": {
+      "status": "unknown"
+    },
+    "poolReleases": [
+      {
+        "name": "wc2-gpu-l4",
+        "namespace": "org-acme",
+        "chartVersion": "0.2.0",
+        "ready": null
+      }
+    ],
+    "commitTarget": null
+  },
+  {
+    "name": "gazelle",
+    "namespace": "org-giantswarm",
+    "organization": "giantswarm",
+    "releaseVersion": "31.0.0",
+    "ownCluster": true,
+    "gpuOperator": {
+      "status": "unknown"
+    },
+    "serving": {
+      "status": "unknown"
+    },
+    "poolReleases": [],
+    "commitTarget": null
+  }
+]
