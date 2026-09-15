@@ -1,0 +1,68 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    app.kubernetes.io/name: gpu-node-pool
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-l4
+  name: wc1-gpu-l4
+  namespace: org-acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: wc1
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+spec:
+  interval: 10m
+  ref:
+    tag: 0.3.0
+  url: oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    app.kubernetes.io/name: gpu-node-pool
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-l4
+  name: wc1-gpu-l4
+  namespace: org-acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: wc1
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-l4
+  install:
+    remediation:
+      retries: 3
+  interval: 10m
+  releaseName: wc1-gpu-l4
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    cluster:
+      baseDomain: acme.example.io
+      cilium:
+        ipamMode: kubernetes
+      managementCluster: gazelle
+      name: wc1
+      organization: acme
+      registryMirrors:
+        gsoci.azurecr.io:
+        - gsoci.azurecr.io
+    pool:
+      accelerator: nvidia-l4
+      kubernetesVersion: 1.31.4
+      machineImage: flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs
+      maxSize:
+        nvidia.com/gpu: "4"
+      name: gpu-l4
+    teleport:
+      enabled: true

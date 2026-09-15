@@ -18,6 +18,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/yaml"
+
+	"github.com/giantswarm/cluster-manager/internal/compose"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files from the current output")
@@ -46,10 +48,14 @@ func loadFixtures(t *testing.T, name string) []runtime.Object {
 func newFakeClients(t *testing.T, fixture string) ClientsFor {
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		ClusterGVR:     "ClusterList",
-		MachinePoolGVR: "MachinePoolList",
-		HelmReleaseGVR: "HelmReleaseList",
-		ReleaseGVR:     "ReleaseList",
+		ClusterGVR:               "ClusterList",
+		MachinePoolGVR:           "MachinePoolList",
+		HelmReleaseGVR:           "HelmReleaseList",
+		ReleaseGVR:               "ReleaseList",
+		compose.OCIRepositoryGVR: "OCIRepositoryList",
+		compose.SecretGVR:        "SecretList",
+		ConfigMapGVR:             "ConfigMapList",
+		AppGVR:                   "AppList",
 	}, loadFixtures(t, fixture)...)
 	return func(context.Context) dynamic.Interface { return dyn }
 }
