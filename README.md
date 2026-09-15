@@ -1,29 +1,52 @@
-# General Go template repository
+# cluster-manager
 
-This is a general template repository containing some basic files every GitHub repo owned by Giant Swarm should have.
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/giantswarm/cluster-manager/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/giantswarm/cluster-manager/tree/main)
 
-Note also these more specific repositories:
+The Agent Platform's MCP-only cluster write surface: node pools first
+([bumblebee-plans#46](https://github.com/giantswarm/bumblebee-plans/pull/46),
+[giantswarm/giantswarm#37637](https://github.com/giantswarm/giantswarm/issues/37637),
+epic [giantswarm/giantswarm#37639](https://github.com/giantswarm/giantswarm/issues/37639)).
 
-- [template-app](https://github.com/giantswarm/template-app)
-- [gitops-template](https://github.com/giantswarm/gitops-template)
-- [python-app-template](https://github.com/giantswarm/python-app-template)
+cluster-manager is the third sibling of `model-manager` and `agent-manager`: a Go MCP server
+(streamable HTTP, an mcp-oauth resource server) registered with muster by its own `MCPServer`
+CR. Agents call its tools through muster, and so does the Dev Portal — as the signed-in person.
+Every Kubernetes call is presented to the API server with the caller's forwarded IdP token
+(`forwardToken`), so the caller's RBAC governs what a tool may read or write. There is no REST
+API.
 
-## Creating a new repository
+## Tools
 
-Please do not use the `Use this template` function in the GitHub web UI.
+Through muster the tools appear as `x_cluster-manager_<tool>`.
 
-Check out the according [handbook article](https://handbook.giantswarm.io/docs/dev-and-releng/repository/go/) for better instructions.
+| Tool | Purpose |
+|---|---|
+| `get_info` | Version, mode capabilities (`apply`, `commit`) and the tool list |
+| `list_clusters` | The installation's clusters: name, organization, release version, own-cluster flag, GPU operator and serving presence with their provider, the GPU pool releases, the commit target |
+| `list_node_pools` | The MachinePools of one cluster with the pool's Kubernetes version and the control plane's as two fields, replicas, instance and accelerator types, the owning HelmRelease |
 
-### Some suggestions for your README
+Write tools (`create_node_pool`, `delete_node_pool`, `enable_model_serving`,
+`disable_model_serving`), every one with `dryRun` and `mode: apply | commit`, follow in the
+epic's later stages.
 
-After you have created your new repository, you may want to add some of these badges to the top of your README.
+## Running
 
-- **CircleCI:** After enabling builds for this repo via [this link](https://circleci.com/setup-project/gh/giantswarm/REPOSITORY_NAME), you can find badge code on [this page](https://app.circleci.com/settings/project/github/giantswarm/REPOSITORY_NAME/status-badges).
+```sh
+cluster-manager serve --kubeconfig ~/.kube/config
+```
 
-- **Go reference:** use [this helper](https://pkg.go.dev/badge/) to create the markdown code.
+Every flag has an environment variable named next to it in `--help`; flags win. The chart in
+`helm/cluster-manager` renders the Deployment, the Service, the `MCPServer` CR for muster and,
+with `oauth.enabled`, the mcp-oauth resource-server flags from the platform identity contract
+(`global.identity`).
 
-- **Go report card:** enter the module name on the [front page](https://goreportcard.com/) and hit "Generate report". Then use this markdown code for your badge: `[![Go report card](https://goreportcard.com/badge/github.com/giantswarm/REPOSITORY_NAME)](https://goreportcard.com/report/github.com/giantswarm/REPOSITORY_NAME)`
+## Development
 
-- **OpenSSF Scorecard Report:** for public repos only: `[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/giantswarm/{APP-NAME}/badge)](https://securityscorecards.dev/viewer/?uri=github.com/giantswarm/{APP-NAME})`
+```sh
+make build-linux-amd64   # the binary the Dockerfile expects
+go test ./...
+make helm-lint helm-template
+```
 
-- **Sourcegraph "used by N projects" badge**: for public Go repos only: `[![Sourcegraph](https://sourcegraph.com/github.com/giantswarm/REPOSITORY_NAME/-/badge.svg)](https://sourcegraph.com/github.com/giantswarm/REPOSITORY_NAME)`
+Releases are automatic: every merge to `main` is tagged from Conventional Commits and CircleCI
+publishes the image to `gsoci.azurecr.io/giantswarm/cluster-manager` and the chart to the
+Giant Swarm catalog.
