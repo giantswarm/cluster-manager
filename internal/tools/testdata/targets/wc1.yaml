@@ -1,0 +1,19 @@
+# wc1 as its apiserver shows it: Flatcar nodes, no operator, no serving.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-def00-a1b2c
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)

@@ -6,10 +6,10 @@
     "releaseVersion": "31.0.0",
     "ownCluster": false,
     "gpuOperator": {
-      "status": "unknown"
+      "status": "absent"
     },
     "serving": {
-      "status": "unknown"
+      "status": "absent"
     },
     "poolReleases": [
       {
@@ -28,10 +28,16 @@
     "releaseVersion": "30.1.0",
     "ownCluster": false,
     "gpuOperator": {
-      "status": "unknown"
+      "status": "absent"
     },
     "serving": {
-      "status": "unknown"
+      "status": "present",
+      "provider": "chart",
+      "evidence": [
+        "KServe API serving.kserve.io/v1beta1 served",
+        "discovery ConfigMap agent-platform/agent-platform-model-serving",
+        "llmisvc API serving.kserve.io/v1alpha1 served"
+      ]
     },
     "poolReleases": [
       {
@@ -50,10 +56,10 @@
     "releaseVersion": "31.0.0",
     "ownCluster": true,
     "gpuOperator": {
-      "status": "unknown"
+      "status": "absent"
     },
     "serving": {
-      "status": "unknown"
+      "status": "absent"
     },
     "poolReleases": [],
     "commitTarget": null

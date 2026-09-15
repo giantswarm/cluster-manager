@@ -22,10 +22,12 @@ import (
 type serveOptions struct {
 	listen string
 
-	kubeconfig   string
-	kubeContext  string
-	inCluster    bool
-	installation string
+	kubeconfig            string
+	kubeContext           string
+	inCluster             bool
+	installation          string
+	modelManagerNamespace string
+	servingNamespace      string
 
 	mcpEnabled bool
 	mcpPath    string
@@ -62,6 +64,8 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.kubeconfig, "kubeconfig", envOr("KUBECONFIG", ""), "Kubeconfig path; empty uses the default loading rules or in-cluster auth (KUBECONFIG)")
 	f.StringVar(&o.kubeContext, "kube-context", envOr("KUBE_CONTEXT", ""), "Kubeconfig context override (KUBE_CONTEXT)")
 	f.BoolVar(&o.inCluster, "in-cluster", envBool("KUBERNETES_IN_CLUSTER", false), "Force in-cluster Kubernetes auth (KUBERNETES_IN_CLUSTER)")
+	f.StringVar(&o.modelManagerNamespace, "model-manager-namespace", envOr("CLUSTER_MANAGER_MODEL_MANAGER_NAMESPACE", "agent-platform"), "Namespace model-manager runs in: create_node_pool registers the serving cluster's kserve backend there (CLUSTER_MANAGER_MODEL_MANAGER_NAMESPACE)")
+	f.StringVar(&o.servingNamespace, "serving-namespace", envOr("CLUSTER_MANAGER_SERVING_NAMESPACE", "model-serving"), "Namespace on a serving cluster where InferenceServices go, named in the registered kserve backend (CLUSTER_MANAGER_SERVING_NAMESPACE)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
@@ -94,7 +98,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	// Per-call clients: the caller's own when the request carries the
 	// caller's token (downstream OAuth), the ServiceAccount's otherwise.
-	svc := tools.New(func(ctx context.Context) dynamic.Interface { return clients.For(ctx).Dynamic }, tools.Config{Installation: o.installation})
+	svc := tools.New(
+		func(ctx context.Context) dynamic.Interface { return clients.For(ctx).Dynamic },
+		func(ctx context.Context, apiServer string, ca []byte) (dynamic.Interface, error) {
+			target, err := clients.ForTarget(ctx, apiServer, ca)
+			if err != nil {
+				return nil, err
+			}
+			return target.Dynamic, nil
+		},
+		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace},
+	)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
 	if o.oauthEnabled {

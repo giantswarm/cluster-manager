@@ -34,6 +34,18 @@ installation:
   # marks none.
   name: ""
 
+modelManager:
+  # -- Namespace model-manager runs in on the installation. `create_node_pool`
+  # registers the serving cluster's `kserve` backend there by writing the
+  # `model-backend-kserve` ConfigMap of model-manager's runtime-registration
+  # contract; `delete_node_pool` of the cluster's last pool removes it.
+  namespace: agent-platform
+
+serving:
+  # -- Namespace on a serving cluster where the InferenceServices go, named
+  # as `target.servingNamespace` in the registered `kserve` backend.
+  namespace: model-serving
+
 mcp:
   # -- Serve the MCP streamable-HTTP endpoint (the server's only surface).
   enabled: true

@@ -24,14 +24,15 @@ func l4(cluster, name string, dryRun bool) CreateNodePoolInput {
 // (pins), its values ConfigMap (snapshot, credentials into a Secret) and its
 // teleport Secret, and pins the answer as a golden.
 func TestCreateNodePoolDryRun(t *testing.T) {
-	svc := New(newFakeClients(t, "installation.yaml"), Config{Installation: "gazelle"})
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	out, err := svc.CreateNodePool(context.Background(), l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
 	assert.Equal(t, "1.31.4", out.KubernetesVersion, "from the Release CR")
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
 	assert.Equal(t, "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
 	assert.Equal(t, "0.3.0", out.ChartVersion)
-	require.Len(t, out.Objects, 3, "OCIRepository, credentials Secret, HelmRelease")
+	require.Len(t, out.Objects, 6, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the backend ConfigMap")
+	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
 	for _, o := range out.Objects {
 		assert.Equal(t, "would-create", o.Action, o.Kind)
 	}
@@ -47,41 +48,44 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 // TestCreateNodePoolAppLayoutNoTeleport reads the snapshot from an App CR's
 // user-values ConfigMap; wc2 has a proxy and no teleport Secret.
 func TestCreateNodePoolAppLayoutNoTeleport(t *testing.T) {
-	svc := New(newFakeClients(t, "installation.yaml"), Config{Installation: "gazelle"})
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	out, err := svc.CreateNodePool(context.Background(), l4("wc2", "gpu-l4b", true))
 	require.NoError(t, err)
-	values, _, _ := unstructured.NestedMap(out.Manifests[len(out.Manifests)-1], "spec", "values")
+	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
 	assert.Equal(t, map[string]any{"enabled": false}, values["teleport"])
+	assert.Equal(t, compose.RowPreinstalled.Name, out.OperatorRow, "nodes labelled nvidia.com/gpu.deploy.driver=pre-installed: row 2")
+	operator, _, _ := unstructured.NestedMap(out.Manifests[3], "spec", "values", "gpu-operator")
+	assert.Equal(t, map[string]any{"driver": map[string]any{"enabled": false}, "toolkit": map[string]any{"enabled": true}}, operator)
 	proxy, _, _ := unstructured.NestedMap(values, "cluster", "proxy")
 	assert.Equal(t, "10.0.0.0/8,.acme.example.io", proxy["noProxy"])
-	require.Len(t, out.Objects, 2, "no credentials: no Secret")
+	require.Len(t, out.Objects, 5, "no credentials: no Secret")
 	assertGolden(t, "create_node_pool_app_layout", out)
 }
 
 // TestCreateNodePoolIdempotent: apply creates, the re-run is unchanged, a
 // changed input is the update and its dry-run names the difference.
 func TestCreateNodePoolIdempotent(t *testing.T) {
-	clients := newFakeClients(t, "installation.yaml")
-	svc := New(clients, Config{Installation: "gazelle"})
+	lab := newLab(t, "installation.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
 	ctx := context.Background()
 
 	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"create", "create", "create"}, actions(out))
-	hr, err := clients(ctx).Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-l4", metav1.GetOptions{})
+	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create"}, actions(out))
+	hr, err := lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-l4", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "wc1", hr.GetOwnerReferences()[0].Name, "owned by the Cluster")
 	assert.Equal(t, "cluster-manager", hr.GetLabels()[compose.LabelManagedBy])
 
 	again, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged"}, actions(again))
+	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(again))
 
 	bigger := l4("wc1", "gpu-l4", true)
 	bigger.Pool.MaxGPUs = 8
 	drift, err := svc.CreateNodePool(ctx, bigger)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"unchanged", "unchanged", "would-update"}, actions(drift), "only the release changes; its source and Secret stand")
+	assert.Equal(t, []string{"unchanged", "unchanged", "would-update", "unchanged", "unchanged", "unchanged"}, actions(drift), "only the pool release changes; its source and Secret, the operator and the backend stand")
 	assert.Equal(t, []string{"spec.values.pool.maxSize.nvidia.com/gpu"}, drift.Objects[2].Changes, "the dry-run is the drift check")
 
 	bigger.DryRun = false
@@ -93,7 +97,7 @@ func TestCreateNodePoolIdempotent(t *testing.T) {
 // TestCreateNodePoolReRunUpdatesAnExistingPool: wc1-gpu-a10g exists from an
 // earlier version of the tool; the re-run brings it to the current shape.
 func TestCreateNodePoolReRunUpdatesAnExistingPool(t *testing.T) {
-	svc := New(newFakeClients(t, "installation.yaml"), Config{Installation: "gazelle"})
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	in := l4("wc1", "gpu-a10g", true)
 	in.Pool.Accelerator = "nvidia-a10g"
 	out, err := svc.CreateNodePool(context.Background(), in)
@@ -104,7 +108,7 @@ func TestCreateNodePoolReRunUpdatesAnExistingPool(t *testing.T) {
 }
 
 func TestCreateNodePoolRefusals(t *testing.T) {
-	svc := New(newFakeClients(t, "installation.yaml"), Config{Installation: "gazelle"})
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	ctx := context.Background()
 
 	commit := l4("wc1", "gpu-l4", true)
@@ -123,7 +127,7 @@ func TestCreateNodePoolRefusals(t *testing.T) {
 	require.Error(t, err, "the installation's own cluster has no values object in the fixture")
 	assert.Contains(t, err.Error(), "values of cluster gazelle")
 
-	skew := New(newFakeClients(t, "skew.yaml"), Config{Installation: "gazelle"})
+	skew := newLab(t, "skew.yaml").service(Config{Installation: "gazelle"})
 	_, err = skew.CreateNodePool(ctx, l4("wc3", "gpu-l4", true))
 	assertRefused(t, err, "never newer than the control plane")
 }
@@ -132,8 +136,8 @@ func TestCreateNodePoolRefusals(t *testing.T) {
 // removes the release, its source and nothing else; a foreign release is
 // never touched.
 func TestDeleteNodePool(t *testing.T) {
-	clients := newFakeClients(t, "installation.yaml")
-	svc := New(clients, Config{Installation: "gazelle"})
+	lab := newLab(t, "installation.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
 	ctx := context.Background()
 
 	_, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
@@ -147,9 +151,9 @@ func TestDeleteNodePool(t *testing.T) {
 	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"delete", "delete"}, actions(out))
-	_, err = clients(ctx).Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	_, err = lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
 	assert.Error(t, err, "gone")
-	_, err = clients(ctx).Resource(compose.OCIRepositoryGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	_, err = lab.installation.Resource(compose.OCIRepositoryGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
 	assert.Error(t, err, "gone")
 
 	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})

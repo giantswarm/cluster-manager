@@ -141,24 +141,12 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	if version == "" {
 		version = DefaultPoolChartVersion
 	}
-	labels := map[string]any{
+	meta := objectMeta(c, map[string]any{
 		LabelChartName: PoolChart,
 		LabelManagedBy: ManagedBy,
 		LabelCluster:   c.Name,
 		LabelPool:      p.Name,
-	}
-	meta := func(name string) map[string]any {
-		m := map[string]any{"name": name, "namespace": c.Namespace, "labels": labels}
-		if c.UID != "" {
-			m["ownerReferences"] = []any{map[string]any{
-				"apiVersion": "cluster.x-k8s.io/v1beta1",
-				"kind":       "Cluster",
-				"name":       c.Name,
-				"uid":        c.UID,
-			}}
-		}
-		return m
-	}
+	})
 
 	source := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": OCIRepositoryGVR.GroupVersion().String(),

@@ -118,6 +118,26 @@ func (c *Clients) ForToken(token string) (*Clients, error) {
 	return user, nil
 }
 
+// ForTarget returns clients for another cluster's apiserver — a workload
+// cluster, reached at apiServer with its CA — presenting the caller's
+// forwarded token and nothing else: the kubeconfig Secret's credentials are
+// never used, so the caller's RBAC on the target governs (the target trusts
+// the installation's identity provider). Without a caller token there is no
+// identity to present and the target is not read.
+func (c *Clients) ForTarget(ctx context.Context, apiServer string, ca []byte) (*Clients, error) {
+	token, ok := identity.TokenFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("no caller token: a workload cluster is read as the caller only")
+	}
+	cfg := &rest.Config{Host: apiServer, BearerToken: token, UserAgent: c.restCfg.UserAgent, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}
+	target, err := fromRESTConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	target.log = c.log
+	return target, nil
+}
+
 // For returns the clients a call should use: the caller's when ctx carries a
 // caller token (downstream OAuth), else the ServiceAccount's. There is no
 // fallback from a caller to the ServiceAccount: with downstream OAuth the
