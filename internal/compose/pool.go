@@ -148,16 +148,11 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 		LabelPool:      p.Name,
 	})
 
-	source := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": OCIRepositoryGVR.GroupVersion().String(),
-		"kind":       "OCIRepository",
-		"metadata":   meta(name),
-		"spec": map[string]any{
-			"interval": ReleaseInterval,
-			"url":      PoolChartURL,
-			"ref":      map[string]any{"tag": version},
-		},
-	}}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": map[string]any{
+		"interval": ReleaseInterval,
+		"url":      PoolChartURL,
+		"ref":      map[string]any{"tag": version},
+	}})
 
 	spec := map[string]any{
 		"interval":    ReleaseInterval,
@@ -176,13 +171,7 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 		spec["valuesFrom"] = []any{map[string]any{"kind": "Secret", "name": secret.GetName(), "valuesKey": ValuesSecretKey}}
 		objs = append(objs, secret)
 	}
-	release := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": HelmReleaseGVR.GroupVersion().String(),
-		"kind":       "HelmRelease",
-		"metadata":   meta(name),
-		"spec":       spec,
-	}}
-	return append(objs, release), nil
+	return append(objs, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})), nil
 }
 
 // values is the chart's values for the pool: the snapshot of the cluster's
@@ -254,13 +243,10 @@ func credentialsSecret(c Cluster, p PoolSpec, meta map[string]any) (*unstructure
 	if err != nil {
 		return nil, fmt.Errorf("encode registry credentials: %w", err)
 	}
-	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Secret",
-		"metadata":   meta,
-		"type":       string("Opaque"),
+	return object(SecretGVR, "Secret", meta, map[string]any{
+		"type":       "Opaque",
 		"stringData": map[string]any{ValuesSecretKey: string(raw)},
-	}}, nil
+	}), nil
 }
 
 // OwnedBy reports whether obj is one of cluster-manager's objects.

@@ -29,7 +29,7 @@ const (
 	// KubeconfigSecretSuffix names the CAPI kubeconfig Secret of a cluster;
 	// a release targeting a workload cluster reads it through
 	// spec.kubeConfig.secretRef.
-	KubeconfigSecretSuffix = "-kubeconfig"
+	KubeconfigSecretSuffix = "-kubeconfig" //nolint:gosec // a Secret's name, not a credential
 
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
@@ -138,16 +138,11 @@ func Operator(c Cluster, row OperatorRow, ownCluster bool) []*unstructured.Unstr
 		LabelManagedBy: ManagedBy,
 		LabelCluster:   c.Name,
 	})
-	source := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": OCIRepositoryGVR.GroupVersion().String(),
-		"kind":       "OCIRepository",
-		"metadata":   meta(name),
-		"spec": map[string]any{
-			"interval": ReleaseInterval,
-			"url":      OperatorChartURL,
-			"ref":      map[string]any{"semver": OperatorChartRange},
-		},
-	}}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": map[string]any{
+		"interval": ReleaseInterval,
+		"url":      OperatorChartURL,
+		"ref":      map[string]any{"semver": OperatorChartRange},
+	}})
 	spec := map[string]any{
 		"interval":         ReleaseInterval,
 		"releaseName":      OperatorChart,
@@ -166,13 +161,7 @@ func Operator(c Cluster, row OperatorRow, ownCluster bool) []*unstructured.Unstr
 	if !ownCluster {
 		spec["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": KubeconfigSecretName(c.Name)}}
 	}
-	release := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": HelmReleaseGVR.GroupVersion().String(),
-		"kind":       "HelmRelease",
-		"metadata":   meta(name),
-		"spec":       spec,
-	}}
-	return []*unstructured.Unstructured{source, release}
+	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}
 }
 
 // objectMeta builds the metadata of a release's objects in the cluster's

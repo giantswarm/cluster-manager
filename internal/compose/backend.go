@@ -80,19 +80,15 @@ func KServeBackend(namespace string, t BackendTarget) (*unstructured.Unstructure
 	if err != nil {
 		return nil, fmt.Errorf("encode backend document: %w", err)
 	}
-	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      BackendConfigMapName,
-			"namespace": namespace,
-			"labels": map[string]any{
-				LabelBackend:       "true",
-				LabelBackendSource: ManagedBy,
-				LabelManagedBy:     ManagedBy,
-				LabelCluster:       t.Cluster,
-			},
+	metadata := map[string]any{
+		"name":      BackendConfigMapName,
+		"namespace": namespace,
+		"labels": map[string]any{
+			LabelBackend:       "true",
+			LabelBackendSource: ManagedBy,
+			LabelManagedBy:     ManagedBy,
+			LabelCluster:       t.Cluster,
 		},
-		"data": map[string]any{BackendDocumentKey: string(raw)},
-	}}, nil
+	}
+	return object(ConfigMapGVR, "ConfigMap", metadata, map[string]any{"data": map[string]any{BackendDocumentKey: string(raw)}}), nil
 }
