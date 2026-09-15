@@ -1,0 +1,31 @@
+# No operator object, but a node feature discovery labelled and a GPU advertised.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-gpu-1
+  labels:
+    nvidia.com/gpu.present: "true"
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-gpu-2
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+  allocatable:
+    nvidia.com/gpu: "1"

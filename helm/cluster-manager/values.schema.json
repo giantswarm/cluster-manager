@@ -135,6 +135,16 @@
                 }
             }
         },
+        "modelManager": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "namespace": {
+                    "type": "string",
+                    "description": "Namespace model-manager runs in on the installation. `create_node_pool` registers the serving cluster's `kserve` backend there by writing the `model-backend-kserve` ConfigMap of model-manager's runtime-registration contract; `delete_node_pool` of the cluster's last pool removes it."
+                }
+            }
+        },
         "muster": {
             "type": "object",
             "additionalProperties": false,
@@ -448,6 +458,16 @@
                 "name": {
                     "type": "string",
                     "description": "ServiceAccount name (generated when empty)."
+                }
+            }
+        },
+        "serving": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "namespace": {
+                    "type": "string",
+                    "description": "Namespace on a serving cluster where the InferenceServices go, named as `target.servingNamespace` in the registered `kserve` backend."
                 }
             }
         },

@@ -45,17 +45,26 @@ type Config struct {
 	// Installation is the installation's name; the Cluster of that name is
 	// the installation's own cluster (its management cluster).
 	Installation string
+	// ModelManagerNamespace is where model-manager runs on the installation:
+	// the kserve backend document is written there.
+	ModelManagerNamespace string
+	// ServingNamespace is where the InferenceServices go on a serving
+	// cluster (the backend document's target.servingNamespace).
+	ServingNamespace string
 }
 
 // Service implements the tools.
 type Service struct {
 	clients ClientsFor
+	targets TargetClientsFor
 	cfg     Config
 }
 
-// New builds the tools over the per-call clients.
-func New(clients ClientsFor, cfg Config) *Service {
-	return &Service{clients: clients, cfg: cfg}
+// New builds the tools over the per-call clients of the installation and,
+// for detection on workload clusters, of their apiservers (nil: workload
+// clusters are not read, their detection reports unknown).
+func New(clients ClientsFor, targets TargetClientsFor, cfg Config) *Service {
+	return &Service{clients: clients, targets: targets, cfg: cfg}
 }
 
 // ErrNotFound is returned when a named cluster does not exist.

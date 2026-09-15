@@ -1,0 +1,17 @@
+# An operator installed by hand with the helm CLI: only its ClusterPolicy shows.
+---
+apiVersion: nvidia.com/v1
+kind: ClusterPolicy
+metadata:
+  name: cluster-policy
+  annotations:
+    meta.helm.sh/release-name: gpu-operator
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)

@@ -17,12 +17,13 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // Resources the write tools read besides the read tools'.
 var (
-	ConfigMapGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
-	AppGVR       = schema.GroupVersionResource{Group: "application.giantswarm.io", Version: "v1alpha1", Resource: "apps"}
+	ConfigMapGVR = compose.ConfigMapGVR
+	AppGVR       = detect.AppGVR
 )
 
 // Write modes. Only apply exists in this stage; commit (a pull request as
@@ -92,6 +93,27 @@ type WriteResult struct {
 	Objects             []ObjectAction `json:"objects"`
 	// Manifests are the rendered objects (create) — the dry-run's answer.
 	Manifests []map[string]any `json:"manifests,omitempty"`
+	// GPUOperator is the operator detected on the cluster before the write
+	// (create): present with its provider — nothing is composed —, or
+	// absent, in which case OperatorRow names the configuration table's row
+	// the `<cluster>-gpu-operator` release was composed from.
+	GPUOperator detect.Component `json:"gpuOperator,omitempty"`
+	OperatorRow string           `json:"operatorRow,omitempty"`
+	// Backend is the kserve backend registered with model-manager (create).
+	Backend *BackendRegistration `json:"backend,omitempty"`
+	// LastPool marks a delete of the cluster's last GPU pool: the operator
+	// release cluster-manager created and the backend it registered go too.
+	LastPool bool `json:"lastPool,omitempty"`
+}
+
+// BackendRegistration is the backend document create_node_pool writes.
+type BackendRegistration struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Target is the cluster the backend reaches: `local` for the
+	// installation's own cluster, else the cluster and its apiserver.
+	Target string `json:"target"`
 }
 
 // ObjectAction is what happened to one object.
@@ -109,7 +131,11 @@ type ObjectAction struct {
 
 // CreateNodePool composes the pool release for the cluster's current Release
 // CR and values and lands it as the caller (apply mode). A second call on the
-// same name is the update; its dry-run shows the difference.
+// same name is the update; its dry-run shows the difference. When no GPU
+// operator runs on the cluster it composes the `<cluster>-gpu-operator`
+// release beside the pool, configured from the two-row table; a chart-provided
+// operator is never re-created. After the pool it registers the cluster's
+// kserve backend with model-manager. Every refusal comes before any write.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -134,10 +160,21 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	target := s.target(ctx, dyn, c)
+	operator, row, operatorObjs, err := s.operatorRelease(ctx, target, facts)
+	if err != nil {
+		return nil, err
+	}
+	backend, err := s.backendDocument(ctx, dyn, target)
+	if err != nil {
+		return nil, err
+	}
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: nestedString(objs[0], "spec", "ref", "tag"), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
+		GPUOperator: operator, OperatorRow: row,
+		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
 	// A pool that used to carry credentials and no longer does: the stale
 	// Secret goes.
@@ -148,6 +185,8 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 			out.Objects = append(out.Objects, *act)
 		}
 	}
+	objs = append(objs, operatorObjs...)
+	objs = append(objs, backend)
 	for _, obj := range objs {
 		act, err := apply(ctx, dyn, obj, in.DryRun)
 		if err != nil {
@@ -159,8 +198,67 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	return out, nil
 }
 
+// operatorRelease decides the operator's part of a pool: nothing when one
+// runs on the target and someone else provides it (the platform's chart, a
+// human), the `<cluster>-gpu-operator` release from the table's row when
+// none does — or when the one running is cluster-manager's own, so the
+// re-run is its update —, a refusal when the cluster cannot be read or its
+// nodes match no row.
+func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.Cluster) (detect.Component, string, []*unstructured.Unstructured, error) {
+	operator := detect.GPUOperator(ctx, t.Target)
+	switch {
+	case operator.Status == detect.StatusUnknown:
+		return operator, "", nil, &ErrRefused{Reason: fmt.Sprintf("cannot tell whether a GPU operator runs on %s (%s): the operator is composed only when none does — make the cluster readable as you (its apiserver must trust the installation's identity provider) and re-run", t.Cluster, operator.Reason)}
+	case operator.Present() && (operator.Provider != detect.ProviderClusterManager || t.Reader == nil):
+		return operator, "", nil, nil
+	}
+	nodes, err := detect.Nodes(ctx, t.Reader)
+	if err != nil {
+		return operator, "", nil, &ErrRefused{Reason: fmt.Sprintf("no GPU operator runs on %s and its nodes are not readable as you (%v): the operator's configuration is read from them — re-run once you may list the cluster's nodes", t.Cluster, err)}
+	}
+	row, err := compose.DeriveOperatorRow(detect.ComposeNodes(nodes), facts.MachineImage)
+	if err != nil {
+		return operator, "", nil, &ErrRefused{Reason: err.Error()}
+	}
+	return operator, row.Name, compose.Operator(facts, row, t.backend.OwnCluster), nil
+}
+
+// backendDocument renders the kserve backend document for the target and
+// refuses when model-manager's one kserve document is registered for
+// another cluster.
+func (s *Service) backendDocument(ctx context.Context, dyn dynamic.Interface, t target) (*unstructured.Unstructured, error) {
+	if t.backendErr != nil {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("the kserve backend of %s cannot be registered with model-manager: %v", t.Cluster, t.backendErr)}
+	}
+	backend, err := compose.KServeBackend(s.cfg.ModelManagerNamespace, t.backend)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := dyn.Resource(compose.ConfigMapGVR).Namespace(backend.GetNamespace()).Get(ctx, backend.GetName(), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return backend, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", backend.GetNamespace(), backend.GetName(), err)
+	}
+	if other := existing.GetLabels()[compose.LabelCluster]; compose.OwnedBy(existing) && other != t.Cluster {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("model-manager's kserve backend (ConfigMap %s/%s) is registered for cluster %s: model-manager takes one kserve backend per installation — delete that cluster's last GPU pool first, which removes the registration, then re-run", backend.GetNamespace(), backend.GetName(), other)}
+	}
+	return backend, nil
+}
+
+// backendTargetName is the target as the backend document names it.
+func backendTargetName(t compose.BackendTarget) string {
+	if t.OwnCluster {
+		return compose.BackendTargetLocal
+	}
+	return t.Cluster + " (" + t.APIServer + ")"
+}
+
 // DeleteNodePool removes what create_node_pool created. It refuses while the
 // pool's MachinePool has replicas unless forced — the refusal names the nodes.
+// With the cluster's last pool go the operator release cluster-manager
+// created and the kserve backend it registered.
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -186,16 +284,27 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			return nil, err
 		}
 	}
-	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
-	for _, target := range []struct {
-		gvr  schema.GroupVersionResource
-		name string
-	}{
-		{HelmReleaseGVR, release},
-		{compose.OCIRepositoryGVR, release},
-		{compose.SecretGVR, compose.ValuesSecretName(c.GetName(), in.Name)},
-	} {
-		act, err := deleteIfOwned(ctx, dyn, target.gvr, ns, target.name, in.DryRun)
+	last, err := lastPool(ctx, dyn, ns, c.GetName(), release)
+	if err != nil {
+		return nil, err
+	}
+	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last}
+	targets := []objectRef{
+		{HelmReleaseGVR, ns, release},
+		{compose.OCIRepositoryGVR, ns, release},
+		{compose.SecretGVR, ns, compose.ValuesSecretName(c.GetName(), in.Name)},
+	}
+	if last {
+		operator := compose.OperatorReleaseName(c.GetName())
+		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
+		if registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, c.GetName()); err != nil {
+			return nil, err
+		} else if registered {
+			targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
+		}
+	}
+	for _, target := range targets {
+		act, err := deleteIfOwned(ctx, dyn, target.gvr, target.ns, target.name, in.DryRun)
 		if err != nil {
 			return nil, err
 		}
@@ -204,6 +313,44 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		}
 	}
 	return out, nil
+}
+
+// objectRef names one object to delete.
+type objectRef struct {
+	gvr  schema.GroupVersionResource
+	ns   string
+	name string
+}
+
+// lastPool reports whether release is the cluster's only remaining GPU pool
+// release.
+func lastPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, release string) (bool, error) {
+	pools, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: compose.LabelChartName + "=" + compose.PoolChart + "," + compose.LabelCluster + "=" + cluster,
+	})
+	if err != nil {
+		return false, fmt.Errorf("list pool releases of %s: %w", cluster, err)
+	}
+	for i := range pools.Items {
+		if pools.Items[i].GetName() != release {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// backendRegisteredFor reports whether model-manager's kserve backend
+// document is the one cluster-manager wrote for cluster; another cluster's
+// document is left alone.
+func backendRegisteredFor(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (bool, error) {
+	cm, err := dyn.Resource(compose.ConfigMapGVR).Namespace(ns).Get(ctx, compose.BackendConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get ConfigMap %s/%s: %w", ns, compose.BackendConfigMapName, err)
+	}
+	return compose.OwnedBy(cm) && cm.GetLabels()[compose.LabelCluster] == cluster, nil
 }
 
 func checkMode(mode string) error {
@@ -554,6 +701,7 @@ func changedPaths(have, want *unstructured.Unstructured) []string {
 	var paths []string
 	diff(have.Object["spec"], want.Object["spec"], "spec", &paths)
 	diff(have.Object["stringData"], want.Object["stringData"], "stringData", &paths)
+	diff(have.Object["data"], want.Object["data"], "data", &paths)
 	diff(map[string]any{"labels": have.GetLabels()}, map[string]any{"labels": want.GetLabels()}, "metadata", &paths)
 	if !reflect.DeepEqual(have.GetOwnerReferences(), want.GetOwnerReferences()) {
 		paths = append(paths, "metadata.ownerReferences")

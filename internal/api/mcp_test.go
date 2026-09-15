@@ -14,6 +14,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
+	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 	"github.com/giantswarm/cluster-manager/internal/tools"
 )
 
@@ -63,8 +65,10 @@ func newServer(t *testing.T) *handlersServer {
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		tools.ClusterGVR: "ClusterList", tools.MachinePoolGVR: "MachinePoolList", tools.HelmReleaseGVR: "HelmReleaseList", tools.ReleaseGVR: "ReleaseList",
+		tools.AppGVR: "AppList", tools.ConfigMapGVR: "ConfigMapList", compose.SecretGVR: "SecretList", compose.OCIRepositoryGVR: "OCIRepositoryList",
+		detect.NodesGVR: "NodeList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.InferenceServiceGVR: "InferenceServiceList", detect.LLMISVCGVR: "LLMInferenceServiceList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
-	svc := tools.New(func(context.Context) dynamic.Interface { return dyn }, tools.Config{Installation: "gazelle"})
+	svc := tools.New(func(context.Context) dynamic.Interface { return dyn }, nil, tools.Config{Installation: "gazelle"})
 	return &handlersServer{NewMCPServer(svc, "test")}
 }
 

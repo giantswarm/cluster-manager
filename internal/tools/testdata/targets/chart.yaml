@@ -1,0 +1,47 @@
+# The platform's own component: HelmRelease gpu-operator rendered by the agent-platform release, its ClusterPolicy, GPU nodes labelled by feature discovery.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gpu-operator
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/instance: agent-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-platform
+    helm.sh/chart: agent-platform-4.21.0
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: gpu-operator
+  releaseName: gpu-operator
+  targetNamespace: kube-system
+---
+apiVersion: nvidia.com/v1
+kind: ClusterPolicy
+metadata:
+  name: cluster-policy
+  labels:
+    helm.toolkit.fluxcd.io/name: gpu-operator
+    helm.toolkit.fluxcd.io/namespace: agent-platform
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-gpu-1
+  labels:
+    nvidia.com/gpu.present: "true"
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+  allocatable:
+    nvidia.com/gpu: "1"

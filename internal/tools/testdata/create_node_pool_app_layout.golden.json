@@ -22,6 +22,27 @@
       "name": "wc2-gpu-l4b",
       "namespace": "org-acme",
       "action": "would-create"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "wc2-gpu-operator",
+      "namespace": "org-acme",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc2-gpu-operator",
+      "namespace": "org-acme",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
+      "action": "would-create"
     }
   ],
   "manifests": [
@@ -104,6 +125,103 @@
           }
         }
       }
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-operator",
+          "giantswarm.io/cluster": "wc2"
+        },
+        "name": "wc2-gpu-operator",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "semver": "1.x"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-operator"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-operator",
+          "giantswarm.io/cluster": "wc2"
+        },
+        "name": "wc2-gpu-operator",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "wc2-gpu-operator"
+        },
+        "install": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "kubeConfig": {
+          "secretRef": {
+            "name": "wc2-kubeconfig"
+          }
+        },
+        "releaseName": "gpu-operator",
+        "storageNamespace": "kube-system",
+        "targetNamespace": "kube-system",
+        "upgrade": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "values": {
+          "gpu-operator": {
+            "driver": {
+              "enabled": false
+            },
+            "toolkit": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    target:\n      apiServer: https://api.wc2.acme.example.io:6443\n      caBundle: |\n        -----BEGIN CERTIFICATE-----\n        MIIBfixtureCAnotarealcertificate0000000000000000000000000000000000\n        -----END CERTIFICATE-----\n      cluster: wc2\n      organization: acme\n      servingNamespace: model-serving\n  source: cluster-manager\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "agent-platform.giantswarm.io/model-backend": "true",
+          "agent-platform.giantswarm.io/model-backend-source": "cluster-manager",
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "giantswarm.io/cluster": "wc2"
+        },
+        "name": "model-backend-kserve",
+        "namespace": "agent-platform"
+      }
     }
-  ]
+  ],
+  "gpuOperator": {
+    "status": "absent"
+  },
+  "operatorRow": "pre-installed",
+  "backend": {
+    "kind": "kserve",
+    "namespace": "agent-platform",
+    "name": "model-backend-kserve",
+    "target": "wc2 (https://api.wc2.acme.example.io:6443)"
+  }
 }

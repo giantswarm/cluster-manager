@@ -7,6 +7,11 @@
 // by, so the two sides agree from the first release.
 package compose
 
+import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
 const (
 	// PoolChart is the chart of a GPU pool release.
 	PoolChart = "gpu-node-pool"
@@ -23,3 +28,17 @@ const (
 	// ManagedBy is LabelManagedBy's value on cluster-manager's objects.
 	ManagedBy = "cluster-manager"
 )
+
+// object builds one composed object of the given resource and kind from its
+// metadata and its remaining top-level fields (spec, data, ...).
+func object(gvr schema.GroupVersionResource, kind string, metadata map[string]any, fields map[string]any) *unstructured.Unstructured {
+	obj := map[string]any{
+		"apiVersion": gvr.GroupVersion().String(),
+		"kind":       kind,
+		"metadata":   metadata,
+	}
+	for k, v := range fields {
+		obj[k] = v
+	}
+	return &unstructured.Unstructured{Object: obj}
+}

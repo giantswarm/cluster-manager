@@ -1,0 +1,20 @@
+# Nodes matching no row: Ubuntu without a pre-installed driver label.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Ubuntu 24.04.2 LTS
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-w-1
+  labels:
+    nvidia.com/gpu.deploy.driver: "true"
+status:
+  nodeInfo:
+    osImage: Ubuntu 24.04.2 LTS

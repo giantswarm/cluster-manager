@@ -11,9 +11,13 @@ namespace, the control plane and infrastructure objects they reference, the
 cluster-scoped Giant Swarm Releases (the pool's pins; the control plane's
 Kubernetes version when the control plane object is not readable), the
 cluster's own values (the HelmRelease or App named like the cluster and its
-ConfigMap) and the teleport join-token Secret's presence. The node-pool writes
-create, update and delete the pool release's HelmRelease, OCIRepository and
-values Secret in org- namespaces.
+ConfigMap), the teleport join-token Secret's presence and the kubeconfig
+Secret's cluster section (apiserver and CA). The node-pool writes create,
+update and delete the pool and operator releases' HelmRelease, OCIRepository
+and values Secret in org- namespaces, and the kserve backend ConfigMap in
+model-manager's namespace. The detection on the installation's own cluster
+reads nodes, ClusterPolicies, the KServe APIs and the discovery ConfigMap;
+a workload cluster is read through its own apiserver as the caller only.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -36,7 +40,16 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["nvidia.com"]
+    resources: ["clusterpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["inferenceservices", "llminferenceservices"]
+    verbs: ["list"]
   - apiGroups: ["helm.toolkit.fluxcd.io"]
     resources: ["helmreleases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

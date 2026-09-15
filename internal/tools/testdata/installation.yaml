@@ -335,3 +335,40 @@ spec:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
         kind: KarpenterMachinePool
         name: wc2-gpu-l4-missing
+---
+# CAPI's kubeconfig Secret: only the cluster section (apiserver, CA) is read;
+# the user section never is.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wc1-kubeconfig
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+type: cluster.x-k8s.io/secret
+data:
+  value: YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnCmNsdXN0ZXJzOgotIG5hbWU6IHdjMQogIGNsdXN0ZXI6CiAgICBzZXJ2ZXI6IGh0dHBzOi8vYXBpLndjMS5hY21lLmV4YW1wbGUuaW86NjQ0MwogICAgY2VydGlmaWNhdGUtYXV0aG9yaXR5LWRhdGE6IExTMHRMUzFDUlVkSlRpQkRSVkpVU1VaSlEwRlVSUzB0TFMwdENrMUpTVUptYVhoMGRYSmxRMEZ1YjNSaGNtVmhiR05sY25ScFptbGpZWFJsTURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNQW90TFMwdExVVk9SQ0JEUlZKVVNVWkpRMEZVUlMwdExTMHRDZz09CmNvbnRleHRzOgotIG5hbWU6IHdjMS1hZG1pbkB3YzEKICBjb250ZXh0OiB7Y2x1c3Rlcjogd2MxLCB1c2VyOiB3YzEtYWRtaW59CmN1cnJlbnQtY29udGV4dDogd2MxLWFkbWluQHdjMQp1c2VyczoKLSBuYW1lOiB3YzEtYWRtaW4KICB1c2VyOgogICAgY2xpZW50LWNlcnRpZmljYXRlLWRhdGE6IGJtOTBMWEpsWVdRdFlua3RZMngxYzNSbGNpMXRZVzVoWjJWeQogICAgY2xpZW50LWtleS1kYXRhOiBibTkwTFhKbFlXUXRZbmt0WTJ4MWMzUmxjaTF0WVc1aFoyVnkK
+---
+# CAPI's kubeconfig Secret: only the cluster section (apiserver, CA) is read;
+# the user section never is.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wc2-kubeconfig
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc2
+type: cluster.x-k8s.io/secret
+data:
+  value: YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnCmNsdXN0ZXJzOgotIG5hbWU6IHdjMgogIGNsdXN0ZXI6CiAgICBzZXJ2ZXI6IGh0dHBzOi8vYXBpLndjMi5hY21lLmV4YW1wbGUuaW86NjQ0MwogICAgY2VydGlmaWNhdGUtYXV0aG9yaXR5LWRhdGE6IExTMHRMUzFDUlVkSlRpQkRSVkpVU1VaSlEwRlVSUzB0TFMwdENrMUpTVUptYVhoMGRYSmxRMEZ1YjNSaGNtVmhiR05sY25ScFptbGpZWFJsTURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNQW90TFMwdExVVk9SQ0JEUlZKVVNVWkpRMEZVUlMwdExTMHRDZz09CmNvbnRleHRzOgotIG5hbWU6IHdjMi1hZG1pbkB3YzIKICBjb250ZXh0OiB7Y2x1c3Rlcjogd2MyLCB1c2VyOiB3YzItYWRtaW59CmN1cnJlbnQtY29udGV4dDogd2MyLWFkbWluQHdjMgp1c2VyczoKLSBuYW1lOiB3YzItYWRtaW4KICB1c2VyOgogICAgY2xpZW50LWNlcnRpZmljYXRlLWRhdGE6IGJtOTBMWEpsWVdRdFlua3RZMngxYzNSbGNpMXRZVzVoWjJWeQogICAgY2xpZW50LWtleS1kYXRhOiBibTkwTFhKbFlXUXRZbmt0WTJ4MWMzUmxjaTF0WVc1aFoyVnkK
+---
+# The installation's own node: Flatcar, no GPU.
+apiVersion: v1
+kind: Node
+metadata:
+  name: gazelle-cp-1
+  labels:
+    node-role.kubernetes.io/control-plane: ""
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)

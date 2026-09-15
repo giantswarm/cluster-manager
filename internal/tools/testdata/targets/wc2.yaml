@@ -1,0 +1,24 @@
+# wc2: Ubuntu nodes with a pre-installed driver (row 2), serving by the platform's chart (its discovery ConfigMap; the KServe APIs served).
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc2-gpu-1
+  labels:
+    nvidia.com/gpu.deploy.driver: "pre-installed"
+status:
+  nodeInfo:
+    osImage: Ubuntu 24.04.2 LTS
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-model-serving
+  namespace: agent-platform
+  labels:
+    agent-platform.giantswarm.io/model-serving-config: "true"
+    helm.sh/chart: agent-platform-connectivity-4.21.0
+data:
+  config.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ModelServingConfig

@@ -78,7 +78,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListClusters,
-		mcp.WithDescription("List the installation's clusters: name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them (chart, cluster-manager, manual; unknown until detection runs), the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show."),
+		mcp.WithDescription("List the installation's clusters: name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you; the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listClusters)
 
@@ -106,7 +106,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.createNodePool)
 
 	s.AddTool(mcp.NewTool(ToolDeleteNodePool,
-		mcp.WithDescription("Delete a GPU node pool create_node_pool created: removes its HelmRelease, OCIRepository and values Secret, so helm-controller uninstalls the MachinePool and its nodes. Refused while the pool still runs nodes (the message names them) unless force; refused for a pool cluster-manager did not create. dryRun lists what would be removed."),
+		mcp.WithDescription("Delete a GPU node pool create_node_pool created: removes its HelmRelease, OCIRepository and values Secret, so helm-controller uninstalls the MachinePool and its nodes. With the cluster's last pool, the <cluster>-gpu-operator release cluster-manager created and the kserve backend it registered with model-manager go too (lastPool in the answer). Refused while the pool still runs nodes (the message names them) unless force; refused for a pool cluster-manager did not create. dryRun lists what would be removed."),
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Pool name as given to create_node_pool")),

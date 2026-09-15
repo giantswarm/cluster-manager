@@ -1,0 +1,29 @@
+apiVersion: v1
+data:
+  backend.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ModelBackend
+    metadata:
+      name: kserve
+    spec:
+      kind: kserve
+      kserve:
+        target:
+          apiServer: https://api.wc1.acme.example.io:6443
+          caBundle: |
+            -----BEGIN CERTIFICATE-----
+            MIIBfixture
+            -----END CERTIFICATE-----
+          cluster: wc1
+          organization: acme
+          servingNamespace: model-serving
+      source: cluster-manager
+kind: ConfigMap
+metadata:
+  labels:
+    agent-platform.giantswarm.io/model-backend: "true"
+    agent-platform.giantswarm.io/model-backend-source: cluster-manager
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+  name: model-backend-kserve
+  namespace: agent-platform

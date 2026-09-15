@@ -82,14 +82,15 @@ func (s *Service) ListClusters(ctx context.Context) ([]Cluster, error) {
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
 		key := c.GetNamespace() + "/" + c.GetName()
+		target := s.target(ctx, dyn, c)
 		out = append(out, Cluster{
 			Name:           c.GetName(),
 			Namespace:      c.GetNamespace(),
 			Organization:   organization(c),
 			ReleaseVersion: c.GetLabels()[LabelReleaseVersion],
-			OwnCluster:     s.cfg.Installation != "" && c.GetName() == s.cfg.Installation,
-			GPUOperator:    detect.GPUOperator(ctx, c.GetNamespace(), c.GetName()),
-			Serving:        detect.Serving(ctx, c.GetNamespace(), c.GetName()),
+			OwnCluster:     s.ownCluster(c),
+			GPUOperator:    detect.GPUOperator(ctx, target.Target),
+			Serving:        detect.Serving(ctx, target.Target),
 			PoolReleases:   sortedPools(pools[key]),
 			// TODO(giantswarm/giantswarm#37637, commit mode): repository and
 			// path from the Flux provenance of the cluster's owning object.
