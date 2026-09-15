@@ -43,9 +43,9 @@ const (
 
 	// labelKustomizeName marks an object Flux's kustomize-controller owns.
 	labelKustomizeName = "kustomize.toolkit.fluxcd.io/name"
-	// teleportJoinTokenSuffix names the Secret teleport-operator writes.
-	teleportJoinTokenSuffix = "-teleport-join-token"
-	// flatcarChannel is fixed by the cluster chart for every provider.
+	// teleportJoinSecretSuffix names the Secret teleport-operator writes;
+	// only its presence is read.
+	teleportJoinSecretSuffix = "-teleport-join-token" //nolint:gosec // a Secret's name, not a credential
 )
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
@@ -269,7 +269,7 @@ func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *un
 	facts.CiliumIPAMMode, _, _ = unstructured.NestedString(vals, "global", "connectivity", "cilium", "ipamMode")
 	facts.RegistryMirrors, facts.RegistryCredentials = registries(vals)
 	facts.Proxy = proxy(vals)
-	facts.Teleport = exists(ctx, dyn, compose.SecretGVR, c.GetNamespace(), c.GetName()+teleportJoinTokenSuffix)
+	facts.Teleport = exists(ctx, dyn, compose.SecretGVR, c.GetNamespace(), c.GetName()+teleportJoinSecretSuffix)
 	return facts, nil
 }
 
