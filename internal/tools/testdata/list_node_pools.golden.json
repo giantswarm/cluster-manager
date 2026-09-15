@@ -1,0 +1,36 @@
+{
+  "cluster": "wc1",
+  "namespace": "org-acme",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "wc1-def00",
+      "namespace": "org-acme",
+      "version": "v1.30.8",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 3,
+      "readyReplicas": 2,
+      "instanceTypes": [
+        "m5.xlarge"
+      ],
+      "ownerRelease": null
+    },
+    {
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 2,
+      "readyReplicas": 2,
+      "instanceTypes": [
+        "g5.2xlarge",
+        "g5.xlarge"
+      ],
+      "accelerator": "nvidia-a10g",
+      "ownerRelease": {
+        "name": "wc1-gpu-a10g",
+        "namespace": "org-acme"
+      }
+    }
+  ]
+}

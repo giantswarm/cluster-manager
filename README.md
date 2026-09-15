@@ -7,7 +7,7 @@ The Agent Platform's MCP-only cluster write surface: node pools first
 [giantswarm/giantswarm#37637](https://github.com/giantswarm/giantswarm/issues/37637),
 epic [giantswarm/giantswarm#37639](https://github.com/giantswarm/giantswarm/issues/37639)).
 
-cluster-manager is the third sibling of `model-manager` and `agent-manager`: a Go MCP server
+cluster-manager is the third sibling of `cluster-manager` and `agent-manager`: a Go MCP server
 (streamable HTTP, an mcp-oauth resource server) registered with muster by its own `MCPServer`
 CR. Agents call its tools through muster, and so does the Dev Portal — as the signed-in person.
 Every Kubernetes call is presented to the API server with the caller's forwarded IdP token

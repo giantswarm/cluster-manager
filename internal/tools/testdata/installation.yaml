@@ -1,0 +1,226 @@
+# An installation named "gazelle" with its own cluster, one workload cluster
+# with a GPU pool from a pool release and a hand-made pool, and one workload
+# cluster whose control plane object is not readable (the Release CR answers
+# the control plane's version).
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: gazelle
+  namespace: org-giantswarm
+  labels:
+    cluster.x-k8s.io/cluster-name: gazelle
+    release.giantswarm.io/version: 31.0.0
+spec:
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: gazelle
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: gazelle
+  namespace: org-giantswarm
+spec:
+  version: v1.31.4
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: wc1
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    giantswarm.io/organization: acme
+    release.giantswarm.io/version: 31.0.0
+spec:
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: wc1
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: wc1
+  namespace: org-acme
+spec:
+  version: v1.31.4
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: wc2
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc2
+    release.giantswarm.io/version: 30.1.0
+spec:
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: wc2-missing
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-30.1.0
+spec:
+  components:
+    - name: cluster-aws
+      version: 4.2.0
+    - name: kubernetes
+      version: 1.30.8
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-31.0.0
+spec:
+  components:
+    - name: kubernetes
+      version: 1.31.4
+---
+# The GPU pool release of wc1 (an OCIRepository source: no chart name in the
+# spec, the label says which chart it is).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-a10g
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-a10g
+  values:
+    accelerator: nvidia-a10g
+    replicas: 2
+status:
+  lastAttemptedRevision: 0.3.0
+  conditions:
+    - type: Ready
+      status: "True"
+---
+# A pool release of another cluster in the same namespace: not wc1's.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc2-gpu-l4
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    giantswarm.io/cluster: wc2
+spec:
+  chart:
+    spec:
+      chart: gpu-node-pool
+      version: 0.2.0
+---
+# Not a pool release at all.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: cluster-aws
+    giantswarm.io/cluster: wc1
+spec:
+  chart:
+    spec:
+      chart: cluster-aws
+      version: 4.2.0
+---
+# wc1's GPU pool, applied by the pool release: a Karpenter pool.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-gpu-a10g
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    helm.toolkit.fluxcd.io/name: wc1-gpu-a10g
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  clusterName: wc1
+  replicas: 2
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc1-gpu-a10g
+status:
+  replicas: 2
+  readyReplicas: 2
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KarpenterMachinePool
+metadata:
+  name: wc1-gpu-a10g
+  namespace: org-acme
+spec:
+  nodePool:
+    template:
+      spec:
+        requirements:
+          - key: karpenter.sh/capacity-type
+            operator: In
+            values: ["on-demand"]
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["g5.xlarge", "g5.2xlarge"]
+---
+# wc1's hand-made pool one version behind, a launch-template pool.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-def00
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+spec:
+  clusterName: wc1
+  replicas: 3
+  template:
+    spec:
+      version: v1.30.8
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+        kind: AWSMachinePool
+        name: wc1-def00
+status:
+  replicas: 3
+  readyReplicas: 2
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSMachinePool
+metadata:
+  name: wc1-def00
+  namespace: org-acme
+spec:
+  awsLaunchTemplate:
+    instanceType: m5.xlarge
+---
+# wc2's pool: not wc1's, and its infrastructure object is not readable.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc2-gpu-l4
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: wc2
+spec:
+  clusterName: wc2
+  template:
+    spec:
+      version: v1.30.8
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc2-gpu-l4-missing
