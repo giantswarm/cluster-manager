@@ -85,10 +85,10 @@ type WriteResult struct {
 	Mode      string `json:"mode"`
 	DryRun    bool   `json:"dryRun"`
 	// Pins of a created pool; empty on delete.
-	ChartVersion        string `json:"chartVersion,omitempty"`
-	KubernetesVersion   string `json:"kubernetesVersion,omitempty"`
-	ControlPlaneVersion string `json:"controlPlaneVersion,omitempty"`
-	MachineImage        string `json:"machineImage,omitempty"`
+	ChartVersion        string         `json:"chartVersion,omitempty"`
+	KubernetesVersion   string         `json:"kubernetesVersion,omitempty"`
+	ControlPlaneVersion string         `json:"controlPlaneVersion,omitempty"`
+	MachineImage        string         `json:"machineImage,omitempty"`
 	Objects             []ObjectAction `json:"objects"`
 	// Manifests are the rendered objects (create) — the dry-run's answer.
 	Manifests []map[string]any `json:"manifests,omitempty"`
