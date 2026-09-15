@@ -1,0 +1,50 @@
+# A cluster mid-upgrade: its release label already says 31.0.0 (kubernetes
+# 1.31.4) while the control plane still runs v1.30.8. A pool composed from the
+# release would run ahead of the control plane — refused.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: wc3
+  namespace: org-acme
+  uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000003
+  labels:
+    cluster.x-k8s.io/cluster-name: wc3
+    release.giantswarm.io/version: 31.0.0
+spec:
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: wc3
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: wc3
+  namespace: org-acme
+spec:
+  version: v1.30.8
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-31.0.0
+spec:
+  components:
+    - name: kubernetes
+      version: 1.31.4
+    - name: flatcar
+      version: 4081.2.1
+    - name: os-tooling
+      version: 1.26.1
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc3
+  namespace: org-acme
+spec:
+  values:
+    global:
+      managementCluster: gazelle
+      connectivity:
+        baseDomain: acme.example.io

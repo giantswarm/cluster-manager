@@ -1,0 +1,23 @@
+{
+  "cluster": "wc1",
+  "namespace": "org-acme",
+  "pool": "gpu-a10g",
+  "mode": "apply",
+  "dryRun": true,
+  "objects": [
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    }
+  ]
+}

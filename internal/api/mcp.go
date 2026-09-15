@@ -12,25 +12,39 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/tools"
 )
 
 // MCP tool names. Through muster they appear as x_<server>_<tool>, e.g.
 // x_cluster-manager_list_clusters.
 const (
-	ToolGetInfo       = "get_info"
-	ToolListClusters  = "list_clusters"
-	ToolListNodePools = "list_node_pools"
+	ToolGetInfo        = "get_info"
+	ToolListClusters   = "list_clusters"
+	ToolListNodePools  = "list_node_pools"
+	ToolCreateNodePool = "create_node_pool"
+	ToolDeleteNodePool = "delete_node_pool"
 )
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
-	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools}
+	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool}
 }
 
 const (
-	argCluster   = "cluster"
-	argNamespace = "namespace"
+	argCluster      = "cluster"
+	argNamespace    = "namespace"
+	argName         = "name"
+	argAccelerator  = "accelerator"
+	argSizes        = "sizes"
+	argMaxGPUs      = "maxGpus"
+	argChartVersion = "chartVersion"
+	argTeleport     = "teleport"
+	argForce        = "force"
+	argMode         = "mode"
+	argDryRun       = "dryRun"
+
+	defaultMaxGPUs = 4
 )
 
 // Info is get_info's answer.
@@ -54,7 +68,7 @@ type Modes struct {
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("cluster-manager", version,
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side. Every call runs as you: what you may read is what these tools list."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created and refuses while the pool runs nodes. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	t := &handlers{svc: svc, version: version}
 
@@ -75,7 +89,91 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listNodePools)
 
+	s.AddTool(mcp.NewTool(ToolCreateNodePool,
+		mcp.WithDescription("Create a GPU node pool for a cluster, or update the pool of that name: composes the pool's release of the gpu-node-pool chart (a HelmRelease and its OCIRepository in the cluster's org- namespace) with the Kubernetes version and Flatcar machine image of the cluster's current release — refused when the release runs ahead of the control plane — and a credential-free snapshot of the cluster's settings (registry mirrors, proxy, base domain, management cluster, Cilium IPAM mode; registry credentials go into a valuesFrom Secret). Mode apply lands the objects on the installation as you, owned by the Cluster so they go with it; a second call on the same name is the update, and its dryRun shows the difference. dryRun returns the rendered manifests and touches nothing. An object of that name someone else owns (GitOps) is never patched."),
+		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
+		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
+		mcp.WithString(argName, mcp.Required(), mcp.Pattern(compose.PoolNamePattern.String()), mcp.Description("Pool name within the cluster, five to twenty lowercase characters, digits and dashes (gpu00, gpu-l4); <cluster>-<name> names the MachinePool")),
+		mcp.WithString(argAccelerator, mcp.Enum(compose.Accelerators...), mcp.DefaultString(compose.Accelerators[0]), mcp.Description("Accelerator from the curated list; picks the EC2 instance family")),
+		mcp.WithArray(argSizes, mcp.Items(map[string]any{"type": "string"}), mcp.Description("Instance sizes Karpenter may pick within the family, smallest first (xlarge, 2xlarge, ...); default the chart's")),
+		mcp.WithNumber(argMaxGPUs, mcp.Min(1), mcp.DefaultNumber(defaultMaxGPUs), mcp.Description("Upper bound of the pool in GPUs across all of its nodes; the minimum is always 0 (scale to zero)")),
+		mcp.WithString(argChartVersion, mcp.DefaultString(compose.DefaultPoolChartVersion), mcp.Description("Exact gpu-node-pool chart version to pin; default the newest released")),
+		mcp.WithBoolean(argTeleport, mcp.Description("Join the nodes to Teleport; default on when the cluster has its teleport join-token Secret, off otherwise")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you (the only mode this version offers); commit: a pull request as you (refused until available)")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+	), t.createNodePool)
+
+	s.AddTool(mcp.NewTool(ToolDeleteNodePool,
+		mcp.WithDescription("Delete a GPU node pool create_node_pool created: removes its HelmRelease, OCIRepository and values Secret, so helm-controller uninstalls the MachinePool and its nodes. Refused while the pool still runs nodes (the message names them) unless force; refused for a pool cluster-manager did not create. dryRun lists what would be removed."),
+		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
+		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Pool name as given to create_node_pool")),
+		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Delete even while the pool runs nodes: the workloads on them are evicted")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you (the only mode this version offers)")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+	), t.deleteNodePool)
+
 	return s
+}
+
+func (h *handlers) createNodePool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cluster, err := req.RequireString(argCluster)
+	if err != nil {
+		return errResult(err), nil
+	}
+	name, err := req.RequireString(argName)
+	if err != nil {
+		return errResult(err), nil
+	}
+	in := tools.CreateNodePoolInput{
+		Cluster:   cluster,
+		Namespace: req.GetString(argNamespace, ""),
+		Pool: compose.PoolSpec{
+			Name:         name,
+			Accelerator:  req.GetString(argAccelerator, compose.Accelerators[0]),
+			Sizes:        req.GetStringSlice(argSizes, nil),
+			MaxGPUs:      req.GetInt(argMaxGPUs, defaultMaxGPUs),
+			ChartVersion: req.GetString(argChartVersion, compose.DefaultPoolChartVersion),
+		},
+		Mode:   req.GetString(argMode, tools.ModeApply),
+		DryRun: req.GetBool(argDryRun, false),
+	}
+	if _, given := req.GetArguments()[argTeleport]; given {
+		teleport := req.GetBool(argTeleport, true)
+		in.Teleport = &teleport
+	}
+	result, err := h.svc.CreateNodePool(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
+}
+
+func (h *handlers) deleteNodePool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cluster, err := req.RequireString(argCluster)
+	if err != nil {
+		return errResult(err), nil
+	}
+	name, err := req.RequireString(argName)
+	if err != nil {
+		return errResult(err), nil
+	}
+	result, err := h.svc.DeleteNodePool(ctx, tools.DeleteNodePoolInput{
+		Cluster:   cluster,
+		Namespace: req.GetString(argNamespace, ""),
+		Name:      name,
+		Force:     req.GetBool(argForce, false),
+		Mode:      req.GetString(argMode, tools.ModeApply),
+		DryRun:    req.GetBool(argDryRun, false),
+	})
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
 }
 
 type handlers struct {

@@ -6,11 +6,14 @@ mounted for the in-cluster API address and CA.
 */}}
 {{- if and .Values.rbac.create (not (and .Values.oauth.enabled .Values.oauth.downstream.enabled)) }}
 {{- /*
-The read tools, cluster-wide: Cluster API clusters and machine pools in every
-org- namespace, the control plane and infrastructure objects they reference,
-the Flux HelmReleases (pool releases, owners of applied pools) and the
-cluster-scoped Giant Swarm Releases (the control plane's Kubernetes version
-when the control plane object is not readable).
+The tools, cluster-wide: Cluster API clusters and machine pools in every org-
+namespace, the control plane and infrastructure objects they reference, the
+cluster-scoped Giant Swarm Releases (the pool's pins; the control plane's
+Kubernetes version when the control plane object is not readable), the
+cluster's own values (the HelmRelease or App named like the cluster and its
+ConfigMap) and the teleport join-token Secret's presence. The node-pool writes
+create, update and delete the pool release's HelmRelease, OCIRepository and
+values Secret in org- namespaces.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -25,12 +28,24 @@ rules:
   - apiGroups: ["controlplane.cluster.x-k8s.io", "infrastructure.cluster.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["helm.toolkit.fluxcd.io"]
-    resources: ["helmreleases"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["release.giantswarm.io"]
     resources: ["releases"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["application.giantswarm.io"]
+    resources: ["apps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["ocirepositories"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -81,13 +81,34 @@ func TestToolsListAndSchemas(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rpc(t, srv, "tools/list", nil), &listed))
 	names := map[string]bool{}
+	writes := map[string]bool{ToolCreateNodePool: false, ToolDeleteNodePool: true}
 	for _, tool := range listed.Tools {
 		names[tool.Name] = true
-		assert.Equal(t, true, tool.Annotations["readOnlyHint"], "%s is read-only", tool.Name)
+		destructive, isWrite := writes[tool.Name]
+		if !isWrite {
+			assert.Equal(t, true, tool.Annotations["readOnlyHint"], "%s is read-only", tool.Name)
+			continue
+		}
+		assert.NotEqual(t, true, tool.Annotations["readOnlyHint"], "%s writes", tool.Name)
+		assert.Equal(t, destructive, tool.Annotations["destructiveHint"], "%s destructive", tool.Name)
+		assert.Equal(t, true, tool.Annotations["idempotentHint"], "%s is idempotent: the re-run is the update", tool.Name)
+		props := tool.InputSchema["properties"].(map[string]any)
+		assert.Equal(t, []any{"apply", "commit"}, props["mode"].(map[string]any)["enum"], "%s offers both modes in the schema", tool.Name)
+		assert.Equal(t, "apply", props["mode"].(map[string]any)["default"])
 	}
 	assert.Len(t, listed.Tools, len(ToolNames()))
 	for _, want := range ToolNames() {
 		assert.True(t, names[want], "tool %s missing", want)
+	}
+}
+
+func TestWriteToolsRefuseCommitMode(t *testing.T) {
+	srv := newServer(t)
+	for _, tool := range []string{ToolCreateNodePool, ToolDeleteNodePool} {
+		text, isErr := callTool(t, srv, tool, map[string]any{"cluster": "wc1", "name": "gpu-l4", "mode": "commit"})
+		assert.True(t, isErr, "%s: %s", tool, text)
+		assert.Contains(t, text, "mode commit", tool)
+		assert.Contains(t, text, "use mode apply", tool)
 	}
 }
 
