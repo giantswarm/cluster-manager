@@ -1,0 +1,483 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "affinity": {
+            "type": "object",
+            "description": "Affinity.",
+            "additionalProperties": true
+        },
+        "baseDomain": {
+            "type": "string"
+        },
+        "bootstrapMode": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "chartOperator": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "ciliumNetworkPolicy": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "cluster": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "clusterCA": {
+            "type": "string"
+        },
+        "clusterCIDR": {
+            "type": "string"
+        },
+        "clusterDNSIP": {
+            "type": "string"
+        },
+        "clusterID": {
+            "type": "string"
+        },
+        "extraArgs": {
+            "type": "array",
+            "description": "Extra container arguments."
+        },
+        "extraEnv": {
+            "type": "array",
+            "description": "Extra environment variables.",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "string"
+                    },
+                    "valueFrom": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            }
+        },
+        "fullnameOverride": {
+            "type": "string",
+            "description": "Override the fully qualified app name."
+        },
+        "gcpProject": {
+            "type": "string"
+        },
+        "global": {
+            "type": "object",
+            "description": "Platform-wide values a parent chart (the `agent-platform` meta chart) shares with every component; Helm forwards them to this chart. `oauth.*` reads the identity contract as its defaults: `global.identity.issuerUrl`, `global.identity.clientId`, `global.identity.existingSecret`, `global.identity.ca.secretName` / `.key`, and `global.domain` for the OAuth base URL. Empty here; a chart installed on its own sets `oauth.*` directly.",
+            "additionalProperties": true
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "Image pull policy."
+                },
+                "registry": {
+                    "type": "string",
+                    "description": "Image registry."
+                },
+                "repository": {
+                    "type": "string",
+                    "description": "Image repository."
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Image tag. Defaults to the chart appVersion."
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "description": "Image pull secrets."
+        },
+        "installation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the installation. `list_clusters` reports the Cluster of that name as the installation's own cluster (its management cluster); empty marks none."
+                }
+            }
+        },
+        "logging": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "verbose": {
+                    "type": "boolean",
+                    "description": "Enable debug logging."
+                }
+            }
+        },
+        "mcp": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Serve the MCP streamable-HTTP endpoint (the server's only surface)."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "MCP endpoint path."
+                }
+            }
+        },
+        "muster": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "mcpServer": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "description": "Human-readable description shown by muster."
+                        },
+                        "auth": {
+                            "type": "object",
+                            "description": "How muster authenticates to this server; rendered only with `oauth.enabled`. `forwardToken` makes muster forward the session's IdP id_token byte-identical (the SSO path this chart trusts through its trusted audiences). `requiredAudiences` are extra audiences that token must carry — the Dex cross-client audience the kube-apiserver trusts (`dex-k8s-authenticator` on Giant Swarm clusters; agentlab's is `kubernetes`) so `oauth.downstream` works; muster requests them at login, so users re-login after a change. They are trusted as bearer audiences by construction, since the server's trusted audiences are `oauth.trustedAudiences` plus this list. A Google IdP has no cross-client audiences: leave the list empty.",
+                            "additionalProperties": false,
+                            "properties": {
+                                "forwardToken": {
+                                    "type": "boolean"
+                                },
+                                "requiredAudiences": {
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "autoStart": {
+                            "type": "boolean",
+                            "description": "Start the server connection when muster initializes."
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`."
+                        },
+                        "labels": {
+                            "type": "object",
+                            "description": "Extra labels on the MCPServer CR.",
+                            "additionalProperties": true
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "MCPServer CR name (drives the tool prefix)."
+                        }
+                    }
+                }
+            }
+        },
+        "nameOverride": {
+            "type": "string",
+            "description": "Override the chart name."
+        },
+        "nodeSelector": {
+            "type": "object",
+            "description": "Node selector.",
+            "additionalProperties": true
+        },
+        "oauth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "allowPublicClientRegistration": {
+                    "type": "boolean",
+                    "description": "Accept unauthenticated dynamic client registration (labs only)."
+                },
+                "baseURL": {
+                    "type": "string",
+                    "description": "Public base URL of this server: the issuer of its own OAuth metadata (https, or http on loopback). Empty derives `https://<fullname>.<global.domain>` when `global.domain` is set."
+                },
+                "dex": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "allowPrivateURLs": {
+                            "type": "boolean",
+                            "description": "Let the issuer resolve to a private or loopback address (an in-cluster Dex)."
+                        },
+                        "caSecret": {
+                            "type": "object",
+                            "description": "Secret with the CA of a Dex that serves a private certificate; `global.identity.ca.secretName` / `global.identity.ca.key`.",
+                            "additionalProperties": false,
+                            "properties": {
+                                "key": {
+                                    "type": "string"
+                                },
+                                "name": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "clientID": {
+                            "type": "string",
+                            "description": "Dex OAuth client ID. Empty falls back to `global.identity.clientId`."
+                        },
+                        "clientSecret": {
+                            "type": "string",
+                            "description": "Dex OAuth client secret (prefer `oauth.existingSecret`)."
+                        },
+                        "issuerURL": {
+                            "type": "string",
+                            "description": "Dex issuer URL. Empty falls back to `global.identity.issuerUrl`."
+                        }
+                    }
+                },
+                "downstream": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Call the Kubernetes API as the caller: everything a request does presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a is cluster-manager's rule (every write as the person), so it is on by default and takes effect with `oauth.enabled`. The ServiceAccount then holds no permissions: the chart renders no RBAC for it (`rbac.create` is moot)."
+                        }
+                    }
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Make cluster-manager an OAuth 2.1 resource server (mcp-oauth): the MCP endpoint requires a bearer token the platform identity provider issued, and every call carries the caller's identity. On the Agent Platform muster forwards the session's IdP id_token to this server (MCPServer `auth.forwardToken`, rendered below) and the portal's calls arrive the same way through muster; both are validated against the IdP's JWKS when their audience is in `trustedAudiences`. Off: anonymous, acting as the ServiceAccount — only for a server nothing but a trusted proxy can reach."
+                },
+                "existingSecret": {
+                    "type": "string",
+                    "description": "Existing Secret with the provider credentials: `dex-client-secret` (dex) or `google-client-secret` (+ optional `google-client-id`) (google). Empty falls back to `global.identity.existingSecret`, whose `dex-client-secret` is the platform client's; without that, the chart renders a Secret from the values above."
+                },
+                "google": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "clientID": {
+                            "type": "string",
+                            "description": "Google OAuth client ID (not secret; may also come from the Secret key `google-client-id` when empty)."
+                        },
+                        "clientSecret": {
+                            "type": "string",
+                            "description": "Google OAuth client secret (prefer `oauth.existingSecret`)."
+                        }
+                    }
+                },
+                "provider": {
+                    "type": "string",
+                    "description": "Identity provider: `dex` or `google`."
+                },
+                "sso": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "allowPrivateIPs": {
+                            "type": "boolean",
+                            "description": "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (an in-cluster Dex)."
+                        }
+                    }
+                },
+                "trustedAudiences": {
+                    "type": "array",
+                    "description": "OAuth client IDs whose IdP id_tokens are accepted as bearer tokens (SSO token forwarding). Empty falls back to `[global.identity.clientId]`, the platform client MCP clients and the muster CLI log in with. The server trusts the union of this list and `muster.mcpServer.auth.requiredAudiences` (in that order, without duplicates): every token muster forwards carries the required audiences by construction and they are what the kube-apiserver trusts, so a portal session — whose id_token carries them but not the platform client — is accepted without listing its client here."
+                }
+            }
+        },
+        "podAnnotations": {
+            "type": "object",
+            "description": "Annotations on the pod.",
+            "additionalProperties": true
+        },
+        "podLabels": {
+            "type": "object",
+            "description": "Labels on the pod.",
+            "additionalProperties": true
+        },
+        "podSecurityContext": {
+            "type": "object",
+            "description": "Pod security context.",
+            "additionalProperties": false,
+            "properties": {
+                "fsGroup": {
+                    "type": "integer"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "provider": {
+            "type": "string"
+        },
+        "rbac": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "create": {
+                    "type": "boolean",
+                    "description": "Create the read-only ClusterRole/ClusterRoleBinding (Cluster API clusters, machine pools, control planes and infrastructure, Flux HelmReleases, Giant Swarm Releases) — the ServiceAccount's own permissions for a release without OAuth. Ignored with `oauth.enabled` and `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all."
+                }
+            }
+        },
+        "replicaCount": {
+            "type": "integer",
+            "description": "Number of replicas. The server holds no state; more than one is fine."
+        },
+        "resources": {
+            "type": "object",
+            "description": "Container resources.",
+            "additionalProperties": false,
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "securityContext": {
+            "type": "object",
+            "description": "Container security context.",
+            "additionalProperties": false,
+            "properties": {
+                "allowPrivilegeEscalation": {
+                    "type": "boolean"
+                },
+                "capabilities": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "drop": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "readOnlyRootFilesystem": {
+                    "type": "boolean"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "service": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Service type."
+                },
+                "port": {
+                    "type": "integer",
+                    "description": "Service port (container listens on 8080)."
+                }
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "annotations": {
+                    "type": "object",
+                    "description": "Annotations on the ServiceAccount.",
+                    "additionalProperties": true
+                },
+                "create": {
+                    "type": "boolean",
+                    "description": "Create a ServiceAccount."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "ServiceAccount name (generated when empty)."
+                }
+            }
+        },
+        "subscriptionID": {
+            "type": "string"
+        },
+        "tolerations": {
+            "type": "array",
+            "description": "Tolerations.",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "effect": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "operator": {
+                        "type": "string"
+                    },
+                    "tolerationSeconds": {
+                        "type": "integer"
+                    },
+                    "value": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}
