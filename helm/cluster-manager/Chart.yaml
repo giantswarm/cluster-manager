@@ -1,0 +1,26 @@
+apiVersion: v2
+name: cluster-manager
+description: The Agent Platform's MCP-only cluster write surface — the installation's clusters and their GPU node pools, listed and written as the person, exposed to agents and the portal through muster
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/giantswarm/cluster-manager
+icon: https://s.giantswarm.io/app-icons/giantswarm/1/dark.svg
+sources:
+  - https://github.com/giantswarm/cluster-manager
+keywords:
+  - mcp
+  - clusters
+  - node-pools
+  - cluster-api
+  - agent-platform
+maintainers:
+  - name: Giant Swarm
+    email: team-bumblebee@giantswarm.io
+annotations:
+  # Team ownership (OCI-compliant format)
+  io.giantswarm.application.team: bumblebee
+  # Target audience: customers (default catalog)
+  io.giantswarm.application.audience: customers
+  # App is managed/supported by Giant Swarm
+  io.giantswarm.application.managed: "true"

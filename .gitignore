@@ -1,0 +1,11 @@
+# local builds
+/cluster-manager
+/cluster-manager-linux-*
+/cluster-manager-darwin-*
+/cluster-manager-windows-*
+/build/
+/dist/
+# editor / OS
+.idea/
+.vscode/
+.DS_Store

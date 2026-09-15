@@ -1,0 +1,24 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.description" . }}
+
+The chart deploys one Deployment that serves the MCP streamable-HTTP endpoint
+under `/mcp` — cluster-manager's only surface. Its tools (`get_info`,
+`list_clusters`, `list_node_pools`; the node-pool writes follow) read the
+installation's Cluster API objects, Flux HelmReleases and Giant Swarm Releases.
+
+With `oauth.enabled` the server is an mcp-oauth resource server: muster
+forwards the session's IdP token (`muster.mcpServer.auth.forwardToken`), the
+server validates it against its trusted audiences and, with
+`oauth.downstream.enabled` (the default), presents it to the Kubernetes API —
+every call runs as the person, and the ServiceAccount gets no RBAC. Without
+OAuth the chart renders a read-only ClusterRole for the ServiceAccount instead.
+
+A component of the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
+meta chart, which sets `installation.name`, `oauth.*` and `muster.mcpServer.*`
+from the platform identity contract (`global.identity`, `global.domain`).
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}

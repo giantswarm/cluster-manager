@@ -1,0 +1,5 @@
+# Values for chart tests / local installs on kind: the defaults, with the
+# installation named so list_clusters has an own-cluster to report once a
+# Cluster of that name exists.
+installation:
+  name: kind
