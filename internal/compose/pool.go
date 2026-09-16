@@ -148,20 +148,8 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 		LabelPool:      p.Name,
 	})
 
-	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": map[string]any{
-		"interval": ReleaseInterval,
-		"url":      PoolChartURL,
-		"ref":      map[string]any{"tag": version},
-	}})
-
-	spec := map[string]any{
-		"interval":    ReleaseInterval,
-		"releaseName": name,
-		"chartRef":    map[string]any{"kind": "OCIRepository", "name": name},
-		"install":     map[string]any{"remediation": map[string]any{"retries": int64(3)}},
-		"upgrade":     map[string]any{"remediation": map[string]any{"retries": int64(3)}},
-		"values":      values(c, p),
-	}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(PoolChartURL, "tag", version)})
+	spec := helmReleaseSpec(name, false, values(c, p))
 	objs := []*unstructured.Unstructured{source}
 	if len(c.RegistryCredentials) > 0 {
 		secret, err := credentialsSecret(c, p, meta(ValuesSecretName(c.Name, p.Name)))

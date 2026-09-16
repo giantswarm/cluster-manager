@@ -29,6 +29,44 @@ const (
 	ManagedBy = "cluster-manager"
 )
 
+// releaseRetries is how often helm-controller retries an install or upgrade
+// of one of cluster-manager's releases before it gives up.
+const releaseRetries = int64(3)
+
+// helmReleaseSpec is the common shape of cluster-manager's HelmReleases: the
+// reconciliation interval, the chartRef to the OCIRepository of the same
+// name, install and upgrade with retries — CRDs created and replaced when the
+// chart carries any — and the values. Callers add what is theirs (valuesFrom,
+// a target namespace, a kubeconfig).
+func helmReleaseSpec(name string, crds bool, values map[string]any) map[string]any {
+	remediation := func() map[string]any {
+		m := map[string]any{"remediation": map[string]any{"retries": releaseRetries}}
+		if crds {
+			m["crds"] = "CreateReplace"
+		}
+		return m
+	}
+	return map[string]any{
+		"interval":    ReleaseInterval,
+		"releaseName": name,
+		"chartRef":    map[string]any{"kind": "OCIRepository", "name": name},
+		"install":     remediation(),
+		"upgrade":     remediation(),
+		"values":      values,
+	}
+}
+
+// ociRepositorySpec is the source of one of cluster-manager's releases: the
+// chart's catalog location and the reference that pins or follows it
+// (`tag` for an exact pin, `semver` for a range).
+func ociRepositorySpec(url, refKey, ref string) map[string]any {
+	return map[string]any{
+		"interval": ReleaseInterval,
+		"url":      url,
+		"ref":      map[string]any{refKey: ref},
+	}
+}
+
 // object builds one composed object of the given resource and kind from its
 // metadata and its remaining top-level fields (spec, data, ...).
 func object(gvr schema.GroupVersionResource, kind string, metadata map[string]any, fields map[string]any) *unstructured.Unstructured {

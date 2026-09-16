@@ -84,9 +84,9 @@ type WriteResult struct {
 	Namespace string `json:"namespace"`
 	// Pool is the pool a node-pool write concerns; empty for the model
 	// serving writes.
-	Pool string `json:"pool,omitempty"`
-	Mode string `json:"mode"`
-	DryRun    bool   `json:"dryRun"`
+	Pool   string `json:"pool,omitempty"`
+	Mode   string `json:"mode"`
+	DryRun bool   `json:"dryRun"`
 	// Pins of a created pool; empty on delete.
 	ChartVersion        string         `json:"chartVersion,omitempty"`
 	KubernetesVersion   string         `json:"kubernetesVersion,omitempty"`

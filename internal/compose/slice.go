@@ -103,19 +103,8 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 		LabelManagedBy: ManagedBy,
 		LabelCluster:   c.Name,
 	})
-	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": map[string]any{
-		"interval": ReleaseInterval,
-		"url":      SliceChartURL,
-		"ref":      map[string]any{"tag": version},
-	}})
-	spec := map[string]any{
-		"interval":    ReleaseInterval,
-		"releaseName": name,
-		"chartRef":    map[string]any{"kind": "OCIRepository", "name": name},
-		"install":     map[string]any{"crds": "CreateReplace", "remediation": map[string]any{"retries": int64(3)}},
-		"upgrade":     map[string]any{"crds": "CreateReplace", "remediation": map[string]any{"retries": int64(3)}},
-		"values":      values,
-	}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(SliceChartURL, "tag", version)})
+	spec := helmReleaseSpec(name, true, values)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}, nil
 }
 

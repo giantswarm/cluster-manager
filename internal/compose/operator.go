@@ -138,26 +138,15 @@ func Operator(c Cluster, row OperatorRow, ownCluster bool) []*unstructured.Unstr
 		LabelManagedBy: ManagedBy,
 		LabelCluster:   c.Name,
 	})
-	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": map[string]any{
-		"interval": ReleaseInterval,
-		"url":      OperatorChartURL,
-		"ref":      map[string]any{"semver": OperatorChartRange},
-	}})
-	spec := map[string]any{
-		"interval":         ReleaseInterval,
-		"releaseName":      OperatorChart,
-		"targetNamespace":  OperatorNamespace,
-		"storageNamespace": OperatorNamespace,
-		"chartRef":         map[string]any{"kind": "OCIRepository", "name": name},
-		"install":          map[string]any{"crds": "CreateReplace", "remediation": map[string]any{"retries": int64(3)}},
-		"upgrade":          map[string]any{"crds": "CreateReplace", "remediation": map[string]any{"retries": int64(3)}},
-		"values": map[string]any{
-			OperatorValuesKey: map[string]any{
-				"driver":  map[string]any{"enabled": row.Driver},
-				"toolkit": map[string]any{"enabled": row.Toolkit},
-			},
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(OperatorChartURL, "semver", OperatorChartRange)})
+	spec := helmReleaseSpec(OperatorChart, true, map[string]any{
+		OperatorValuesKey: map[string]any{
+			"driver":  map[string]any{"enabled": row.Driver},
+			"toolkit": map[string]any{"enabled": row.Toolkit},
 		},
-	}
+	})
+	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}
+	spec["targetNamespace"], spec["storageNamespace"] = OperatorNamespace, OperatorNamespace
 	if !ownCluster {
 		spec["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": KubeconfigSecretName(c.Name)}}
 	}
