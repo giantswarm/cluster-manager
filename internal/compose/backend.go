@@ -48,6 +48,12 @@ type BackendTarget struct {
 	CABundle string
 	// ServingNamespace is where the InferenceServices go on the target.
 	ServingNamespace string
+	// DiscoveryNamespace is where the slice release renders the
+	// model-serving discovery ConfigMap (agent-platform-model-serving) on
+	// the target: the slice's release namespace, the cluster's org
+	// namespace — not the serving namespace model-manager would assume.
+	// Empty leaves the document without a discovery block.
+	DiscoveryNamespace string
 }
 
 // KServeBackend renders the kserve backend document into model-manager's
@@ -66,6 +72,10 @@ func KServeBackend(namespace string, t BackendTarget) (*unstructured.Unstructure
 		delete(target, "apiServer")
 		delete(target, "caBundle")
 	}
+	kserve := map[string]any{"target": target}
+	if t.DiscoveryNamespace != "" {
+		kserve["discovery"] = map[string]any{"namespace": t.DiscoveryNamespace}
+	}
 	doc := map[string]any{
 		"apiVersion": BackendAPIVersion,
 		"kind":       BackendKind,
@@ -73,7 +83,7 @@ func KServeBackend(namespace string, t BackendTarget) (*unstructured.Unstructure
 		"spec": map[string]any{
 			"kind":   BackendKindKServe,
 			"source": ManagedBy,
-			"kserve": map[string]any{"target": target},
+			"kserve": kserve,
 		},
 	}
 	raw, err := yaml.Marshal(doc)

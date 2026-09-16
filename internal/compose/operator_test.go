@@ -90,13 +90,14 @@ func TestOperatorGoldens(t *testing.T) {
 
 // TestKServeBackendGoldens pins the backend document: a workload cluster
 // with its apiserver and CA, and the installation's own cluster as the
-// `local` target.
+// `local` target; both name the slice's release namespace as where the
+// discovery ConfigMap is (giantswarm/cluster-manager#19).
 func TestKServeBackendGoldens(t *testing.T) {
 	remote := BackendTarget{
 		Cluster: "wc1", Organization: "acme", APIServer: "https://api.wc1.acme.example.io:6443",
-		CABundle: "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n", ServingNamespace: "model-serving",
+		CABundle: "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n", ServingNamespace: "model-serving", DiscoveryNamespace: "org-acme",
 	}
-	local := BackendTarget{Cluster: "gazelle", Organization: "giantswarm", OwnCluster: true, ServingNamespace: "model-serving"}
+	local := BackendTarget{Cluster: "gazelle", Organization: "giantswarm", OwnCluster: true, ServingNamespace: "model-serving", DiscoveryNamespace: "org-giantswarm"}
 	for _, tc := range []struct {
 		name   string
 		target BackendTarget
@@ -118,6 +119,7 @@ func TestKServeBackendGoldens(t *testing.T) {
 				assert.Contains(t, doc, "caBundle: |")
 			}
 			assert.NotContains(t, doc, "credentials", "the target never carries credentials")
+			assert.Contains(t, doc, "discovery:\n      namespace: "+tc.target.DiscoveryNamespace, "the discovery ConfigMap is in the slice's release namespace, not the serving namespace")
 		})
 	}
 }

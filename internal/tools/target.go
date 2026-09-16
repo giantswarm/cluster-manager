@@ -42,7 +42,7 @@ type target struct {
 func (s *Service) target(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) target {
 	t := target{
 		Target:  detect.Target{Cluster: c.GetName(), Namespace: c.GetNamespace(), Installation: dyn},
-		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace},
+		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace, DiscoveryNamespace: c.GetNamespace()},
 	}
 	if s.ownCluster(c) {
 		t.Reader = dyn

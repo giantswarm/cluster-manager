@@ -177,7 +177,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    target:\n      apiServer: https://api.wc1.acme.example.io:6443\n      caBundle: |\n        -----BEGIN CERTIFICATE-----\n        MIIBfixtureCAnotarealcertificate0000000000000000000000000000000000\n        -----END CERTIFICATE-----\n      cluster: wc1\n      organization: acme\n      servingNamespace: model-serving\n  source: cluster-manager\n"
+        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-acme\n    target:\n      apiServer: https://api.wc1.acme.example.io:6443\n      caBundle: |\n        -----BEGIN CERTIFICATE-----\n        MIIBfixtureCAnotarealcertificate0000000000000000000000000000000000\n        -----END CERTIFICATE-----\n      cluster: wc1\n      organization: acme\n      servingNamespace: model-serving\n  source: cluster-manager\n"
       },
       "kind": "ConfigMap",
       "metadata": {
