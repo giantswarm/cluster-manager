@@ -145,6 +145,9 @@ func (l *lab) service(cfg Config) *Service {
 	if cfg.TenantServiceAccount == "" {
 		cfg.TenantServiceAccount = compose.DefaultTenantServiceAccount // the lab is a Giant Swarm installation: the org's tenant exists
 	}
+	if cfg.CertificateIssuer == "" {
+		cfg.CertificateIssuer = compose.DefaultCertificateIssuer // and runs cert-manager with the fleet's ClusterIssuer
+	}
 	return New(
 		func(context.Context) Clients { return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)} },
 		func(_ context.Context, apiServer string, _ []byte) (dynamic.Interface, error) {

@@ -155,7 +155,7 @@ func (s *Service) sliceRelease(ctx context.Context, dyn dynamic.Interface, t tar
 	if err != nil {
 		return serving, nil, nil, err
 	}
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: platform, Pool: pool}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer}
 	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}

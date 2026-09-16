@@ -74,6 +74,12 @@ type Config struct {
 	// release): `automation` on Giant Swarm installations; empty renders
 	// none, for an installation without the tenancy policy.
 	TenantServiceAccount string
+	// CertificateIssuer is the cert-manager ClusterIssuer the slice release
+	// asks for the models host's certificate when the platform's wildcard is
+	// not usable (a workload cluster; the own cluster when the platform's
+	// release names no gatewayApi.gateway.tls.secretName):
+	// `letsencrypt-giantswarm` on Giant Swarm clusters; empty composes none.
+	CertificateIssuer string
 }
 
 // Service implements the tools.

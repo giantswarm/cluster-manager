@@ -81,6 +81,13 @@ type SliceSpec struct {
 	// Pool is the GPU pool the predictors are placed on (its name within
 	// the cluster); empty places them by the chart's defaults.
 	Pool string
+	// CertificateIssuer is the cert-manager ClusterIssuer the models
+	// Gateway's certificate comes from when the platform's wildcard is not
+	// usable: on a workload cluster (another domain), and on the own cluster
+	// when the platform's release names no gatewayApi.gateway.tls.secretName
+	// (its TLS terminated at the fleet's edge, the wildcard in another
+	// namespace). Empty composes no issuer.
+	CertificateIssuer string
 }
 
 // SliceReleaseName names the slice release of a cluster.
@@ -161,7 +168,11 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // runs no controller of its own) and off beside the platform's release; every
 // cluster gets the target knob with its kubeconfig Secret, so each child
 // release is kubeconfig-delivered and may install outside the org namespace
-// (see Delivery in compose.go). The GPU
+// (see Delivery in compose.go). The models Gateway's certificate is the
+// platform's wildcard where it covers models.<domain> and is referenceable
+// (the own cluster, the platform naming it), else a cert-manager Certificate
+// of the host from the configured ClusterIssuer — the connectivity chart
+// refuses a Gateway with neither. The GPU
 // pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
 // placement contract, giantswarm/agent-platform#315) and, until a pinned
 // chart carries that key, to modelServing.serving.nodeSelector, the route the
@@ -185,8 +196,11 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(!s.OwnCluster, "components", "agentgateway", "enabled"),
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
 	}
-	if s.OwnCluster && s.Platform.TLSSecretName != "" {
+	switch {
+	case s.OwnCluster && s.Platform.TLSSecretName != "":
 		steps = append(steps, set(s.Platform.TLSSecretName, "gatewayApi", "gateway", "tls", "secretName"))
+	case s.CertificateIssuer != "":
+		steps = append(steps, set(s.CertificateIssuer, "modelServing", "modelsGateway", "tls", "issuerRef", "name"))
 	}
 	if s.Pool != "" {
 		selector := map[string]any{LabelMachinePool: ReleaseName(c.Name, s.Pool)}

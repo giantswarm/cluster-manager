@@ -482,6 +482,10 @@
                 "sliceChartVersion": {
                     "type": "string",
                     "description": "Exact `agent-platform` chart version the `<cluster>-agent-platform` slice release pins. Empty pins the version the installation's own platform release runs (at least 4.27.0, the first chart that places the predictors on a tainted GPU pool); set it only for a lab running an unreleased chart."
+                },
+                "certificateIssuer": {
+                    "type": "string",
+                    "description": "cert-manager `ClusterIssuer` the `<cluster>-agent-platform` slice release asks for the certificate of `models.<domain>` when the platform's wildcard is not usable: on a workload cluster and on the installation's own cluster when the platform's release names no `gatewayApi.gateway.tls.secretName`. Empty composes none."
                 }
             }
         },

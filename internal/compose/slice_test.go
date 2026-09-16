@@ -20,22 +20,27 @@ func platform() PlatformInputs {
 
 // TestSliceGoldens pins the `<cluster>-agent-platform` release byte for
 // byte: the slice beside the platform's release on the installation's own
-// cluster (agentgateway off, the platform's domain and certificate), onto a
-// workload cluster with a pool (agentgateway on, the pool's label as node
-// selector), and onto a workload cluster without a
-// pool (enable_model_serving before any pool).
+// cluster (agentgateway off, the platform's domain and certificate), the same
+// where the platform's TLS is terminated at the fleet's edge and its release
+// names no wildcard (a Certificate of the models host from the fleet's
+// ClusterIssuer instead), onto a workload cluster with a pool (agentgateway
+// on, the pool's label as node selector, the issuer's Certificate), and onto
+// a workload cluster without a pool (enable_model_serving before any pool).
 func TestSliceGoldens(t *testing.T) {
 	own := wc1()
 	own.Name, own.Namespace, own.Organization, own.UID = "gazelle", "org-giantswarm", "giantswarm", "6f1c0c1e-8a4a-4c1e-9c3a-000000000000"
+	edge := platform()
+	edge.TLSSecretName = ""
 	cases := []struct {
 		name    string
 		cluster Cluster
 		spec    SliceSpec
 		domain  string
 	}{
-		{"own-cluster", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l4"}, "gazelle.example.io"},
-		{"workload", wc1(), SliceSpec{Platform: platform(), Pool: "gpu-l4"}, "wc1.acme.example.io"},
-		{"workload-no-pool", wc1(), SliceSpec{Platform: platform()}, "wc1.acme.example.io"},
+		{"own-cluster", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "gazelle.example.io"},
+		{"own-cluster-edge-tls", own, SliceSpec{OwnCluster: true, Platform: edge, Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "gazelle.example.io"},
+		{"workload", wc1(), SliceSpec{Platform: platform(), Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
+		{"workload-no-pool", wc1(), SliceSpec{Platform: platform(), CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,9 +74,15 @@ func TestSliceGoldens(t *testing.T) {
 			target, _, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
 			assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), target, "the target knob on every cluster: each child release is kubeconfig-delivered")
 			tls, hasTLS, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
-			assert.Equal(t, tc.spec.OwnCluster, hasTLS, "the platform's wildcard certificate covers models.<domain> only on its own cluster")
+			wildcard := tc.spec.OwnCluster && tc.spec.Platform.TLSSecretName != ""
+			assert.Equal(t, wildcard, hasTLS, "the platform's wildcard certificate covers models.<domain> only on its own cluster, and only where the platform names it")
 			if hasTLS {
 				assert.Equal(t, "gazelle-wildcard-tls", tls)
+			}
+			issuer, hasIssuer, _ := unstructured.NestedString(values, "modelServing", "modelsGateway", "tls", "issuerRef", "name")
+			assert.Equal(t, !wildcard, hasIssuer, "without a usable wildcard the models host gets a Certificate from the fleet's ClusterIssuer")
+			if hasIssuer {
+				assert.Equal(t, DefaultCertificateIssuer, issuer)
 			}
 			for _, component := range ServingComponents[:6] {
 				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
@@ -89,6 +100,18 @@ func TestSliceGoldens(t *testing.T) {
 			assert.False(t, OtherSliceOn(values), "the serving slice alone")
 		})
 	}
+}
+
+// TestSliceWithoutCertificateIssuer: an empty issuer composes no tls at all
+// (a lab whose own cluster carries the wildcard needs none; the connectivity
+// chart refuses a models Gateway with neither, naming the knobs).
+func TestSliceWithoutCertificateIssuer(t *testing.T) {
+	values, err := SliceValues(wc1(), SliceSpec{Platform: platform()})
+	require.NoError(t, err)
+	_, hasIssuer, _ := unstructured.NestedString(values, "modelServing", "modelsGateway", "tls", "issuerRef", "name")
+	assert.False(t, hasIssuer)
+	_, hasTLS, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
+	assert.False(t, hasTLS, "the platform's wildcard does not cover a workload cluster's domain")
 }
 
 func TestSliceRefusesWithoutDomain(t *testing.T) {

@@ -58,6 +58,11 @@ const (
 	// DefaultTenantServiceAccount is the org namespace's tenant
 	// ServiceAccount on Giant Swarm installations.
 	DefaultTenantServiceAccount = "automation"
+	// DefaultCertificateIssuer is the cert-manager ClusterIssuer every Giant
+	// Swarm cluster runs (cert-manager is a default app): the slice asks it
+	// for the models host's certificate when the platform's wildcard is not
+	// usable.
+	DefaultCertificateIssuer = "letsencrypt-giantswarm"
 )
 
 // KubeconfigSecretName names the Cluster API kubeconfig Secret of a cluster.
