@@ -111,7 +111,7 @@ func TestDetectServing(t *testing.T) {
 		assert.Equal(t, detect.StatusAbsent, out.Serving.Status)
 		require.NotNil(t, out.Slice, "the CRDs a serving layer left behind serve no model: the slice is composed")
 		assert.Equal(t, "wc1-agent-platform", out.Slice.Name)
-		require.Len(t, out.Objects, 8, "pool source, Secret, release; operator source, release; slice source, release; backend")
+		require.Len(t, out.Objects, 8, "pool source, Secret, release; slice source, release; backend; operator source, release")
 		assertGolden(t, "serving_crds_only", out.Serving)
 	})
 
@@ -174,9 +174,9 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.GPUOperator)
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow)
-	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create", "create", "create"}, actions(out), "pool source, Secret, release; operator source, release; slice source, release; backend")
+	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create", "create", "create"}, actions(out), "pool source, Secret, release; slice source, release; backend; operator source, release")
 
-	hr := out.Manifests[4]
+	hr := out.Manifests[7]
 	assert.Equal(t, "wc1-gpu-operator", hr["metadata"].(map[string]any)["name"])
 	kubeconfig, _, _ := unstructured.NestedString(hr, "spec", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", kubeconfig, "a workload cluster is targeted through its kubeconfig Secret")
@@ -185,14 +185,14 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	assert.Equal(t, map[string]any{"enabled": false}, values["toolkit"], "the Flatcar row")
 	assert.Equal(t, compose.PoolAffinity(compose.Cluster{Name: "wc1"}, []string{"gpu-a10g", "gpu-l4"}), values[compose.NFDValuesKey].(map[string]any)["worker"].(map[string]any)["affinity"], "NFD's worker pinned to wc1's existing pool and the one being created")
 
-	slice := out.Manifests[6]
+	slice := out.Manifests[4]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
 	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.27.2", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
 	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
 
-	backend := out.Manifests[7]
+	backend := out.Manifests[5]
 	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: "model-backend-kserve", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 	doc, _, _ := unstructured.NestedString(backend, "data", "backend.yaml")
 	assert.Contains(t, doc, "apiServer: "+wc1APIServer)

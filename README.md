@@ -30,6 +30,14 @@ Through muster the tools appear as `x_cluster-manager_<tool>`.
 
 Every write tool takes `dryRun` (the rendered manifests, or on a re-run the difference) and
 `mode: apply | commit`; `commit` (a pull request as the caller) follows in the epic's later stage.
+An apply answers within the aggregator's deadline for a tool call: everything it reads is read
+once and concurrently before anything is composed, the objects are planned together (every
+refusal before the first write) and land one after the other — `create_node_pool`: pool, slice,
+the slice's backend registration, operator, the objects that do not exist yet before the updates.
+A write there is no budget left for (`--apply-budget`, default 8 s; the request's own deadline when
+earlier) is not started: the answer comes back with `partial: true`, the objects not reached as
+`pending` and `nextStep` naming the re-run, which writes them first. Every phase is timed in the
+log at debug (`--verbose`).
 
 ## Delivery
 

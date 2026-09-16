@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -125,6 +128,12 @@ type WriteResult struct {
 	Sizes     []compose.InstanceShape `json:"sizes,omitempty"`
 	PresetFit *PresetFit              `json:"presetFit,omitempty"`
 	Warnings  []string                `json:"warnings,omitempty"`
+	// Partial marks an apply that stopped writing so its answer arrives
+	// within the caller's deadline: the objects it did not reach are listed
+	// with action `pending`, and NextStep says what to do — re-run, the
+	// pending objects are written first (giantswarm/cluster-manager#34).
+	Partial  bool   `json:"partial,omitempty"`
+	NextStep string `json:"nextStep,omitempty"`
 }
 
 // BackendRegistration is the backend document create_node_pool writes.
@@ -143,7 +152,8 @@ type ObjectAction struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
-	// Action is create, update, unchanged or delete (would-… when dry-run).
+	// Action is create, update, unchanged or delete (would-… when dry-run);
+	// pending when a partial apply did not reach the object.
 	Action string `json:"action"`
 	// Changes are the spec paths an update changes — the dry-run's drift
 	// check on a re-run.
@@ -168,7 +178,18 @@ type ObjectAction struct {
 // that went left terminating in the release namespace are healed before the
 // slice lands (giantswarm/cluster-manager#28). Every refusal comes before any
 // write.
+//
+// The call answers within the aggregator's deadline for a tool call
+// (giantswarm/cluster-manager#34): everything it reads is read once,
+// concurrently, before anything is composed; the objects land in the order
+// pool, slice, the slice's backend registration, operator — the ConfigMap
+// right after the slice's HelmRelease, so a call cut short never leaves a
+// slice model-manager does not know —, the objects that do not exist yet
+// before the updates; and a write there is no budget left for is left
+// pending rather than started (WriteResult.Partial). Every phase is timed in
+// the log at debug.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
+	start := time.Now()
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
@@ -178,36 +199,32 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	dyn := k.Dynamic
-	facts, err := s.clusterFacts(ctx, dyn, c)
-	if err != nil {
-		return nil, err
-	}
-	if in.Teleport != nil {
-		facts.Teleport = *in.Teleport
-	}
-	cpVersion := controlPlaneVersion(ctx, dyn, c)
-	if newer, err := versionNewer(facts.KubernetesVersion, strings.TrimPrefix(cpVersion, "v")); err == nil && newer {
-		return nil, &ErrRefused{Reason: fmt.Sprintf("the cluster's release pins Kubernetes %s but its control plane runs %s: a pool is never newer than the control plane — finish the cluster's upgrade first, then re-run", facts.KubernetesVersion, cpVersion)}
-	}
-	objs, err := compose.Pool(facts, in.Pool)
-	if err != nil {
-		return nil, err
-	}
 	shapes, err := compose.Shapes(in.Pool.Accelerator, in.Pool.Sizes)
 	if err != nil {
 		return nil, err
 	}
 	target := s.target(ctx, dyn, c)
-	pools, err := poolNames(ctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
+	r, err := s.readPool(ctx, dyn, target, c, in, shapes)
 	if err != nil {
 		return nil, err
 	}
-	operator, row, operatorObjs, err := s.operatorRelease(ctx, target, facts, pools)
+	facts := r.facts
+	if in.Teleport != nil {
+		facts.Teleport = *in.Teleport
+	}
+	if newer, err := versionNewer(facts.KubernetesVersion, strings.TrimPrefix(r.cpVersion, "v")); err == nil && newer {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("the cluster's release pins Kubernetes %s but its control plane runs %s: a pool is never newer than the control plane — finish the cluster's upgrade first, then re-run", facts.KubernetesVersion, r.cpVersion)}
+	}
+	objs, err := compose.Pool(facts, in.Pool)
 	if err != nil {
 		return nil, err
 	}
-	pinned := onlyOf(pools)
-	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, pinned)
+	operator, row, operatorObjs, err := s.operatorRelease(r.operator, target, facts, r.pools)
+	if err != nil {
+		return nil, err
+	}
+	pinned := onlyOf(r.pools)
+	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned)
 	if err != nil {
 		return nil, err
 	}
@@ -219,18 +236,17 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if pinned != "" {
 		instances = shapes
 	}
-	backend, err := s.backendDocument(ctx, dyn, target, instances)
+	backend, err := s.backendDocument(target, instances, r.backend)
 	if err != nil {
 		return nil, err
 	}
-	fit, warnings := s.presetFit(ctx, target, in.Pool.Name, shapes)
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: nestedString(objs[0], "spec", "ref", "tag"), KubernetesVersion: facts.KubernetesVersion,
-		ControlPlaneVersion: cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
+		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
-		Sizes:   shapes, PresetFit: fit, Warnings: warnings,
+		Sizes:   shapes, PresetFit: r.fit, Warnings: r.warnings,
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
@@ -249,50 +265,148 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 			out.Objects = append(out.Objects, *act)
 		}
 	}
-	objs = append(objs, operatorObjs...)
 	objs = append(objs, sliceObjs...)
 	objs = append(objs, backend)
-	for _, obj := range objs {
-		act, err := apply(ctx, dyn, obj, in.DryRun)
-		if err != nil {
-			return nil, err
-		}
-		out.Objects = append(out.Objects, act)
-		out.Manifests = append(out.Manifests, redacted(obj))
+	objs = append(objs, operatorObjs...)
+	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start)); err != nil {
+		return nil, err
 	}
+	logApplied(ctx, "create_node_pool", out, start)
 	return out, nil
 }
 
-// operatorRelease decides the operator's part of a pool: nothing when one
-// runs on the target and someone else provides it (the platform's chart, a
-// human), the `<cluster>-gpu-operator` release from the table's row when
-// none does — or when the one running is cluster-manager's own, so the
-// re-run is its update, which also moves the worker's pin to the cluster's
-// pools (pools) —, a refusal when the cluster cannot be read or its nodes
-// match no row.
-func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.Cluster, pools []string) (detect.Component, string, []*unstructured.Unstructured, error) {
-	operator := detect.GPUOperator(ctx, t.Target)
+// poolReads is everything create_node_pool reads before it composes: each
+// independent of the others, so they are read concurrently, once per call.
+type poolReads struct {
+	facts     compose.Cluster
+	cpVersion string
+	pools     []string
+	operator  operatorReads
+	slice     sliceReads
+	// backend is model-manager's kserve backend document as it exists on
+	// the installation, nil for none.
+	backend  *unstructured.Unstructured
+	fit      *PresetFit
+	warnings []string
+}
+
+// readPool reads the pool's inputs concurrently: the cluster's facts, its
+// control plane version, its pool releases, what the target runs (operator,
+// serving, presets), the platform's inputs and the backend registered.
+func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target, c *unstructured.Unstructured, in CreateNodePoolInput, shapes []compose.InstanceShape) (*poolReads, error) {
+	defer timed(ctx, "reads")()
+	r := &poolReads{}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		defer timed(gctx, "cluster facts")()
+		r.facts, err = s.clusterFacts(gctx, dyn, c)
+		return err
+	})
+	g.Go(func() error {
+		defer timed(gctx, "control plane version")()
+		r.cpVersion = controlPlaneVersion(gctx, dyn, c)
+		return nil
+	})
+	g.Go(func() (err error) {
+		defer timed(gctx, "pool releases")()
+		r.pools, err = poolNames(gctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
+		return err
+	})
+	g.Go(func() error {
+		defer timed(gctx, "operator detection")()
+		r.operator = readOperator(gctx, t)
+		return nil
+	})
+	g.Go(func() (err error) {
+		defer timed(gctx, "serving detection and platform inputs")()
+		r.slice, err = s.readSlice(gctx, dyn, t)
+		return err
+	})
+	g.Go(func() (err error) {
+		defer timed(gctx, "registered backend")()
+		r.backend, err = existingBackend(gctx, dyn, s.cfg.ModelManagerNamespace)
+		return err
+	})
+	g.Go(func() error {
+		defer timed(gctx, "preset fit")()
+		r.fit, r.warnings = s.presetFit(gctx, t, in.Pool.Name, shapes)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// operatorReads is what the operator's part of a pool reads: the operator
+// detected on the target and, where the release would be composed, the
+// target's nodes the configuration table's row is derived from.
+type operatorReads struct {
+	component detect.Component
+	nodes     []detect.Node
+	nodesErr  error
+}
+
+func readOperator(ctx context.Context, t target) operatorReads {
+	r := operatorReads{component: detect.GPUOperator(ctx, t.Target)}
+	if composesOperator(r.component, t) {
+		r.nodes, r.nodesErr = detect.Nodes(ctx, t.Reader)
+	}
+	return r
+}
+
+// composesOperator reports whether the operator's part of a pool is composed:
+// when no operator runs on the target, or the one running is cluster-manager's
+// own (the re-run is its update). Not when someone else provides it (the
+// platform's chart, a human), nor when the target cannot be read.
+func composesOperator(operator detect.Component, t target) bool {
+	if operator.Status == detect.StatusUnknown {
+		return false
+	}
+	return !operator.Present() || (operator.Provider == detect.ProviderClusterManager && t.Reader != nil)
+}
+
+// operatorRelease decides the operator's part of a pool from what was read:
+// nothing when one runs on the target and someone else provides it, the
+// `<cluster>-gpu-operator` release from the table's row when none does — or
+// when the one running is cluster-manager's own, so the re-run is its
+// update, which also moves the worker's pin to the cluster's pools (pools) —,
+// a refusal when the cluster cannot be read or its nodes match no row.
+func (s *Service) operatorRelease(r operatorReads, t target, facts compose.Cluster, pools []string) (detect.Component, string, []*unstructured.Unstructured, error) {
+	operator := r.component
 	switch {
 	case operator.Status == detect.StatusUnknown:
 		return operator, "", nil, &ErrRefused{Reason: fmt.Sprintf("cannot tell whether a GPU operator runs on %s (%s): the operator is composed only when none does — make the cluster readable as you (its apiserver must trust the installation's identity provider) and re-run", t.Cluster, operator.Reason)}
-	case operator.Present() && (operator.Provider != detect.ProviderClusterManager || t.Reader == nil):
+	case !composesOperator(operator, t):
 		return operator, "", nil, nil
+	case r.nodesErr != nil:
+		return operator, "", nil, &ErrRefused{Reason: fmt.Sprintf("no GPU operator runs on %s and its nodes are not readable as you (%v): the operator's configuration is read from them — re-run once you may list the cluster's nodes", t.Cluster, r.nodesErr)}
 	}
-	nodes, err := detect.Nodes(ctx, t.Reader)
-	if err != nil {
-		return operator, "", nil, &ErrRefused{Reason: fmt.Sprintf("no GPU operator runs on %s and its nodes are not readable as you (%v): the operator's configuration is read from them — re-run once you may list the cluster's nodes", t.Cluster, err)}
-	}
-	row, err := compose.DeriveOperatorRow(detect.ComposeNodes(nodes), facts.MachineImage)
+	row, err := compose.DeriveOperatorRow(detect.ComposeNodes(r.nodes), facts.MachineImage)
 	if err != nil {
 		return operator, "", nil, &ErrRefused{Reason: err.Error()}
 	}
 	return operator, row.Name, compose.Operator(facts, row, pools), nil
 }
 
+// existingBackend is model-manager's kserve backend document as it exists on
+// the installation; nil when none is registered.
+func existingBackend(ctx context.Context, dyn dynamic.Interface, ns string) (*unstructured.Unstructured, error) {
+	cm, err := dyn.Resource(compose.ConfigMapGVR).Namespace(ns).Get(ctx, compose.BackendConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", ns, compose.BackendConfigMapName, err)
+	}
+	return cm, nil
+}
+
 // backendDocument renders the kserve backend document for the target — with
 // the shapes of the pinned pool, none for no pin — and refuses when
-// model-manager's one kserve document is registered for another cluster.
-func (s *Service) backendDocument(ctx context.Context, dyn dynamic.Interface, t target, instances []compose.InstanceShape) (*unstructured.Unstructured, error) {
+// model-manager's one kserve document (existing, nil for none) is registered
+// for another cluster.
+func (s *Service) backendDocument(t target, instances []compose.InstanceShape, existing *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if t.backendErr != nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the kserve backend of %s cannot be registered with model-manager: %v", t.Cluster, t.backendErr)}
 	}
@@ -300,17 +414,45 @@ func (s *Service) backendDocument(ctx context.Context, dyn dynamic.Interface, t 
 	if err != nil {
 		return nil, err
 	}
-	existing, err := dyn.Resource(compose.ConfigMapGVR).Namespace(backend.GetNamespace()).Get(ctx, backend.GetName(), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	if existing == nil {
 		return backend, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", backend.GetNamespace(), backend.GetName(), err)
 	}
 	if other := existing.GetLabels()[compose.LabelCluster]; compose.OwnedBy(existing) && other != t.Cluster {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("model-manager's kserve backend (ConfigMap %s/%s) is registered for cluster %s: model-manager takes one kserve backend per installation — delete that cluster's last GPU pool first, which removes the registration, then re-run", backend.GetNamespace(), backend.GetName(), other)}
 	}
 	return backend, nil
+}
+
+// budget is when an apply that started at start must have answered: the
+// request's own deadline when the caller set one, else the configured apply
+// budget from the start.
+func (s *Service) budget(ctx context.Context, start time.Time) time.Time {
+	b := start.Add(s.cfg.applyBudget())
+	if d, ok := ctx.Deadline(); ok && d.Before(b) {
+		b = d
+	}
+	return b
+}
+
+// timed logs how long one phase of a call took, at debug, when the returned
+// function is called — so the next regression in the reads or a slow write is
+// visible in the log (giantswarm/cluster-manager#34).
+func timed(ctx context.Context, phase string, attrs ...any) func() {
+	start := time.Now()
+	return func() {
+		slog.DebugContext(ctx, "phase done", append([]any{"phase", phase, "duration", time.Since(start).Round(time.Millisecond)}, attrs...)...)
+	}
+}
+
+// logApplied is the one line per write call: what landed, in how long.
+func logApplied(ctx context.Context, tool string, out *WriteResult, start time.Time) {
+	written := 0
+	for _, o := range out.Objects {
+		if o.Action == actionCreate || o.Action == actionUpdate || o.Action == actionDelete {
+			written++
+		}
+	}
+	slog.InfoContext(ctx, tool+" done", "cluster", out.Cluster, "pool", out.Pool, "dryRun", out.DryRun, "objects", len(out.Objects), "written", written, "partial", out.Partial, "duration", time.Since(start).Round(time.Millisecond))
 }
 
 // backendTargetName is the target as the backend document names it.
@@ -747,48 +889,133 @@ func exists(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionR
 	return err == nil
 }
 
-// apply lands one composed object as the caller: created when absent,
-// updated when cluster-manager created it, refused when someone else owns
-// it — apply mode lands new objects only, a GitOps-owned object is never
-// patched. Dry-run touches nothing and reports what would happen.
-func apply(ctx context.Context, dyn dynamic.Interface, obj *unstructured.Unstructured, dryRun bool) (ObjectAction, error) {
-	gvr, err := refGVR(obj.GetAPIVersion(), obj.GetKind())
-	if err != nil {
-		return ObjectAction{}, err
+// The actions of an apply.
+const (
+	actionCreate    = "create"
+	actionUpdate    = "update"
+	actionUnchanged = "unchanged"
+	actionDelete    = "delete"
+	actionPending   = "pending"
+)
+
+// writeReserve is the least of the budget a write may start with: about to
+// start with less, it is left pending and the answer goes out partial, in
+// time, instead of the call being cancelled mid-write by the caller's
+// deadline (giantswarm/cluster-manager#34).
+const writeReserve = time.Second
+
+// applyAll lands the composed objects as the caller. First every object is
+// read and its action decided — concurrently, and every refusal before any
+// write: apply mode lands new objects only and never patches an object
+// someone else owns. Then the writes go one at a time in the objects' order,
+// the objects that do not exist yet before the updates, so a call that does
+// not reach the end leaves what a re-run completes first. A write about to
+// start with less than writeReserve of the budget left is not started: the
+// answer marks it and the rest pending, Partial, with the re-run as the next
+// step. Dry-run touches nothing and reports what would happen. The answer's
+// objects keep the composed order.
+func applyAll(ctx context.Context, dyn dynamic.Interface, objs []*unstructured.Unstructured, dryRun bool, out *WriteResult, budget time.Time) error {
+	defer timed(ctx, "apply", "objects", len(objs), "dryRun", dryRun)()
+	plans := make([]applyPlan, len(objs))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, obj := range objs {
+		g.Go(func() (err error) {
+			plans[i], err = planApply(gctx, dyn, obj)
+			return err
+		})
 	}
-	act := ObjectAction{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace()}
-	res := dyn.Resource(gvr).Namespace(obj.GetNamespace())
-	existing, err := res.Get(ctx, obj.GetName(), metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		act.Action = "create"
-		if !dryRun {
-			if _, err := res.Create(ctx, obj, metav1.CreateOptions{FieldManager: compose.ManagedBy}); err != nil {
-				return act, fmt.Errorf("create %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
-			}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	first := len(out.Objects)
+	for i := range plans {
+		act := plans[i].act
+		if dryRun && act.Action != actionUnchanged {
+			act.Action = "would-" + act.Action
 		}
-	case err != nil:
-		return act, fmt.Errorf("get %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
-	case !compose.OwnedBy(existing):
-		return act, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s exists and %s: apply mode lands new objects only and never patches an object someone else owns — %s", obj.GetKind(), obj.GetNamespace(), obj.GetName(), ownerDescription(existing), removalHint(existing))}
-	default:
-		act.Changes = changedPaths(existing, obj)
-		if len(act.Changes) == 0 {
-			act.Action = "unchanged"
-			return act, nil
-		}
-		act.Action = "update"
-		if !dryRun {
-			obj.SetResourceVersion(existing.GetResourceVersion())
-			if _, err := res.Update(ctx, obj, metav1.UpdateOptions{FieldManager: compose.ManagedBy}); err != nil {
-				return act, fmt.Errorf("update %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
-			}
-		}
+		out.Objects = append(out.Objects, act)
+		out.Manifests = append(out.Manifests, redacted(objs[i]))
 	}
 	if dryRun {
-		act.Action = "would-" + act.Action
+		return nil
 	}
-	return act, nil
+	var writes []int
+	for _, action := range []string{actionCreate, actionUpdate} {
+		for i := range plans {
+			if plans[i].act.Action == action {
+				writes = append(writes, i)
+			}
+		}
+	}
+	for n, i := range writes {
+		if remaining := time.Until(budget); remaining < writeReserve {
+			out.Partial = true
+			for _, j := range writes[n:] {
+				out.Objects[first+j].Action = actionPending
+			}
+			out.NextStep = fmt.Sprintf("%d of %d object(s) are pending: the answer went out within the caller's deadline instead of starting them — re-run with the same arguments, the pending objects are written first", len(writes)-n, len(objs))
+			slog.WarnContext(ctx, "apply cut short: the remaining budget is below the write reserve", "remaining", remaining.Round(time.Millisecond), "reserve", writeReserve, "pending", len(writes)-n)
+			return nil
+		}
+		if err := plans[i].write(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyPlan is one composed object against its live counterpart: what apply
+// does with it.
+type applyPlan struct {
+	obj      *unstructured.Unstructured
+	existing *unstructured.Unstructured
+	res      dynamic.ResourceInterface
+	act      ObjectAction
+}
+
+// planApply reads the live object and decides: create when absent, update or
+// unchanged when cluster-manager created it, refused when someone else owns
+// it.
+func planApply(ctx context.Context, dyn dynamic.Interface, obj *unstructured.Unstructured) (applyPlan, error) {
+	gvr, err := refGVR(obj.GetAPIVersion(), obj.GetKind())
+	if err != nil {
+		return applyPlan{}, err
+	}
+	p := applyPlan{obj: obj, res: dyn.Resource(gvr).Namespace(obj.GetNamespace()), act: ObjectAction{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace()}}
+	existing, err := p.res.Get(ctx, obj.GetName(), metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		p.act.Action = actionCreate
+	case err != nil:
+		return p, fmt.Errorf("get %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+	case !compose.OwnedBy(existing):
+		return p, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s exists and %s: apply mode lands new objects only and never patches an object someone else owns — %s", obj.GetKind(), obj.GetNamespace(), obj.GetName(), ownerDescription(existing), removalHint(existing))}
+	default:
+		p.existing = existing
+		p.act.Changes = changedPaths(existing, obj)
+		p.act.Action = actionUpdate
+		if len(p.act.Changes) == 0 {
+			p.act.Action = actionUnchanged
+		}
+	}
+	return p, nil
+}
+
+// write lands the planned create or update, timed in the log at debug.
+func (p *applyPlan) write(ctx context.Context) error {
+	defer timed(ctx, "write", "action", p.act.Action, "kind", p.act.Kind, "name", p.act.Namespace+"/"+p.act.Name)()
+	switch p.act.Action {
+	case actionCreate:
+		if _, err := p.res.Create(ctx, p.obj, metav1.CreateOptions{FieldManager: compose.ManagedBy}); err != nil {
+			return fmt.Errorf("create %s %s/%s: %w", p.obj.GetKind(), p.obj.GetNamespace(), p.obj.GetName(), err)
+		}
+	case actionUpdate:
+		p.obj.SetResourceVersion(p.existing.GetResourceVersion())
+		if _, err := p.res.Update(ctx, p.obj, metav1.UpdateOptions{FieldManager: compose.ManagedBy}); err != nil {
+			return fmt.Errorf("update %s %s/%s: %w", p.obj.GetKind(), p.obj.GetNamespace(), p.obj.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // deleteIfOwned deletes one of cluster-manager's objects; nil when it does

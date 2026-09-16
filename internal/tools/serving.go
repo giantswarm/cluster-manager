@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -59,6 +61,7 @@ type SliceRelease struct {
 // terminating in the release namespace are healed before the slice lands
 // (giantswarm/cluster-manager#28).
 func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
+	start := time.Now()
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
@@ -77,7 +80,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	serving, slice, objs, err := s.sliceRelease(ctx, dyn, target, facts, pool)
+	reads, err := s.readSlice(ctx, dyn, target)
+	if err != nil {
+		return nil, err
+	}
+	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +95,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	backend, err := s.backendDocument(ctx, dyn, target, instances)
+	existing, err := existingBackend(ctx, dyn, s.cfg.ModelManagerNamespace)
+	if err != nil {
+		return nil, err
+	}
+	backend, err := s.backendDocument(target, instances, existing)
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +111,10 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
 		return nil, err
 	}
-	for _, obj := range append(objs, backend) {
-		act, err := apply(ctx, dyn, obj, in.DryRun)
-		if err != nil {
-			return nil, err
-		}
-		out.Objects = append(out.Objects, act)
-		out.Manifests = append(out.Manifests, redacted(obj))
+	if err := applyAll(ctx, dyn, append(objs, backend), in.DryRun, out, s.budget(ctx, start)); err != nil {
+		return nil, err
 	}
+	logApplied(ctx, "enable_model_serving", out, start)
 	return out, nil
 }
 
@@ -155,28 +162,59 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	return out, deleteAll(ctx, dyn, targets, in.DryRun, out)
 }
 
-// sliceRelease decides the slice's part of a write: nothing when serving
-// runs on the target and someone else provides it (the platform's chart, a
-// human), the `<cluster>-agent-platform` release filled from the platform's
-// inputs when none does — or when the one running is cluster-manager's own,
-// so the re-run is its update —, a refusal when the cluster cannot be read
-// or already has a release of the chart under another name.
-func (s *Service) sliceRelease(ctx context.Context, dyn dynamic.Interface, t target, facts compose.Cluster, pool string) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
-	serving := detect.Serving(ctx, t.Target)
+// sliceReads is what the slice's part of a write reads: the serving layer
+// detected on the target and, where the slice would be composed, the
+// platform's inputs.
+type sliceReads struct {
+	serving  detect.Component
+	platform compose.PlatformInputs
+}
+
+// readSlice detects serving on the target and, where the slice would be
+// composed, reads the platform's inputs and checks for a second release of
+// the chart — the two concurrently. A refusal from either is returned as the
+// error.
+func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target) (sliceReads, error) {
+	r := sliceReads{serving: detect.Serving(ctx, t.Target)}
+	if !composesSlice(r.serving) {
+		return r, nil
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return s.refuseSecondRelease(gctx, dyn, t.Namespace, t.Cluster) })
+	g.Go(func() (err error) {
+		r.platform, err = s.platformInputs(gctx, dyn)
+		return err
+	})
+	return r, g.Wait()
+}
+
+// composesSlice reports whether the slice's part of a write is composed: when
+// nothing provides serving on the target, or the serving there is
+// cluster-manager's own (the re-run is its update). Not when someone else
+// provides it, nor when the target cannot be read.
+func composesSlice(serving detect.Component) bool {
+	if serving.Status == detect.StatusUnknown {
+		return false
+	}
+	return !serving.Present() || serving.Provider == detect.ProviderClusterManager
+}
+
+// sliceRelease decides the slice's part of a write from what was read:
+// nothing when serving runs on the target and someone else provides it (the
+// platform's chart, a human), the `<cluster>-agent-platform` release filled
+// from the platform's inputs when none does — or when the one running is
+// cluster-manager's own, so the re-run is its update —, a refusal when the
+// cluster cannot be read.
+func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
+	serving := r.serving
 	switch {
 	case serving.Status == detect.StatusUnknown:
 		return serving, nil, nil, &ErrRefused{Reason: fmt.Sprintf("cannot tell whether serving runs on %s (%s): the slice release is composed only when nothing provides serving — make the cluster readable as you (its apiserver must trust the installation's identity provider) and re-run", t.Cluster, serving.Reason)}
-	case serving.Present() && serving.Provider != detect.ProviderClusterManager:
+	case !composesSlice(serving):
 		return serving, nil, nil, nil
 	}
-	if err := s.refuseSecondRelease(ctx, dyn, t.Namespace, t.Cluster); err != nil {
-		return serving, nil, nil, err
-	}
-	platform, err := s.platformInputs(ctx, dyn)
-	if err != nil {
-		return serving, nil, nil, err
-	}
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer}
+	var err error
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer}
 	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
@@ -219,23 +257,32 @@ func (s *Service) refuseSecondRelease(ctx context.Context, dyn dynamic.Interface
 // (status.history[0].chartVersion) from the installation's own release of
 // the agent-platform chart: the HelmRelease named agent-platform, else the
 // one release of the chart that is not cluster-manager's. Secrets it
-// references are not read.
+// references are not read. The releases named agent-platform are looked at
+// first: a fleet release names its chart through an OCIRepository, read per
+// release, and an installation has hundreds of releases — the one named
+// agent-platform settles it with one read, the others are read only when no
+// release of that name is the chart's.
 func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (compose.PlatformInputs, error) {
 	hrs, err := dyn.Resource(HelmReleaseGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return compose.PlatformInputs{}, fmt.Errorf("list HelmReleases: %w", err)
 	}
 	var candidates []*unstructured.Unstructured
-	for i := range hrs.Items {
-		hr := &hrs.Items[i]
-		if compose.OwnedBy(hr) || chartOf(ctx, dyn, hr) != compose.SliceChart {
-			continue
+	for _, named := range []bool{true, false} {
+		for i := range hrs.Items {
+			hr := &hrs.Items[i]
+			if (hr.GetName() == platformReleaseName) != named || compose.OwnedBy(hr) || chartOf(ctx, dyn, hr) != compose.SliceChart {
+				continue
+			}
+			if named {
+				candidates = []*unstructured.Unstructured{hr}
+				break
+			}
+			candidates = append(candidates, hr)
 		}
-		if hr.GetName() == platformReleaseName {
-			candidates = []*unstructured.Unstructured{hr}
+		if len(candidates) > 0 {
 			break
 		}
-		candidates = append(candidates, hr)
 	}
 	switch len(candidates) {
 	case 0:
