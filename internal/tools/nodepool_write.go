@@ -799,8 +799,25 @@ func removalHint(obj *unstructured.Unstructured) string {
 	return "remove it by the means that created it, or pick another pool name"
 }
 
+// serverDefaults are the spec leaves the API server fills in from the CRD's
+// defaults on every create and update, by the composed object's apiVersion
+// and kind. The composed objects leave them unset, so the live object always
+// carries them and an update always gets them back: a leaf only the live
+// object carries, at its default value, is not drift. A live value other than
+// the default is — the update would reset it. Flux's OCIRepository v1 defaults
+// `spec.provider` and `spec.timeout` (source.toolkit.fluxcd.io/v1
+// OCIRepositorySpec); HelmRelease v2 defaults nothing at the paths
+// cluster-manager composes, nor do Secret and ConfigMap.
+var serverDefaults = map[string]map[string]any{
+	compose.OCIRepositoryGVR.GroupVersion().String() + "/OCIRepository": {
+		"spec.provider": "generic",
+		"spec.timeout":  "60s",
+	},
+}
+
 // changedPaths lists the spec, label and ownerReference paths of want that
-// differ from have — the drift a re-run would correct.
+// differ from have — the drift a re-run would correct. A leaf the API server
+// defaulted on have and want leaves unset is no difference (serverDefaults).
 func changedPaths(have, want *unstructured.Unstructured) []string {
 	var paths []string
 	diff(have.Object["spec"], want.Object["spec"], "spec", &paths)
@@ -810,8 +827,30 @@ func changedPaths(have, want *unstructured.Unstructured) []string {
 	if !reflect.DeepEqual(have.GetOwnerReferences(), want.GetOwnerReferences()) {
 		paths = append(paths, "metadata.ownerReferences")
 	}
-	sort.Strings(paths)
-	return paths
+	defaults := serverDefaults[want.GetAPIVersion()+"/"+want.GetKind()]
+	out := paths[:0]
+	for _, p := range paths {
+		if !serverDefaulted(defaults, p, have, want) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// serverDefaulted reports whether path is a leaf want leaves unset that the
+// API server filled in on have with its default value.
+func serverDefaulted(defaults map[string]any, path string, have, want *unstructured.Unstructured) bool {
+	def, ok := defaults[path]
+	if !ok {
+		return false
+	}
+	fields := strings.Split(path, ".")
+	if _, set, _ := unstructured.NestedFieldNoCopy(want.Object, fields...); set {
+		return false
+	}
+	got, set, _ := unstructured.NestedFieldNoCopy(have.Object, fields...)
+	return set && equalLeaf(got, def)
 }
 
 // diff walks maps side by side and records every leaf path whose values

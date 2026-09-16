@@ -208,6 +208,10 @@ spec:
   url: oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool
   ref:
     tag: 0.3.0
+  # The API server's defaults from the CRD, as every live OCIRepository
+  # carries them; the composed source never sets them.
+  provider: generic
+  timeout: 60s
 ---
 # wc1's GPU pool, applied by the pool release: a Karpenter pool.
 apiVersion: cluster.x-k8s.io/v1beta1
