@@ -83,7 +83,24 @@ func New(cfg Config) (*Clients, error) {
 	return c, nil
 }
 
+// One tool call is a burst of requests — create_node_pool reads some forty
+// objects and writes eight — and client-go throttles a client whose config
+// leaves QPS and Burst zero to 5 requests a second after the first ten, which
+// alone held that call at the aggregator's deadline
+// (giantswarm/cluster-manager#34). The limits below let a call's reads go at
+// the apiserver's pace; the apiserver's own priority and fairness bounds them.
+const (
+	clientQPS   = 100
+	clientBurst = 200
+)
+
 func fromRESTConfig(restCfg *rest.Config) (*Clients, error) {
+	if restCfg.QPS == 0 {
+		restCfg.QPS = clientQPS
+	}
+	if restCfg.Burst == 0 {
+		restCfg.Burst = clientBurst
+	}
 	dyn, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic client: %w", err)

@@ -55,7 +55,7 @@ func TestCreateNodePoolAppLayoutNoTeleport(t *testing.T) {
 	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
 	assert.Equal(t, map[string]any{"enabled": false}, values["teleport"])
 	assert.Equal(t, compose.RowPreinstalled.Name, out.OperatorRow, "nodes labelled nvidia.com/gpu.deploy.driver=pre-installed: row 2")
-	operator, _, _ := unstructured.NestedMap(out.Manifests[3], "spec", "values", "gpu-operator")
+	operator, _, _ := unstructured.NestedMap(out.Manifests[4], "spec", "values", "gpu-operator")
 	assert.Equal(t, map[string]any{"enabled": false}, operator["driver"])
 	assert.Equal(t, map[string]any{"enabled": true}, operator["toolkit"])
 	assert.Equal(t, compose.PoolAffinity(compose.Cluster{Name: "wc2"}, []string{"gpu-l4b"}), operator[compose.NFDValuesKey].(map[string]any)["worker"].(map[string]any)["affinity"], "NFD's worker pinned to the pool being created; wc2's GitOps-owned pool release is not cluster-manager's and does not count")
@@ -297,18 +297,33 @@ func TestCreateNodePoolBackendDocumentFollowsTheSizes(t *testing.T) {
 
 	drift, err := svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
 	require.NoError(t, err)
-	backend := drift.Objects[len(drift.Objects)-1]
+	backend := backendAction(drift)
 	assert.Equal(t, "would-update", backend.Action, "the document follows the pool's sizes")
 	assert.Equal(t, []string{"data.backend.yaml"}, backend.Changes)
 	assert.Contains(t, backendDoc(drift), "instanceType: g6.4xlarge\n", "the chart's default sizes on the re-run")
 }
 
-// backendDoc is the kserve backend document a write renders — the last
-// manifest, the backend ConfigMap's backend.yaml.
+// backendDoc is the kserve backend document among the answer's manifests.
 func backendDoc(out *WriteResult) string {
-	data, _ := out.Manifests[len(out.Manifests)-1]["data"].(map[string]any)
-	doc, _ := data["backend.yaml"].(string)
-	return doc
+	for _, m := range out.Manifests {
+		if m["kind"] != "ConfigMap" {
+			continue
+		}
+		data, _ := m["data"].(map[string]any)
+		doc, _ := data["backend.yaml"].(string)
+		return doc
+	}
+	return ""
+}
+
+// backendAction is the kserve backend document's entry among the answer's objects.
+func backendAction(out *WriteResult) ObjectAction {
+	for _, o := range out.Objects {
+		if o.Kind == "ConfigMap" && o.Name == compose.BackendConfigMapName {
+			return o
+		}
+	}
+	return ObjectAction{}
 }
 
 func sizeNames(shapes []compose.InstanceShape) []string {

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/dynamic"
@@ -32,6 +33,7 @@ type serveOptions struct {
 	sliceChartVersion     string
 	tenantServiceAccount  string
 	certificateIssuer     string
+	applyBudget           time.Duration
 
 	mcpEnabled bool
 	mcpPath    string
@@ -74,6 +76,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.tenantServiceAccount, "tenant-service-account", envOr("CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT", compose.DefaultTenantServiceAccount), "ServiceAccount in every org namespace the installation's Flux runs a composed release under when its objects live in that namespace (the pool release, the <cluster>-agent-platform slice release); the org's tenant ServiceAccount on Giant Swarm installations, empty renders none (CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT)")
 	f.StringVar(&o.certificateIssuer, "models-certificate-issuer", envOr("CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER", compose.DefaultCertificateIssuer), "cert-manager ClusterIssuer the <cluster>-agent-platform slice release asks for the models host's certificate when the platform's wildcard is not usable (a workload cluster; the own cluster when the platform's release names no gatewayApi.gateway.tls.secretName); empty composes none (CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
+	f.DurationVar(&o.applyBudget, "apply-budget", envDuration("CLUSTER_MANAGER_APPLY_BUDGET", tools.DefaultApplyBudget), "How long create_node_pool and enable_model_serving may take before they stop writing and answer with what landed, the rest pending for the re-run: the aggregator's deadline for an upstream tool call less the answer's way back; a deadline the request carries wins when earlier (CLUSTER_MANAGER_APPLY_BUDGET)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("CLUSTER_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (CLUSTER_MANAGER_OAUTH_ENABLED)")
@@ -117,7 +120,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			}
 			return target.Dynamic, nil
 		},
-		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer},
+		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, ApplyBudget: o.applyBudget},
 	)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -164,6 +167,18 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
 }
 
 func envBool(key string, def bool) bool {
