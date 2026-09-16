@@ -3,6 +3,7 @@ package compose
 import (
 	_ "embed"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/version"
@@ -97,7 +98,9 @@ func SliceDomain(c Cluster, s SliceSpec) string {
 // explicit version when set, else the version the installation's platform
 // release runs — refused below MinSliceChartVersion, the first chart that
 // places the predictors on a tainted GPU pool, and when the release has not
-// deployed a chart yet.
+// deployed a chart yet. Flux records the chart's digest as the version's
+// build metadata (`4.27.2+b9d9972a5aca`); the pin is the chart's tag, so
+// the metadata is dropped.
 func SliceChartVersion(s SliceSpec) (string, error) {
 	if s.ChartVersion != "" {
 		return s.ChartVersion, nil
@@ -113,10 +116,11 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s runs %s chart %q, not a semantic version: the slice release pins the chart version the platform runs", release, SliceChart, s.Platform.ChartVersion)
 	}
+	tag, _, _ := strings.Cut(s.Platform.ChartVersion, "+")
 	if running.LessThan(version.MustParseSemantic(MinSliceChartVersion)) {
-		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to %s or newer and re-run", release, SliceChart, s.Platform.ChartVersion, MinSliceChartVersion, MinSliceChartVersion)
+		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to %s or newer and re-run", release, SliceChart, tag, MinSliceChartVersion, MinSliceChartVersion)
 	}
-	return s.Platform.ChartVersion, nil
+	return tag, nil
 }
 
 // Slice renders the `<cluster>-agent-platform` release: an OCIRepository

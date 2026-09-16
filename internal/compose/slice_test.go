@@ -105,8 +105,8 @@ func TestOtherSliceOn(t *testing.T) {
 	assert.True(t, OtherSliceOn(values), "the runtime slice shares the release")
 }
 
-// TestSliceChartVersion: the pin is the version the platform's release runs,
-// refused below the floor (naming the release, the version, the floor and
+// TestSliceChartVersion: the pin is the version the platform's release runs
+// without the digest Flux records as build metadata, refused below the floor (naming the release, the version, the floor and
 // why), before the first deployment and for a non-semver revision; an
 // explicit version is honoured as given, floor or not.
 func TestSliceChartVersion(t *testing.T) {
@@ -117,6 +117,8 @@ func TestSliceChartVersion(t *testing.T) {
 		refusal string
 	}{
 		{"platform's version", SliceSpec{Platform: platform()}, "4.27.2", ""},
+		{"digest as build metadata dropped", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.28.0+1c7eb3256e07"}}, "4.28.0", ""},
+		{"below the floor with build metadata", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.25.0+c78155660389"}}, "", "runs agent-platform chart 4.25.0, below 4.27.0"},
 		{"exactly the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinSliceChartVersion}}, MinSliceChartVersion, ""},
 		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.25.0"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.25.0, below 4.27.0, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to 4.27.0 or newer and re-run"},
 		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.27.0-rc.1"}}, "", "runs agent-platform chart 4.27.0-rc.1, below 4.27.0"},
