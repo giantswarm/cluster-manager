@@ -66,5 +66,6 @@ spec:
                     operator: In
                     values:
                     - wc1-gpu-l4
+                    - wc1-gpu-t4
       toolkit:
-        enabled: true
+        enabled: false

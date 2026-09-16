@@ -25,6 +25,9 @@ const (
 	// OperatorValuesKey is the values key the wrapper chart nests the
 	// upstream operator under.
 	OperatorValuesKey = "gpu-operator"
+	// NFDValuesKey is the values key of the operator chart's Node Feature
+	// Discovery subchart, under OperatorValuesKey.
+	NFDValuesKey = "node-feature-discovery"
 
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
@@ -123,10 +126,12 @@ func OperatorReleaseName(cluster string) string { return cluster + OperatorRelea
 // following the chart's 1.x line and a HelmRelease installing into
 // kube-system of the target through the cluster's kubeconfig Secret — the
 // installation's own cluster included, whose Secret points at the same API
-// server (see Delivery in compose.go) — configured from the table's row. The
-// objects carry the fleet's labels and, in apply mode, an ownerReference to
-// the Cluster.
-func Operator(c Cluster, row OperatorRow) []*unstructured.Unstructured {
+// server (see Delivery in compose.go) — configured from the table's row,
+// with Node Feature Discovery's worker pinned to the cluster's GPU pools
+// (pools: the pool names within the cluster; see PoolAffinity). The objects
+// carry the fleet's labels and, in apply mode, an ownerReference to the
+// Cluster.
+func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstructured {
 	name := OperatorReleaseName(c.Name)
 	meta := objectMeta(c, map[string]any{
 		LabelChartName: OperatorChart,
@@ -134,16 +139,52 @@ func Operator(c Cluster, row OperatorRow) []*unstructured.Unstructured {
 		LabelCluster:   c.Name,
 	})
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(OperatorChartURL, "semver", OperatorChartRange)})
-	spec := helmReleaseSpec(OperatorChart, true, map[string]any{
-		OperatorValuesKey: map[string]any{
-			"driver":  map[string]any{"enabled": row.Driver},
-			"toolkit": map[string]any{"enabled": row.Toolkit},
-		},
-	})
+	values := map[string]any{
+		"driver":  map[string]any{"enabled": row.Driver},
+		"toolkit": map[string]any{"enabled": row.Toolkit},
+	}
+	if affinity := PoolAffinity(c, pools); affinity != nil {
+		values[NFDValuesKey] = map[string]any{"worker": map[string]any{"affinity": affinity}}
+	}
+	spec := helmReleaseSpec(OperatorChart, true, map[string]any{OperatorValuesKey: values})
 	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}
 	spec["targetNamespace"], spec["storageNamespace"] = OperatorNamespace, OperatorNamespace
 	deliverThroughKubeconfig(spec, c.Name)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}
+}
+
+// PoolAffinity is the node affinity that keeps a DaemonSet on the nodes of
+// the cluster's GPU pools: a required `giantswarm.io/machine-pool In` term
+// over the pool releases' names (the value every pool node carries), sorted,
+// duplicates dropped; nil without pools. The operator's Node Feature
+// Discovery worker takes it (gpu-operator-app#164): the worker is what
+// asserts `nvidia.com/gpu.present`, so a GPU-family node of the general pool
+// without a driver (an AWS g6f spot instance) gets neither the label nor the
+// operands stuck in Init that came with it. The set form covers one pool as
+// well as several; a re-run recomposes the list.
+func PoolAffinity(c Cluster, pools []string) map[string]any {
+	if len(pools) == 0 {
+		return nil
+	}
+	releases := map[string]bool{}
+	for _, p := range pools {
+		releases[ReleaseName(c.Name, p)] = true
+	}
+	values := make([]any, 0, len(releases))
+	for _, r := range sortedKeys(releases) {
+		values = append(values, r)
+	}
+	return map[string]any{
+		"nodeAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+				"nodeSelectorTerms": []any{
+					map[string]any{"matchExpressions": []any{
+						map[string]any{"key": LabelMachinePool, "operator": "In", "values": values},
+					}},
+				},
+			},
+		},
+	}
 }
 
 // objectMeta builds the metadata of a release's objects in the cluster's
