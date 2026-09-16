@@ -110,6 +110,40 @@ func TestCreateNodePoolReRunUpdatesAnExistingPool(t *testing.T) {
 	assert.Equal(t, "would-update", out.Objects[2].Action)
 	assert.Contains(t, out.Objects[2].Changes, "spec.values.pool.kubernetesVersion")
 	assert.Contains(t, out.Objects[2].Changes, "metadata.ownerReferences")
+	assert.Equal(t, "would-update", out.Objects[0].Action)
+	assert.Contains(t, out.Objects[0].Changes, "spec.ref.tag", "the source moves its pin")
+	assert.NotContains(t, out.Objects[0].Changes, "spec.provider", "the API server's default on the live source is not drift")
+	assert.NotContains(t, out.Objects[0].Changes, "spec.timeout", "the API server's default on the live source is not drift")
+}
+
+// TestChangedPathsIgnoresServerDefaults: a leaf the composed object leaves
+// unset and the live object carries at the API server's default is not
+// drift; any other value there is, and so is the same leaf when composed.
+func TestChangedPathsIgnoresServerDefaults(t *testing.T) {
+	source := func(spec map[string]any) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+		obj.SetAPIVersion(compose.OCIRepositoryGVR.GroupVersion().String())
+		obj.SetKind("OCIRepository")
+		return obj
+	}
+	want := source(map[string]any{"interval": "10m", "url": "oci://example/chart", "ref": map[string]any{"tag": "0.3.1"}})
+	defaulted := source(map[string]any{"interval": "10m", "url": "oci://example/chart", "ref": map[string]any{"tag": "0.3.1"}, "provider": "generic", "timeout": "60s"})
+	assert.Empty(t, changedPaths(defaulted, want), "the server's defaults are not drift")
+
+	edited := defaulted.DeepCopy()
+	require.NoError(t, unstructured.SetNestedField(edited.Object, "aws", "spec", "provider"))
+	assert.Equal(t, []string{"spec.provider"}, changedPaths(edited, want), "a value other than the default is: the update resets it")
+
+	composed := want.DeepCopy()
+	require.NoError(t, unstructured.SetNestedField(composed.Object, "azure", "spec", "provider"))
+	assert.Equal(t, []string{"spec.provider"}, changedPaths(defaulted, composed), "a leaf the composed object sets is compared as any other")
+
+	release := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"interval": "10m", "timeout": "60s"}}}
+	release.SetAPIVersion(HelmReleaseGVR.GroupVersion().String())
+	release.SetKind("HelmRelease")
+	bare := release.DeepCopy()
+	unstructured.RemoveNestedField(bare.Object, "spec", "timeout")
+	assert.Equal(t, []string{"spec.timeout"}, changedPaths(release, bare), "a kind without server defaults keeps every leaf")
 }
 
 func TestCreateNodePoolRefusals(t *testing.T) {
