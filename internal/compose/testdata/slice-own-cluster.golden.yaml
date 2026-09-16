@@ -91,6 +91,11 @@ spec:
         enabled: false
       valkey:
         enabled: false
+    gateway:
+      jwksEgress:
+        enabled: true
+        namespace: giantswarm
+        port: 5556
     gatewayApi:
       gateway:
         tls:

@@ -1,0 +1,75 @@
+# The children of wc1's slice release on the installation, as the meta chart
+# renders them into the slice's namespace and Flux labels them
+# (helm.toolkit.fluxcd.io/name and /namespace name the slice release): the
+# connectivity child failed its render, the kserve-resources child is Ready,
+# the llmisvc one has no Ready condition yet. The last release carries another
+# slice's labels and is not wc1's.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: agent-platform-connectivity
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: agent-platform-connectivity
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: InstallFailed
+      message: |-
+        Helm install failed for release org-acme/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14):
+        modelServing.modelsGateway.jwtAuthentication.enabled is true with an in-cluster jwks.host ("dex.giantswarm.svc.cluster.local") but gateway.jwksEgress.enabled is false.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kserve-resources
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: kserve-resources
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kserve-llmisvc-resources
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: kserve-llmisvc-resources
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc2-agent-platform-connectivity
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc2-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc2-agent-platform-connectivity
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: UpgradeFailed

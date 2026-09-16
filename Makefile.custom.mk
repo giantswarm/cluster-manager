@@ -38,3 +38,7 @@ helm-docs: ## Regenerate the chart README.
 .PHONY: helm-verify
 helm-verify: ## Render assertions for the chart (hack/verify-chart.sh).
 	hack/verify-chart.sh
+
+.PHONY: verify-slice-render
+verify-slice-render: ## Render the composed serving slice through the agent-platform chart and its connectivity child (needs helm and the registry; SLICE_RENDER_CHART_VERSION overrides the pin).
+	go test -count=1 -run 'TestSliceRendersThroughChart' ./internal/compose

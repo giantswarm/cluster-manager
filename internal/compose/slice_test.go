@@ -91,6 +91,11 @@ func TestSliceGoldens(t *testing.T) {
 				jwksPort, _, _ := unstructured.NestedInt64(values, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "port")
 				assert.Equal(t, DefaultDexJWKSPort, jwksPort, "Dex's plaintext port: no TLS to originate")
 			}
+			egress, hasEgress, _ := unstructured.NestedMap(values, "gateway", "jwksEgress")
+			assert.Equal(t, tc.spec.OwnCluster, hasEgress, "gateway.jwksEgress travels with the in-cluster host — the connectivity chart refuses the one without the other; a workload cluster names neither")
+			if hasEgress {
+				assert.Equal(t, map[string]any{"enabled": true, "namespace": DefaultDexNamespace, "port": DefaultDexJWKSPort}, egress, "the host's namespace and port, the facts the platform's release states")
+			}
 			for _, component := range ServingComponents[:6] {
 				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
 				assert.True(t, on, component)
@@ -146,9 +151,9 @@ func TestSliceJWKS(t *testing.T) {
 		url     string
 		refusal string
 	}{
-		{"own cluster, chart defaults", SliceSpec{OwnCluster: true, Platform: platform()}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
-		{"own cluster, the platform's jwksEgress", SliceSpec{OwnCluster: true, Platform: named}, JWKSSource{Host: "dex.identity.svc.cluster.local", Port: 5557}, "http://dex.identity.svc.cluster.local:5557/keys", ""},
-		{"own cluster needs no issuer host", SliceSpec{OwnCluster: true, Platform: noIssuer}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
+		{"own cluster, chart defaults", SliceSpec{OwnCluster: true, Platform: platform()}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556, Namespace: "giantswarm"}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
+		{"own cluster, the platform's jwksEgress", SliceSpec{OwnCluster: true, Platform: named}, JWKSSource{Host: "dex.identity.svc.cluster.local", Port: 5557, Namespace: "identity"}, "http://dex.identity.svc.cluster.local:5557/keys", ""},
+		{"own cluster needs no issuer host", SliceSpec{OwnCluster: true, Platform: noIssuer}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556, Namespace: "giantswarm"}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
 		{"workload cluster, the public issuer", SliceSpec{Platform: platform()}, JWKSSource{Host: "dex.gazelle.example.io", Port: 443}, "https://dex.gazelle.example.io/keys", ""},
 		{"workload cluster, the issuer's host alone", SliceSpec{Platform: oddIssuer}, JWKSSource{Host: "login.example.io", Port: 443}, "https://login.example.io/keys", ""},
 		{"workload cluster without an issuer", SliceSpec{Platform: noIssuer}, JWKSSource{}, "", `global.identity.issuerUrl "" names no host`},
@@ -165,6 +170,13 @@ func TestSliceJWKS(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.url, got.URL())
+			assert.Equal(t, tc.spec.OwnCluster, got.InCluster(), "a Service of the cluster on the own cluster, a public issuer elsewhere")
+			if got.InCluster() {
+				values, err := SliceValues(wc1(), tc.spec)
+				require.NoError(t, err)
+				egress, _, _ := unstructured.NestedMap(values, "gateway", "jwksEgress")
+				assert.Equal(t, map[string]any{"enabled": true, "namespace": got.Namespace, "port": got.Port}, egress, "gateway.jwksEgress names the namespace and port the host does")
+			}
 		})
 	}
 }

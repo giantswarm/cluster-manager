@@ -132,18 +132,15 @@ func poolRelease(hr *unstructured.Unstructured) PoolRelease {
 	return PoolRelease{Name: hr.GetName(), Namespace: hr.GetNamespace(), ChartVersion: version, Ready: readyCondition(hr)}
 }
 
-// readyCondition reads the Ready condition of a status.conditions list.
+// readyCondition reads the Ready condition of a status.conditions list: true
+// or false by its status, nil while there is none.
 func readyCondition(obj *unstructured.Unstructured) *bool {
-	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, c := range conds {
-		m, ok := c.(map[string]any)
-		if !ok || m["type"] != "Ready" {
-			continue
-		}
-		ready := m["status"] == "True"
-		return &ready
+	cond, found := detect.ReadyCondition(obj)
+	if !found {
+		return nil
 	}
-	return nil
+	ready := cond.Status == "True"
+	return &ready
 }
 
 func sortedPools(p []PoolRelease) []PoolRelease {
