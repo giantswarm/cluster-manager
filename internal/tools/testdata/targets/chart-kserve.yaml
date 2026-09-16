@@ -1,0 +1,65 @@
+# wc1 served by the platform's own release: the kserve-resources and
+# kserve-llmisvc-resources children the agent-platform chart renders (its
+# helm.sh/chart label) and their controller Deployments, labelled by Flux with
+# the release that installed them; the llmisvc controller not ready yet.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kserve-resources
+  namespace: agent-platform
+  labels:
+    helm.sh/chart: agent-platform-4.28.8
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: kserve-resources
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kserve-llmisvc-resources
+  namespace: agent-platform
+  labels:
+    helm.sh/chart: agent-platform-4.28.8
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: kserve-llmisvc-resources
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-controller-manager
+  namespace: agent-platform
+  labels:
+    control-plane: kserve-controller-manager
+    helm.toolkit.fluxcd.io/name: kserve-resources
+    helm.toolkit.fluxcd.io/namespace: agent-platform
+spec:
+  replicas: 1
+status:
+  readyReplicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmisvc-controller-manager
+  namespace: agent-platform
+  labels:
+    control-plane: llmisvc-controller-manager
+    helm.toolkit.fluxcd.io/name: kserve-llmisvc-resources
+    helm.toolkit.fluxcd.io/namespace: agent-platform
+spec:
+  replicas: 1
+status:
+  readyReplicas: 0

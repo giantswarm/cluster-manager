@@ -135,16 +135,27 @@ func TestCreateNodePoolRefusals(t *testing.T) {
 	assertRefused(t, err, "never newer than the control plane")
 }
 
-// TestDeleteNodePool: refused while the pool runs nodes (named), forced
-// removes the release, its source and nothing else; a foreign release is
-// never touched.
+// TestDeleteNodePool: refused while the pool runs nodes — named, with the
+// models served on the cluster (a Pending one too), or that none is, or why
+// that cannot be told —, forced removes the release, its source and nothing
+// else; a foreign release is never touched.
 func TestDeleteNodePool(t *testing.T) {
 	lab := newLab(t, "installation.yaml")
 	svc := lab.service(Config{Installation: "gazelle"})
 	ctx := context.Background()
 
 	_, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
-	assertRefused(t, err, "i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002")
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 2 node(s) (")
+	assertRefused(t, err, "i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002) and wc1 serves no model: nothing of the platform's serving holds them")
+
+	lab.target(t, wc1APIServer, "wc1-serving.yaml")
+	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	assertRefused(t, err, "i-0a1b2c3d4e5f60002), serving 2 model(s) on wc1: InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them")
+
+	lab.unreachable(wc1APIServer)
+	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	assertRefused(t, err, "; whether models are served on wc1 cannot be told (cluster wc1 not readable as you through "+wc1APIServer+": connection refused) — check the cluster's Serving group")
+	lab.target(t, wc1APIServer, "wc1.yaml", servingAPIs...)
 
 	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
 	require.NoError(t, err)

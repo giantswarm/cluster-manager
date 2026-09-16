@@ -326,9 +326,18 @@ func servedModelsGuard(ctx context.Context, t target) error {
 		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether models are served on %s (%v): re-run once you may list its inference services, or pass force to remove the serving slice regardless", t.Cluster, err)}
 	}
 	if len(models) > 0 {
-		return &ErrRefused{Reason: fmt.Sprintf("%d model(s) are served on %s (%s): delete them first (model-manager's delete_model, or the cluster's Serving group), or pass force to remove the serving slice with them", len(models), t.Cluster, strings.Join(models, ", "))}
+		return &ErrRefused{Reason: fmt.Sprintf("%d model(s) are served on %s (%s): unload them first (model-manager's unload_model, or the cluster's Serving group), or pass force to remove the serving slice with them", len(models), t.Cluster, joinModels(models))}
 	}
 	return nil
+}
+
+// joinModels names served models for a message: the object and its model.
+func joinModels(models []detect.ServedModel) string {
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.String())
+	}
+	return strings.Join(names, ", ")
 }
 
 // sliceRemovals names the slice release's objects and, when registered for

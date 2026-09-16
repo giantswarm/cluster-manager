@@ -281,7 +281,8 @@ func backendTargetName(t compose.BackendTarget) string {
 }
 
 // DeleteNodePool removes what create_node_pool created. It refuses while the
-// pool's MachinePool has replicas unless forced — the refusal names the nodes.
+// pool's MachinePool has replicas unless forced — the refusal names the nodes
+// and the models served on the cluster.
 // With the cluster's last pool go the operator release cluster-manager
 // created, its slice release unless another slice is on in it, and the
 // kserve backend it registered.
@@ -307,7 +308,7 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s was not created by cluster-manager (%s): delete_node_pool removes only what create_node_pool created — %s", ns, release, ownerDescription(hr), removalHint(hr))}
 	}
 	if !in.Force {
-		if err := s.replicasGuard(ctx, dyn, ns, release); err != nil {
+		if err := s.replicasGuard(ctx, dyn, c, release); err != nil {
 			return nil, err
 		}
 	}
@@ -411,7 +412,11 @@ func checkMode(mode string) error {
 
 // replicasGuard refuses while the pool's MachinePool has replicas: on a
 // Karpenter pool nodes exist exactly while something is scheduled on them.
-func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, ns, pool string) error {
+// The refusal names the nodes and the models served on the cluster — what
+// keeps a GPU pool's nodes busy, read from the cluster's serving objects
+// directly so a predictor still Pending counts too — with the fix.
+func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pool string) error {
+	ns := c.GetNamespace()
 	mp, err := dyn.Resource(MachinePoolGVR).Namespace(ns).Get(ctx, pool, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -423,19 +428,47 @@ func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, ns, 
 	if replicas == 0 {
 		return nil
 	}
-	nodes := "unknown"
-	if ref := nestedRef(mp, "spec", "template", "spec", "infrastructureRef"); ref != nil {
-		if infra, err := getRef(ctx, dyn, ref, ns); err == nil {
-			ids, _, _ := unstructured.NestedStringSlice(infra.Object, "spec", "providerIDList")
-			if len(ids) == 0 {
-				ids, _, _ = unstructured.NestedStringSlice(infra.Object, "status", "providerIDList")
-			}
-			if len(ids) > 0 {
-				nodes = strings.Join(ids, ", ")
-			}
-		}
+	return &ErrRefused{Reason: fmt.Sprintf("node pool %s still runs %d node(s) (%s)%s", pool, replicas, poolNodes(ctx, dyn, mp, ns), servedModelsClause(ctx, s.target(ctx, dyn, c)))}
+}
+
+// poolNodes names a MachinePool's nodes by provider id, from its
+// infrastructure object; "unknown" when that cannot be read.
+func poolNodes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured, ns string) string {
+	ref := nestedRef(mp, "spec", "template", "spec", "infrastructureRef")
+	if ref == nil {
+		return "unknown"
 	}
-	return &ErrRefused{Reason: fmt.Sprintf("node pool %s still runs %d node(s) (%s): something is scheduled on them — check the cluster's Serving group, scale the workloads away and re-run once the pool is empty, or pass force to delete the pool with its nodes", pool, replicas, nodes)}
+	infra, err := getRef(ctx, dyn, ref, ns)
+	if err != nil {
+		return "unknown"
+	}
+	ids, _, _ := unstructured.NestedStringSlice(infra.Object, "spec", "providerIDList")
+	if len(ids) == 0 {
+		ids, _, _ = unstructured.NestedStringSlice(infra.Object, "status", "providerIDList")
+	}
+	if len(ids) == 0 {
+		return "unknown"
+	}
+	return strings.Join(ids, ", ")
+}
+
+// servedModelsClause is the replicas guard's second half: the models served
+// on the cluster, named for unloading (a GPU pool's nodes carry their
+// predictors); that none is, so something else holds the nodes; or why they
+// cannot be told — each with the fix.
+func servedModelsClause(ctx context.Context, t target) string {
+	const rerun = "re-run once the pool is empty, or pass force to delete the pool with its nodes"
+	if t.Reader == nil {
+		return fmt.Sprintf("; whether models are served on %s cannot be told (%s) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, t.Reason, rerun)
+	}
+	models, err := detect.ServedModels(ctx, t.Reader)
+	if err != nil {
+		return fmt.Sprintf("; whether models are served on %s cannot be told (%v) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, err, rerun)
+	}
+	if len(models) == 0 {
+		return fmt.Sprintf(" and %s serves no model: nothing of the platform's serving holds them — something else is scheduled there, or Karpenter has not consolidated the empty node yet — %s", t.Cluster, rerun)
+	}
+	return fmt.Sprintf(", serving %d model(s) on %s: %s — unload them first (model-manager's unload_model, or the cluster's Serving group) and %s and the models on them", len(models), t.Cluster, joinModels(models), rerun)
 }
 
 // clusterFacts reads what the pool release needs: the pins from the

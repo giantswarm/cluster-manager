@@ -1,4 +1,4 @@
-# The platform's own component: HelmRelease gpu-operator rendered by the agent-platform release, its ClusterPolicy, GPU nodes labelled by feature discovery.
+# The platform's own release provides the operator and serving: HelmRelease gpu-operator rendered by the agent-platform release, its ClusterPolicy, GPU nodes labelled by feature discovery, and the model-serving discovery ConfigMap (the KServe APIs served).
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -45,3 +45,16 @@ status:
     osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
   allocatable:
     nvidia.com/gpu: "1"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-model-serving
+  namespace: agent-platform
+  labels:
+    agent-platform.giantswarm.io/model-serving-config: "true"
+    helm.sh/chart: agent-platform-connectivity-4.21.0
+data:
+  config.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ModelServingConfig
