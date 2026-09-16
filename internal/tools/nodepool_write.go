@@ -140,11 +140,12 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
-	dyn := s.clients(ctx)
-	c, err := s.getCluster(ctx, dyn, in.Cluster, in.Namespace)
+	k := s.clients(ctx)
+	c, err := s.getCluster(ctx, k, in.Cluster, in.Namespace)
 	if err != nil {
 		return nil, err
 	}
+	dyn := k.Dynamic
 	facts, err := s.clusterFacts(ctx, dyn, c)
 	if err != nil {
 		return nil, err
@@ -263,11 +264,12 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
-	dyn := s.clients(ctx)
-	c, err := s.getCluster(ctx, dyn, in.Cluster, in.Namespace)
+	k := s.clients(ctx)
+	c, err := s.getCluster(ctx, k, in.Cluster, in.Namespace)
 	if err != nil {
 		return nil, err
 	}
+	dyn := k.Dynamic
 	ns, release := c.GetNamespace(), compose.ReleaseName(c.GetName(), in.Name)
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, release, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {

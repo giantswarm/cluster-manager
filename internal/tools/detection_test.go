@@ -16,8 +16,9 @@ import (
 // wc1Cluster is wc1 as list_clusters reports it over the lab.
 func wc1Cluster(t *testing.T, l *lab) Cluster {
 	t.Helper()
-	clusters, err := l.service(Config{Installation: "gazelle"}).ListClusters(context.Background())
+	answer, err := l.service(Config{Installation: "gazelle"}).ListClusters(context.Background())
 	require.NoError(t, err)
+	clusters := answer.Clusters
 	for _, c := range clusters {
 		if c.Name == "wc1" {
 			return c

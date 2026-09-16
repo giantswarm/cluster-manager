@@ -55,6 +55,10 @@ type Info struct {
 	// caller (after the epic's first proof, bumblebee-plans#46 D11).
 	Modes Modes    `json:"modes"`
 	Tools []string `json:"tools"`
+	// ClusterAPI says whether the installation serves the Cluster API the
+	// cluster tools read from (absent on an installation without the KaaS
+	// components: list_clusters is empty, the cluster-naming tools refuse).
+	ClusterAPI tools.ClusterAPI `json:"clusterApi"`
 }
 
 // Modes are the write-mode capabilities.
@@ -73,12 +77,12 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	t := &handlers{svc: svc, version: version}
 
 	s.AddTool(mcp.NewTool(ToolGetInfo,
-		mcp.WithDescription("Report this server's version, the write modes it offers (apply: objects landed on the installation as the caller; commit: a pull request opened as the caller) and the names of its tools."),
+		mcp.WithDescription("Report this server's version, the write modes it offers (apply: objects landed on the installation as the caller; commit: a pull request opened as the caller), the names of its tools, and whether the installation serves the Cluster API (cluster.x-k8s.io) the cluster tools read from — absent on an installation without the KaaS components, where list_clusters is empty and the tools naming a cluster refuse."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListClusters,
-		mcp.WithDescription("List the installation's clusters: name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you; the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show."),
+		mcp.WithDescription("List the installation's clusters: name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you; the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show. On an installation that does not serve the Cluster API (cluster.x-k8s.io) the list is empty and clusterApi says so."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listClusters)
 
@@ -181,8 +185,8 @@ type handlers struct {
 	version string
 }
 
-func (h *handlers) getInfo(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return jsonResult(Info{Version: h.version, Modes: Modes{Apply: true, Commit: false}, Tools: ToolNames()})
+func (h *handlers) getInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return jsonResult(Info{Version: h.version, Modes: Modes{Apply: true, Commit: false}, Tools: ToolNames(), ClusterAPI: h.svc.ClusterAPI(ctx)})
 }
 
 func (h *handlers) listClusters(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -190,7 +194,7 @@ func (h *handlers) listClusters(ctx context.Context, _ mcp.CallToolRequest) (*mc
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(map[string]any{"clusters": clusters})
+	return jsonResult(clusters)
 }
 
 func (h *handlers) listNodePools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

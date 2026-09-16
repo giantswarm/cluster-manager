@@ -99,7 +99,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// Per-call clients: the caller's own when the request carries the
 	// caller's token (downstream OAuth), the ServiceAccount's otherwise.
 	svc := tools.New(
-		func(ctx context.Context) dynamic.Interface { return clients.For(ctx).Dynamic },
+		func(ctx context.Context) tools.Clients {
+			k := clients.For(ctx)
+			return tools.Clients{Dynamic: k.Dynamic, Discovery: k.Discovery}
+		},
 		func(ctx context.Context, apiServer string, ca []byte) (dynamic.Interface, error) {
 			target, err := clients.ForTarget(ctx, apiServer, ca)
 			if err != nil {

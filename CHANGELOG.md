@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An installation that does not serve the Cluster API (`cluster.x-k8s.io`, any cluster without the KaaS components) no longer surfaces the apiserver's bare `the server could not find the requested resource`: `list_clusters` answers an empty list with `clusterApi` (`group`, `version`, `state: served|absent|unknown`, `note`), `list_node_pools`, `create_node_pool` and `delete_node_pool` refuse naming the cluster and the missing API group (`cluster x not found: the Cluster API (cluster.x-k8s.io) is not served on this installation`), and `get_info` reports the group's presence as `clusterApi`. One discovery request per call; discovery being open to every authenticated principal, the answer does not depend on the caller's RBAC on the clusters.
+- The image reports its release: a binary built from a tagged checkout resolves `version` (`get_info`, `cluster-manager version`, the start-up log) from the Go toolchain's build info — the tag at HEAD, the commit, its time — when the build passes no `-ldflags -X`; the 0.4.0 image said `dev`.
+
 ### Added
 
 - `create_node_pool` and `delete_node_pool` in apply mode: the pool release of the `gpu-node-pool` chart (HelmRelease and OCIRepository in `org-<org>`, chart pinned exactly, default 0.3.0) composed from the cluster's Release CR (Kubernetes version and Flatcar machine image, refused when the release runs ahead of the control plane) and a credential-free snapshot of the cluster's values (registry mirrors, proxy, base domain, management cluster, Cilium IPAM mode; registry credentials in a `valuesFrom` Secret), `teleport.enabled` from the join-token Secret's presence, owned by the `Cluster`; idempotent on the same name — the re-run is the update, its dry-run the drift check; a GitOps-owned object is never patched. `delete_node_pool` refuses while the pool runs nodes (named) unless forced and removes only what `create_node_pool` created. Golden compose tests pin the release shape per accelerator and snapshot variant.

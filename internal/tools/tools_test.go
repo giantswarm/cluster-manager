@@ -13,9 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	discoveryfake "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -140,7 +143,7 @@ func (l *lab) service(cfg Config) *Service {
 		cfg.ServingNamespace = "model-serving"
 	}
 	return New(
-		func(context.Context) dynamic.Interface { return l.installation },
+		func(context.Context) Clients { return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)} },
 		func(_ context.Context, apiServer string, _ []byte) (dynamic.Interface, error) {
 			dyn, ok := l.targets[apiServer]
 			if !ok {
@@ -150,6 +153,20 @@ func (l *lab) service(cfg Config) *Service {
 		},
 		cfg,
 	)
+}
+
+// fakeDiscovery is an apiserver's discovery that serves the Cluster API's
+// group version, or one that does not (an installation without the KaaS
+// components).
+func fakeDiscovery(clusterAPI bool) discovery.DiscoveryInterface {
+	d := &discoveryfake.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	if clusterAPI {
+		d.Resources = []*metav1.APIResourceList{{
+			GroupVersion: ClusterGVR.GroupVersion().String(),
+			APIResources: []metav1.APIResource{{Name: ClusterGVR.Resource, Kind: "Cluster", Namespaced: true}},
+		}}
+	}
+	return d
 }
 
 // assertGolden compares v's JSON with testdata/<name>.golden.json; -update
@@ -170,8 +187,9 @@ func assertGolden(t *testing.T, name string, v any) {
 
 func TestListClusters(t *testing.T) {
 	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
-	clusters, err := svc.ListClusters(context.Background())
+	answer, err := svc.ListClusters(context.Background())
 	require.NoError(t, err)
+	clusters := answer.Clusters
 	require.Len(t, clusters, 3)
 
 	byName := map[string]Cluster{}
@@ -201,8 +219,9 @@ func TestListClusters(t *testing.T) {
 
 func TestListClustersWithoutInstallationName(t *testing.T) {
 	svc := newLab(t, "installation.yaml").service(Config{})
-	clusters, err := svc.ListClusters(context.Background())
+	answer, err := svc.ListClusters(context.Background())
 	require.NoError(t, err)
+	clusters := answer.Clusters
 	for _, c := range clusters {
 		assert.False(t, c.OwnCluster, "no installation name: no cluster is claimed as the installation's own")
 	}
