@@ -38,7 +38,8 @@ modelManager:
   # -- Namespace model-manager runs in on the installation. `create_node_pool`
   # registers the serving cluster's `kserve` backend there by writing the
   # `model-backend-kserve` ConfigMap of model-manager's runtime-registration
-  # contract; `delete_node_pool` of the cluster's last pool removes it.
+  # contract; `delete_node_pool` of the cluster's last pool removes it;
+  # `enable_model_serving` and `disable_model_serving` register and remove it too.
   namespace: agent-platform
 
 serving:

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The `<cluster>-agent-platform` slice release (bumblebee-plans#46 D4; giantswarm/giantswarm#37637 stage 2c-2): `create_node_pool` composes the cluster's one release of the `agent-platform` chart with the serving slice on where nothing provides serving — pinned to 4.25.0, values from the chart's `examples/serving-slice.yaml` profile filled from the installation's own platform release (`global.domain`, `global.identity`, the wildcard certificate), the target knob and `components.agentgateway` on for a workload cluster, agentgateway off beside the platform's release, the chart's Flux engine and model-manager always off, the predictors pinned to the cluster's one GPU pool (`modelServing.gpuPool.nodeSelector`, `modelServing.serving.nodeSelector`) — updated in place on a re-run, never a second release of the chart on one cluster; `delete_node_pool` of the last pool removes it unless another slice is on in it (`sliceKept`).
+- `enable_model_serving` and `disable_model_serving`: the slice release and the `kserve` backend registration for any cluster, with or without a GPU pool; `disable` refuses while models are served (named) unless `force`, plainly when the cluster cannot be read.
+- Write answers carry `serving` (the layer detected before the write) and `slice` (the release composed).
+
 ### Fixed
 
 - The version a build resolves from the Go build info is the release alone: the `+dirty` the toolchain appends for a modified working tree is dropped (the tag pipeline's checkout carries build artefacts, so 0.4.1 reported `0.4.1+dirty`); the commit keeps its `-dirty` marker for a local build.

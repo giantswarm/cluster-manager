@@ -24,11 +24,14 @@ const (
 	ToolListNodePools  = "list_node_pools"
 	ToolCreateNodePool = "create_node_pool"
 	ToolDeleteNodePool = "delete_node_pool"
+
+	ToolEnableModelServing  = "enable_model_serving"
+	ToolDisableModelServing = "disable_model_serving"
 )
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
-	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool}
+	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing}
 }
 
 const (
@@ -72,7 +75,7 @@ type Modes struct {
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("cluster-manager", version,
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created and refuses while the pool runs nodes. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created and refuses while the pool runs nodes; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	t := &handlers{svc: svc, version: version}
 
@@ -94,7 +97,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.listNodePools)
 
 	s.AddTool(mcp.NewTool(ToolCreateNodePool,
-		mcp.WithDescription("Create a GPU node pool for a cluster, or update the pool of that name: composes the pool's release of the gpu-node-pool chart (a HelmRelease and its OCIRepository in the cluster's org- namespace) with the Kubernetes version and Flatcar machine image of the cluster's current release — refused when the release runs ahead of the control plane — and a credential-free snapshot of the cluster's settings (registry mirrors, proxy, base domain, management cluster, Cilium IPAM mode; registry credentials go into a valuesFrom Secret). Mode apply lands the objects on the installation as you, owned by the Cluster so they go with it; a second call on the same name is the update, and its dryRun shows the difference. dryRun returns the rendered manifests and touches nothing. An object of that name someone else owns (GitOps) is never patched."),
+		mcp.WithDescription("Create a GPU node pool for a cluster, or update the pool of that name: composes the pool's release of the gpu-node-pool chart (a HelmRelease and its OCIRepository in the cluster's org- namespace) with the Kubernetes version and Flatcar machine image of the cluster's current release — refused when the release runs ahead of the control plane — and a credential-free snapshot of the cluster's settings (registry mirrors, proxy, base domain, management cluster, Cilium IPAM mode; registry credentials go into a valuesFrom Secret). Where no GPU operator runs it composes the <cluster>-gpu-operator release; where nothing provides serving it composes the cluster's <cluster>-agent-platform release with the serving slice on (KServe, the nvidia RuntimeClass, the models Gateway at models.<domain>; domain and identity read from the platform's own release), updated in place on a re-run; it registers the cluster's kserve backend with model-manager. Mode apply lands the objects on the installation as you, owned by the Cluster so they go with it; a second call on the same name is the update, and its dryRun shows the difference. dryRun returns the rendered manifests and touches nothing. An object of that name someone else owns (GitOps) is never patched."),
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithString(argName, mcp.Required(), mcp.Pattern(compose.PoolNamePattern.String()), mcp.Description("Pool name within the cluster, five to twenty lowercase characters, digits and dashes (gpu00, gpu-l4); <cluster>-<name> names the MachinePool")),
@@ -110,7 +113,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.createNodePool)
 
 	s.AddTool(mcp.NewTool(ToolDeleteNodePool,
-		mcp.WithDescription("Delete a GPU node pool create_node_pool created: removes its HelmRelease, OCIRepository and values Secret, so helm-controller uninstalls the MachinePool and its nodes. With the cluster's last pool, the <cluster>-gpu-operator release cluster-manager created and the kserve backend it registered with model-manager go too (lastPool in the answer). Refused while the pool still runs nodes (the message names them) unless force; refused for a pool cluster-manager did not create. dryRun lists what would be removed."),
+		mcp.WithDescription("Delete a GPU node pool create_node_pool created: removes its HelmRelease, OCIRepository and values Secret, so helm-controller uninstalls the MachinePool and its nodes. With the cluster's last pool, the <cluster>-gpu-operator release cluster-manager created, its <cluster>-agent-platform slice release (unless another slice is on in it: sliceKept) and the kserve backend it registered with model-manager go too (lastPool in the answer). Refused while the pool still runs nodes (the message names them) unless force; refused for a pool cluster-manager did not create. dryRun lists what would be removed."),
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Pool name as given to create_node_pool")),
@@ -121,7 +124,71 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithIdempotentHintAnnotation(true),
 	), t.deleteNodePool)
 
+	s.AddTool(mcp.NewTool(ToolEnableModelServing,
+		mcp.WithDescription("Switch model serving on for a cluster, with or without a GPU pool: composes the cluster's one <cluster>-agent-platform release (the agent-platform chart pinned exactly, a HelmRelease and its OCIRepository in the cluster's org- namespace, delivered by the installation's Flux) with the serving slice on — KServe and the llm-d control plane with the well-known configs, the nvidia RuntimeClass, the models Gateway at models.<domain> with the login issuer's JWT policy; global.domain and global.identity read from the platform's own release, never invented; on a workload cluster the target knob (gitops.target.kubeConfig.secretRef: <cluster>-kubeconfig) and agentgateway on, beside the platform's release agentgateway off — and registers the cluster's kserve backend with model-manager. A release that exists is updated in place (never a second release of the chart on one cluster: one under another name is refused, naming it). Refused where the platform's own release or a hand install provides serving already. dryRun returns the rendered manifests and touches nothing."),
+		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name; the installation's own cluster included")),
+		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you (the only mode this version offers); commit: a pull request as you (refused until available)")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+	), t.enableModelServing)
+
+	s.AddTool(mcp.NewTool(ToolDisableModelServing,
+		mcp.WithDescription("Switch model serving off for a cluster: removes the <cluster>-agent-platform slice release cluster-manager created (HelmRelease and OCIRepository) and the kserve backend it registered with model-manager, so helm-controller uninstalls KServe and the models Gateway from the cluster. Refused while models are served on the cluster (the message names them) unless force, and plainly when the cluster cannot be read as you; refused for a release cluster-manager did not create. dryRun lists what would be removed."),
+		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
+		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
+		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Remove the serving slice even while models are served: they go with it")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you (the only mode this version offers)")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+	), t.disableModelServing)
+
 	return s
+}
+
+func (h *handlers) enableModelServing(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	in, err := modelServingInput(req)
+	if err != nil {
+		return errResult(err), nil
+	}
+	result, err := h.svc.EnableModelServing(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
+}
+
+func (h *handlers) disableModelServing(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	in, err := modelServingInput(req)
+	if err != nil {
+		return errResult(err), nil
+	}
+	result, err := h.svc.DisableModelServing(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
+}
+
+// modelServingInput reads the arguments the two model serving tools share.
+func modelServingInput(req mcp.CallToolRequest) (tools.ModelServingInput, error) {
+	cluster, err := req.RequireString(argCluster)
+	if err != nil {
+		return tools.ModelServingInput{}, err
+	}
+	return tools.ModelServingInput{
+		Cluster:   cluster,
+		Namespace: req.GetString(argNamespace, ""),
+		Mode:      req.GetString(argMode, tools.ModeApply),
+		DryRun:    req.GetBool(argDryRun, false),
+		Force:     req.GetBool(argForce, false),
+	}, nil
 }
 
 func (h *handlers) createNodePool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

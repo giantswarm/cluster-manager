@@ -83,7 +83,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.GPUOperator)
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow)
-	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create"}, actions(out), "pool source, Secret, release; operator source, release; backend")
+	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create", "create", "create"}, actions(out), "pool source, Secret, release; operator source, release; slice source, release; backend")
 
 	hr := out.Manifests[4]
 	assert.Equal(t, "wc1-gpu-operator", hr["metadata"].(map[string]any)["name"])
@@ -92,7 +92,14 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	values, _, _ := unstructured.NestedMap(hr, "spec", "values", "gpu-operator")
 	assert.Equal(t, map[string]any{"driver": map[string]any{"enabled": false}, "toolkit": map[string]any{"enabled": false}}, values, "the Flatcar row")
 
-	backend := out.Manifests[5]
+	slice := out.Manifests[6]
+	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
+	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
+	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: compose.DefaultSliceChartVersion, Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
+	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
+	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
+
+	backend := out.Manifests[7]
 	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: "model-backend-kserve", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 	doc, _, _ := unstructured.NestedString(backend, "data", "backend.yaml")
 	assert.Contains(t, doc, "apiServer: "+wc1APIServer)
@@ -102,7 +109,8 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 
 	again, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(again), "idempotent, the backend too")
+	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(again), "idempotent, the slice and the backend too")
+	assert.Equal(t, detect.ProviderClusterManager, again.Serving.Provider, "the re-run meets its own slice release and updates it in place")
 }
 
 // TestCreateNodePoolNeverRecreatesAChartOperator: the platform's release
@@ -182,14 +190,17 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 	assert.Equal(t, []string{
 		"HelmRelease org-acme/wc1-gpu-a10g", "OCIRepository org-acme/wc1-gpu-a10g",
 		"HelmRelease org-acme/wc1-gpu-operator", "OCIRepository org-acme/wc1-gpu-operator",
+		"HelmRelease org-acme/wc1-agent-platform", "OCIRepository org-acme/wc1-agent-platform",
 		"ConfigMap agent-platform/model-backend-kserve",
 	}, names)
 	assertGolden(t, "delete_node_pool_last_pool", dry)
 
 	last, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true})
 	require.NoError(t, err)
-	assert.Len(t, last.Objects, 5)
+	assert.Len(t, last.Objects, 7)
+	assert.Empty(t, last.SliceKept)
 	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).GPUOperator.Status, "nothing of cluster-manager's remains")
+	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).Serving.Status, "the slice release went with the last pool")
 }
 
 // assertNothingLanded checks that a refused create left no release.

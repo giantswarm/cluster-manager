@@ -82,9 +82,11 @@ type DeleteNodePoolInput struct {
 type WriteResult struct {
 	Cluster   string `json:"cluster"`
 	Namespace string `json:"namespace"`
-	Pool      string `json:"pool"`
-	Mode      string `json:"mode"`
-	DryRun    bool   `json:"dryRun"`
+	// Pool is the pool a node-pool write concerns; empty for the model
+	// serving writes.
+	Pool   string `json:"pool,omitempty"`
+	Mode   string `json:"mode"`
+	DryRun bool   `json:"dryRun"`
 	// Pins of a created pool; empty on delete.
 	ChartVersion        string         `json:"chartVersion,omitempty"`
 	KubernetesVersion   string         `json:"kubernetesVersion,omitempty"`
@@ -99,11 +101,21 @@ type WriteResult struct {
 	// the `<cluster>-gpu-operator` release was composed from.
 	GPUOperator detect.Component `json:"gpuOperator,omitempty"`
 	OperatorRow string           `json:"operatorRow,omitempty"`
+	// Serving is the serving layer detected on the cluster before the write
+	// (create, enable): present with its provider — nothing is composed —,
+	// or absent or cluster-manager's own, in which case Slice describes the
+	// `<cluster>-agent-platform` release composed (created or updated in
+	// place).
+	Serving detect.Component `json:"serving,omitempty"`
+	Slice   *SliceRelease    `json:"slice,omitempty"`
 	// Backend is the kserve backend registered with model-manager (create).
 	Backend *BackendRegistration `json:"backend,omitempty"`
 	// LastPool marks a delete of the cluster's last GPU pool: the operator
-	// release cluster-manager created and the backend it registered go too.
-	LastPool bool `json:"lastPool,omitempty"`
+	// and slice releases cluster-manager created and the backend it
+	// registered go too — the slice release only when no other slice is on
+	// in it (SliceKept names it then).
+	LastPool  bool   `json:"lastPool,omitempty"`
+	SliceKept string `json:"sliceKept,omitempty"`
 }
 
 // BackendRegistration is the backend document create_node_pool writes.
@@ -134,8 +146,11 @@ type ObjectAction struct {
 // same name is the update; its dry-run shows the difference. When no GPU
 // operator runs on the cluster it composes the `<cluster>-gpu-operator`
 // release beside the pool, configured from the two-row table; a chart-provided
-// operator is never re-created. After the pool it registers the cluster's
-// kserve backend with model-manager. Every refusal comes before any write.
+// operator is never re-created. Where nothing provides serving it composes
+// the cluster's `<cluster>-agent-platform` slice release with the serving
+// slice on (updated in place on a re-run); a chart-provided serving layer is
+// left alone. After the pool it registers the cluster's kserve backend with
+// model-manager. Every refusal comes before any write.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -166,6 +181,14 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	pool, err := onlyPool(ctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
+	if err != nil {
+		return nil, err
+	}
+	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, pool)
+	if err != nil {
+		return nil, err
+	}
 	backend, err := s.backendDocument(ctx, dyn, target)
 	if err != nil {
 		return nil, err
@@ -174,7 +197,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: nestedString(objs[0], "spec", "ref", "tag"), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
-		GPUOperator: operator, OperatorRow: row,
+		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
 	// A pool that used to carry credentials and no longer does: the stale
@@ -187,6 +210,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		}
 	}
 	objs = append(objs, operatorObjs...)
+	objs = append(objs, sliceObjs...)
 	objs = append(objs, backend)
 	for _, obj := range objs {
 		act, err := apply(ctx, dyn, obj, in.DryRun)
@@ -259,7 +283,8 @@ func backendTargetName(t compose.BackendTarget) string {
 // DeleteNodePool removes what create_node_pool created. It refuses while the
 // pool's MachinePool has replicas unless forced — the refusal names the nodes.
 // With the cluster's last pool go the operator release cluster-manager
-// created and the kserve backend it registered.
+// created, its slice release unless another slice is on in it, and the
+// kserve backend it registered.
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -299,22 +324,40 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if last {
 		operator := compose.OperatorReleaseName(c.GetName())
 		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
-		if registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, c.GetName()); err != nil {
+		if kept, err := sliceKept(ctx, dyn, ns, c.GetName()); err != nil {
 			return nil, err
-		} else if registered {
-			targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
+		} else if kept != "" {
+			// Another slice shares the release: it stays, serving and its
+			// backend registration with it.
+			out.SliceKept = kept
+		} else {
+			removals, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, removals...)
 		}
 	}
-	for _, target := range targets {
-		act, err := deleteIfOwned(ctx, dyn, target.gvr, target.ns, target.name, in.DryRun)
-		if err != nil {
-			return nil, err
-		}
-		if act != nil {
-			out.Objects = append(out.Objects, *act)
-		}
+	return out, deleteAll(ctx, dyn, targets, in.DryRun, out)
+}
+
+// sliceKept names the cluster's slice release when it is cluster-manager's
+// and carries a slice besides serving; empty when it may go (or does not
+// exist).
+func sliceKept(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (string, error) {
+	name := compose.SliceReleaseName(cluster)
+	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
 	}
-	return out, nil
+	if err != nil {
+		return "", fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
+	}
+	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
+	if compose.OwnedBy(hr) && compose.OtherSliceOn(values) {
+		return ns + "/" + name, nil
+	}
+	return "", nil
 }
 
 // objectRef names one object to delete.
@@ -481,27 +524,7 @@ func releaseComponents(release *unstructured.Unstructured) map[string]string {
 func clusterValues(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (map[string]any, error) {
 	ns, name := c.GetNamespace(), c.GetName()
 	if hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
-		merged := map[string]any{}
-		refs, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom")
-		for _, r := range refs {
-			ref, _ := r.(map[string]any)
-			if ref["kind"] != "ConfigMap" {
-				continue
-			}
-			key, _ := ref["valuesKey"].(string)
-			if key == "" {
-				key = "values.yaml"
-			}
-			cmName, _ := ref["name"].(string)
-			vals, err := configMapValues(ctx, dyn, ns, cmName, key)
-			if err != nil {
-				return nil, err
-			}
-			merge(merged, vals)
-		}
-		inline, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-		merge(merged, inline)
-		return merged, nil
+		return helmReleaseValues(ctx, dyn, hr)
 	}
 	if app, err := dyn.Resource(AppGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		cmName, _, _ := unstructured.NestedString(app.Object, "spec", "userConfig", "configMap", "name")
@@ -515,6 +538,33 @@ func clusterValues(ctx context.Context, dyn dynamic.Interface, c *unstructured.U
 		return configMapValues(ctx, dyn, cmNS, cmName, "values")
 	}
 	return nil, &ErrNotFound{What: fmt.Sprintf("values of cluster %s (neither a HelmRelease nor an App named %s in %s)", name, name, ns)}
+}
+
+// helmReleaseValues merges a HelmRelease's values the way Flux does: the
+// valuesFrom ConfigMaps in order, the inline spec.values on top. Secrets
+// among the valuesFrom are not read: their content is credentials.
+func helmReleaseValues(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) (map[string]any, error) {
+	merged := map[string]any{}
+	refs, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom")
+	for _, r := range refs {
+		ref, _ := r.(map[string]any)
+		if ref["kind"] != "ConfigMap" {
+			continue
+		}
+		key, _ := ref["valuesKey"].(string)
+		if key == "" {
+			key = "values.yaml"
+		}
+		cmName, _ := ref["name"].(string)
+		vals, err := configMapValues(ctx, dyn, hr.GetNamespace(), cmName, key)
+		if err != nil {
+			return nil, err
+		}
+		merge(merged, vals)
+	}
+	inline, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
+	merge(merged, inline)
+	return merged, nil
 }
 
 func configMapValues(ctx context.Context, dyn dynamic.Interface, ns, name, key string) (map[string]any, error) {
