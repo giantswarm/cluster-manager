@@ -1,0 +1,66 @@
+# wc1 as its apiserver shows it after a serving slice was removed all at once
+# (giantswarm/cluster-manager#28): the KServe and llmisvc APIs still served
+# (CRDs Helm never removes), no controller, and the well-known
+# LLMInferenceServiceConfigs of the release namespace terminating with the
+# llm-d controller's finalizer that nothing clears any more — the state that
+# breaks the next slice installed here until it is healed.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-decode-worker-data-parallel
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+  deletionTimestamp: "2026-09-16T19:42:02Z"
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-scheduler
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+  deletionTimestamp: "2026-09-16T19:42:02Z"
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-template
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+  deletionTimestamp: "2026-09-16T19:42:02Z"
+spec:
+  router: {}

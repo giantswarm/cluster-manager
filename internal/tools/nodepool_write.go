@@ -164,7 +164,10 @@ type ObjectAction struct {
 // (giantswarm/cluster-manager#26). The answer lists the pool's sizes with what each leaves a
 // predictor and, where the cluster publishes serving presets, the smallest
 // size that hosts each — a preset no size hosts is a warning
-// (giantswarm/agent-platform#502). Every refusal comes before any write.
+// (giantswarm/agent-platform#502). LLMInferenceServiceConfigs a serving layer
+// that went left terminating in the release namespace are healed before the
+// slice lands (giantswarm/cluster-manager#28). Every refusal comes before any
+// write.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -228,6 +231,14 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 		Sizes:   shapes, PresetFit: fit, Warnings: warnings,
+	}
+	// Configs a serving layer that went left terminating in the release
+	// namespace break the slice about to be composed: healed first, before
+	// anything lands.
+	if slice != nil {
+		if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
+			return nil, err
+		}
 	}
 	// A pool that used to carry credentials and no longer does: the stale
 	// Secret goes.
@@ -315,7 +326,10 @@ func backendTargetName(t compose.BackendTarget) string {
 // and the models served on the cluster.
 // With the cluster's last pool go the operator release cluster-manager
 // created, its slice release unless another slice is on in it, and the
-// kserve backend it registered.
+// kserve backend it registered. The slice goes in order (servingTeardown):
+// its well-known LLMInferenceServiceConfigs are seen gone before the release
+// that runs their controller, so none is left terminating for the next slice
+// to trip over (giantswarm/cluster-manager#28).
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -355,13 +369,21 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if last {
 		operator := compose.OperatorReleaseName(c.GetName())
 		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
-		if kept, err := sliceKept(ctx, dyn, ns, c.GetName()); err != nil {
+		slice, err := ownedSlice(ctx, dyn, ns, c.GetName())
+		if err != nil {
 			return nil, err
-		} else if kept != "" {
+		}
+		switch {
+		case slice != nil && sharesAnotherSlice(slice):
 			// Another slice shares the release: it stays, serving and its
 			// backend registration with it.
-			out.SliceKept = kept
-		} else {
+			out.SliceKept = ns + "/" + slice.GetName()
+		default:
+			if slice != nil {
+				if err := s.servingTeardown(ctx, dyn, s.target(ctx, dyn, c), in.Force, in.DryRun, out); err != nil {
+					return nil, err
+				}
+			}
 			removals, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
 			if err != nil {
 				return nil, err
@@ -372,23 +394,28 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	return out, deleteAll(ctx, dyn, targets, in.DryRun, out)
 }
 
-// sliceKept names the cluster's slice release when it is cluster-manager's
-// and carries a slice besides serving; empty when it may go (or does not
-// exist).
-func sliceKept(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (string, error) {
+// ownedSlice is the cluster's slice release when it exists and is
+// cluster-manager's; nil otherwise.
+func ownedSlice(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (*unstructured.Unstructured, error) {
 	name := compose.SliceReleaseName(cluster)
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
+		return nil, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
 	}
+	if !compose.OwnedBy(hr) {
+		return nil, nil
+	}
+	return hr, nil
+}
+
+// sharesAnotherSlice reports whether a slice release carries a slice besides
+// serving, so it stays when model serving goes.
+func sharesAnotherSlice(hr *unstructured.Unstructured) bool {
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-	if compose.OwnedBy(hr) && compose.OtherSliceOn(values) {
-		return ns + "/" + name, nil
-	}
-	return "", nil
+	return compose.OtherSliceOn(values)
 }
 
 // objectRef names one object to delete.

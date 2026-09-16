@@ -55,7 +55,9 @@ type SliceRelease struct {
 // model-manager, the document carrying the pinned pool's instance shapes
 // (read from its release) when the cluster has one pool. A pool is not
 // required. Refused where the platform's own release or a human provides
-// serving already.
+// serving already. LLMInferenceServiceConfigs a serving layer that went left
+// terminating in the release namespace are healed before the slice lands
+// (giantswarm/cluster-manager#28).
 func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -95,6 +97,9 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 		Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
+	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
+		return nil, err
+	}
 	for _, obj := range append(objs, backend) {
 		act, err := apply(ctx, dyn, obj, in.DryRun)
 		if err != nil {
@@ -109,7 +114,9 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 // DisableModelServing removes the slice release cluster-manager created and
 // the backend it registered. Unless forced it refuses while models are
 // served on the cluster, naming them — or plainly when the cluster cannot
-// be read as the caller.
+// be read as the caller. The slice goes in order (servingTeardown): its
+// well-known LLMInferenceServiceConfigs are seen gone before the release
+// that runs their controller (giantswarm/cluster-manager#28).
 func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -131,12 +138,16 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	if !compose.OwnedBy(hr) {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s %s: disable_model_serving removes only the slice release cluster-manager created — switch the serving slice off by the means that created the release", ns, name, ownerDescription(hr))}
 	}
+	t := s.target(ctx, dyn, c)
 	if !in.Force {
-		if err := servedModelsGuard(ctx, s.target(ctx, dyn, c)); err != nil {
+		if err := servedModelsGuard(ctx, t); err != nil {
 			return nil, err
 		}
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
+	if err := s.servingTeardown(ctx, dyn, t, in.Force, in.DryRun, out); err != nil {
+		return nil, err
+	}
 	targets, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
 	if err != nil {
 		return nil, err
