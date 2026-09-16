@@ -193,6 +193,29 @@
             "driver": {
               "enabled": false
             },
+            "node-feature-discovery": {
+              "worker": {
+                "affinity": {
+                  "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                      "nodeSelectorTerms": [
+                        {
+                          "matchExpressions": [
+                            {
+                              "key": "giantswarm.io/machine-pool",
+                              "operator": "In",
+                              "values": [
+                                "wc2-gpu-l4b"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "toolkit": {
               "enabled": true
             }
