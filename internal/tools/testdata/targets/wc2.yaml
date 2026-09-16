@@ -22,3 +22,96 @@ data:
   config.yaml: |
     apiVersion: agent-platform.giantswarm.io/v1alpha1
     kind: ModelServingConfig
+---
+# The serving presets the platform's chart publishes on wc2 (one ConfigMap per
+# preset, the document under preset.yaml): a shipped L4 preset sized for a
+# g6.xlarge, a shipped 128 GB preset an L4 can never serve, and an
+# installation's own preset that only a 2xlarge hosts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-serving-preset-qwen3-4b-instruct
+  namespace: agent-platform
+  labels:
+    agent-platform.giantswarm.io/serving-preset: "true"
+    agent-platform.giantswarm.io/preset: qwen3-4b-instruct
+    agent-platform.giantswarm.io/preset-source: shipped
+data:
+  preset.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ServingPreset
+    metadata:
+      name: qwen3-4b-instruct
+    spec:
+      displayName: Qwen3 4B Instruct
+      model:
+        id: Qwen/Qwen3-4B-Instruct-2507
+        storageUri: hf://Qwen/Qwen3-4B-Instruct-2507
+      resources:
+        gpus: 1
+        requests:
+          cpu: "2"
+          memory: 10Gi
+        limits:
+          cpu: "4"
+          memory: 12Gi
+      requirements:
+        weightsGiB: 8
+        overheadGiB: 12
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-serving-preset-qwen3-14b
+  namespace: agent-platform
+  labels:
+    agent-platform.giantswarm.io/serving-preset: "true"
+    agent-platform.giantswarm.io/preset: qwen3-14b
+    agent-platform.giantswarm.io/preset-source: shipped
+data:
+  preset.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ServingPreset
+    metadata:
+      name: qwen3-14b
+    spec:
+      displayName: Qwen3 14B
+      model:
+        id: Qwen/Qwen3-14B
+        storageUri: hf://Qwen/Qwen3-14B
+      resources:
+        gpus: 1
+        requests:
+          cpu: "4"
+          memory: 48Gi
+      requirements:
+        weightsGiB: 28
+        overheadGiB: 30
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-serving-preset-acme-l4-wide
+  namespace: agent-platform
+  labels:
+    agent-platform.giantswarm.io/serving-preset: "true"
+    agent-platform.giantswarm.io/preset: acme-l4-wide
+    agent-platform.giantswarm.io/preset-source: values
+data:
+  preset.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ServingPreset
+    metadata:
+      name: acme-l4-wide
+    spec:
+      displayName: Acme's wide L4 recipe
+      model:
+        id: acme/wide-9b
+        storageUri: hf://acme/wide-9b
+      resources:
+        requests:
+          cpu: 4
+          memory: 16Gi
+      requirements:
+        weightsGiB: 9
+        overheadGiB: 12

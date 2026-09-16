@@ -116,6 +116,15 @@ type WriteResult struct {
 	// in it (SliceKept names it then).
 	LastPool  bool   `json:"lastPool,omitempty"`
 	SliceKept string `json:"sliceKept,omitempty"`
+	// Sizes are the pool's instance sizes as composed (create): the node as
+	// AWS lists it and what it leaves a predictor after the kubelet's
+	// reservations and the fleet's daemonsets. PresetFit places the serving
+	// presets published on the cluster against them; Warnings name the
+	// presets the accelerator could serve but no size of the pool hosts
+	// (giantswarm/agent-platform#502).
+	Sizes     []compose.InstanceShape `json:"sizes,omitempty"`
+	PresetFit *PresetFit              `json:"presetFit,omitempty"`
+	Warnings  []string                `json:"warnings,omitempty"`
 }
 
 // BackendRegistration is the backend document create_node_pool writes.
@@ -150,7 +159,10 @@ type ObjectAction struct {
 // the cluster's `<cluster>-agent-platform` slice release with the serving
 // slice on (updated in place on a re-run); a chart-provided serving layer is
 // left alone. After the pool it registers the cluster's kserve backend with
-// model-manager. Every refusal comes before any write.
+// model-manager. The answer lists the pool's sizes with what each leaves a
+// predictor and, where the cluster publishes serving presets, the smallest
+// size that hosts each — a preset no size hosts is a warning
+// (giantswarm/agent-platform#502). Every refusal comes before any write.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -176,6 +188,10 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	shapes, err := compose.Shapes(in.Pool.Accelerator, in.Pool.Sizes)
+	if err != nil {
+		return nil, err
+	}
 	target := s.target(ctx, dyn, c)
 	pools, err := poolNames(ctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
 	if err != nil {
@@ -193,12 +209,14 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	fit, warnings := s.presetFit(ctx, target, in.Pool.Name, shapes)
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: nestedString(objs[0], "spec", "ref", "tag"), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
+		Sizes:   shapes, PresetFit: fit, Warnings: warnings,
 	}
 	// A pool that used to carry credentials and no longer does: the stale
 	// Secret goes.
