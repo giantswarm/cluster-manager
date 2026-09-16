@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create_node_pool` answers with the pool's instance sizes and whether the cluster's serving presets fit them (giantswarm/agent-platform#502): `sizes` lists each size of the accelerator's family the pool may pick (the chart's default `xlarge, 2xlarge, 4xlarge` when the caller names none) as AWS lists it — vCPU, memory, GPUs, the GPU's memory — and what it leaves a predictor once the hypervisor's share, the kubelet's reservations and the daemonsets that follow the pool's taint have theirs (a `g6.xlarge` leaves 3 vCPU / 11.9 GiB; the fleet's shape as measured on gazelle, an estimate). `presetFit` reads the serving presets published on the cluster (the connectivity chart's preset ConfigMaps, in whatever namespace the release that renders them lives) and names per preset the smallest of the pool's sizes that hosts its CPU and memory requests, GPUs and GPU memory, or why none does; a preset the accelerator could serve but no size of the pool hosts is a `warnings` entry naming the size that would — on gazelle the predictor composed from `qwen3-4b-instruct` (then 4 vCPU / 16 GiB) sat Pending on a pool of `xlarge` nodes for ten minutes while Karpenter refused the size, and nothing had said so (giantswarm/giantswarm#37714). A first create that brings the slice release sees no preset yet (the release publishes them once it is ready) and says so in `presetFit.note`; a `dryRun` re-run judges them. Never a refusal.
+
+### Changed
+
+- `create_node_pool` refuses a size the accelerator's family does not have (`size "xlage": not a size of the g6 family (nvidia-l4); the sizes are …`) before anything is composed: Karpenter would never launch it and the pool would sit empty for ever.
+
 ### Changed
 
 - The pool release pins `gpu-node-pool` 0.3.1 by default (giantswarm/gpu-node-pool#8): a pool node on the Giant Swarm Flatcar image reaches `nvidia.com/gpu` allocatable — the chart's bootstrap writes the driver's CDI specification after `nvidia.service` and sets the image's NVIDIA container runtime to CDI mode; 0.3.0's node mounted `nvidia-smi` at `/opt/bin` in every container, off the PATH, and the GPU operator's toolkit validation never passed. The `flatcar` row of the operator's table is unchanged (driver and toolkit off — the image carries both, the pool's bootstrap makes the toolkit serve them); its description and the README point at the chart's image contract.

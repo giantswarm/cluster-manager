@@ -119,7 +119,10 @@
             "maxSize": {
               "nvidia.com/gpu": "4"
             },
-            "name": "gpu-l4b"
+            "name": "gpu-l4b",
+            "sizes": [
+              "xlarge"
+            ]
           },
           "teleport": {
             "enabled": false
@@ -190,29 +193,6 @@
             "driver": {
               "enabled": false
             },
-            "node-feature-discovery": {
-              "worker": {
-                "affinity": {
-                  "nodeAffinity": {
-                    "requiredDuringSchedulingIgnoredDuringExecution": {
-                      "nodeSelectorTerms": [
-                        {
-                          "matchExpressions": [
-                            {
-                              "key": "giantswarm.io/machine-pool",
-                              "operator": "In",
-                              "values": [
-                                "wc2-gpu-l4b"
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                }
-              }
-            },
             "toolkit": {
               "enabled": true
             }
@@ -267,26 +247,6 @@
       "gpuMemoryGiB": 24,
       "usableVcpu": 3,
       "usableMemoryGiB": 11.9
-    },
-    {
-      "instanceType": "g6.2xlarge",
-      "size": "2xlarge",
-      "vcpu": 8,
-      "memoryGiB": 32,
-      "gpus": 1,
-      "gpuMemoryGiB": 24,
-      "usableVcpu": 7,
-      "usableMemoryGiB": 27.1
-    },
-    {
-      "instanceType": "g6.4xlarge",
-      "size": "4xlarge",
-      "vcpu": 16,
-      "memoryGiB": 64,
-      "gpus": 1,
-      "gpuMemoryGiB": 24,
-      "usableVcpu": 15,
-      "usableMemoryGiB": 57.5
     }
   ],
   "presetFit": {
@@ -298,7 +258,7 @@
         "memory": "16Gi",
         "gpus": 1,
         "gpuMemoryGiB": 21,
-        "size": "2xlarge"
+        "reason": "requests 4 vCPU / 16 GiB; xlarge leaves a predictor 3 vCPU / 11.9 GiB after the node's kubelet reservations and daemonsets — 2xlarge (8 vCPU / 32 GiB) would host it"
       },
       {
         "preset": "qwen3-14b",
@@ -317,5 +277,8 @@
         "size": "xlarge"
       }
     ]
-  }
+  },
+  "warnings": [
+    "serving preset acme-l4-wide fits no size of pool gpu-l4b: requests 4 vCPU / 16 GiB; xlarge leaves a predictor 3 vCPU / 11.9 GiB after the node's kubelet reservations and daemonsets — 2xlarge (8 vCPU / 32 GiB) would host it — a predictor composed from it would sit Pending while Karpenter refuses every size (giantswarm/agent-platform#502); add the size to sizes or serve a smaller preset"
+  ]
 }

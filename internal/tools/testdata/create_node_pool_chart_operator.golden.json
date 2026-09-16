@@ -215,5 +215,40 @@
     "namespace": "agent-platform",
     "name": "model-backend-kserve",
     "target": "wc1 (https://api.wc1.acme.example.io:6443)"
+  },
+  "sizes": [
+    {
+      "instanceType": "g6.xlarge",
+      "size": "xlarge",
+      "vcpu": 4,
+      "memoryGiB": 16,
+      "gpus": 1,
+      "gpuMemoryGiB": 24,
+      "usableVcpu": 3,
+      "usableMemoryGiB": 11.9
+    },
+    {
+      "instanceType": "g6.2xlarge",
+      "size": "2xlarge",
+      "vcpu": 8,
+      "memoryGiB": 32,
+      "gpus": 1,
+      "gpuMemoryGiB": 24,
+      "usableVcpu": 7,
+      "usableMemoryGiB": 27.1
+    },
+    {
+      "instanceType": "g6.4xlarge",
+      "size": "4xlarge",
+      "vcpu": 16,
+      "memoryGiB": 64,
+      "gpus": 1,
+      "gpuMemoryGiB": 24,
+      "usableVcpu": 15,
+      "usableMemoryGiB": 57.5
+    }
+  ],
+  "presetFit": {
+    "note": "no serving preset is published on wc1 yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each"
   }
 }

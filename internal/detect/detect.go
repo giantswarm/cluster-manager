@@ -114,6 +114,13 @@ const (
 	GPUResource = "nvidia.com/gpu"
 	// LabelServingConfig marks the model-serving discovery ConfigMap.
 	LabelServingConfig = "agent-platform.giantswarm.io/model-serving-config"
+	// LabelServingPreset marks a published serving preset (one ConfigMap per
+	// preset, the document under PresetDocumentKey); LabelPreset carries its
+	// name.
+	LabelServingPreset = "agent-platform.giantswarm.io/serving-preset"
+	LabelPreset        = "agent-platform.giantswarm.io/preset"
+	// PresetDocumentKey is the ConfigMap key holding the ServingPreset.
+	PresetDocumentKey = "preset.yaml"
 	// LabelControlPlane is KServe's label on its controller Deployments:
 	// `control-plane: kserve-controller-manager` on the InferenceService
 	// controller, `llmisvc-controller-manager` on the llm-d one.

@@ -39,8 +39,12 @@ var (
 )
 
 // Accelerators is the curated list of the chart (values enum); the chart
-// picks the EC2 instance family from it.
+// picks the EC2 instance family from it (InstanceFamily).
 var Accelerators = []string{"nvidia-l4", "nvidia-a10g", "nvidia-t4", "nvidia-l40s"}
+
+// DefaultPoolSizes are the chart's `pool.sizes` at DefaultPoolChartVersion,
+// what Karpenter may pick when the caller names no sizes.
+var DefaultPoolSizes = []string{"xlarge", "2xlarge", "4xlarge"}
 
 // PoolNamePattern is the pool name's shape: five to twenty characters, since
 // `<cluster>-<pool>` becomes the NodePool, EC2NodeClass and S3 key names.
@@ -104,8 +108,9 @@ type RegistryCredential struct {
 type PoolSpec struct {
 	Name        string
 	Accelerator string
-	// Sizes are the instance sizes Karpenter may pick; nil keeps the
-	// chart's default.
+	// Sizes are the instance sizes Karpenter may pick, each a size of the
+	// accelerator's family (Shapes); nil keeps the chart's default
+	// (DefaultPoolSizes).
 	Sizes []string
 	// MaxGPUs bounds the pool (Karpenter's `nvidia.com/gpu` limit).
 	MaxGPUs int
@@ -120,6 +125,9 @@ func (p PoolSpec) Validate() error {
 	}
 	if !contains(Accelerators, p.Accelerator) {
 		return fmt.Errorf("accelerator %q: not in the curated list %v", p.Accelerator, Accelerators)
+	}
+	if _, err := Shapes(p.Accelerator, p.Sizes); err != nil {
+		return err
 	}
 	if p.MaxGPUs < 1 {
 		return fmt.Errorf("maxGpus %d: the pool's upper bound must be at least 1", p.MaxGPUs)
