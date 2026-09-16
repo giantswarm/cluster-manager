@@ -42,7 +42,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.25.0"
+          "tag": "4.27.2"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -197,7 +197,7 @@
   "slice": {
     "name": "gazelle-agent-platform",
     "namespace": "org-giantswarm",
-    "chartVersion": "4.25.0",
+    "chartVersion": "4.27.2",
     "domain": "gazelle.example.io",
     "modelsHost": "models.gazelle.example.io"
   },

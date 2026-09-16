@@ -376,7 +376,8 @@ status:
 ---
 # The installation's own release of the agent-platform chart, as the fleet
 # installs it: the slice release reads global.domain, global.identity and the
-# wildcard certificate from its values — never from a Secret.
+# wildcard certificate from its values — never from a Secret — and pins the
+# chart version it runs (status.history[0].chartVersion).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -399,6 +400,21 @@ spec:
       gateway:
         tls:
           secretName: gazelle-wildcard-tls
+status:
+  lastAttemptedRevision: 4.27.2
+  history:
+    - chartName: agent-platform
+      chartVersion: 4.27.2
+      name: agent-platform
+      namespace: agent-platform
+      status: deployed
+      version: 143
+    - chartName: agent-platform
+      chartVersion: 4.27.0
+      name: agent-platform
+      namespace: agent-platform
+      status: superseded
+      version: 142
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository

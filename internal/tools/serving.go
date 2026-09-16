@@ -155,7 +155,10 @@ func (s *Service) sliceRelease(ctx context.Context, dyn dynamic.Interface, t tar
 	if err != nil {
 		return serving, nil, nil, err
 	}
-	spec := compose.SliceSpec{OwnCluster: t.backend.OwnCluster, Platform: platform, Pool: pool}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: platform, Pool: pool}
+	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
+		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
+	}
 	objs, err := compose.Slice(facts, spec)
 	if err != nil {
 		return serving, nil, nil, err
@@ -185,10 +188,11 @@ func (s *Service) refuseSecondRelease(ctx context.Context, dyn dynamic.Interface
 	return nil
 }
 
-// platformInputs reads global.domain, global.identity and the wildcard
-// certificate from the installation's own release of the agent-platform
-// chart: the HelmRelease named agent-platform, else the one release of the
-// chart that is not cluster-manager's. Secrets it references are not read.
+// platformInputs reads global.domain, global.identity, the wildcard
+// certificate and the chart version it runs (status.history[0].chartVersion)
+// from the installation's own release of the agent-platform chart: the
+// HelmRelease named agent-platform, else the one release of the chart that
+// is not cluster-manager's. Secrets it references are not read.
 func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (compose.PlatformInputs, error) {
 	hrs, err := dyn.Resource(HelmReleaseGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -223,7 +227,7 @@ func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (co
 	if err != nil {
 		return compose.PlatformInputs{}, err
 	}
-	out := compose.PlatformInputs{}
+	out := compose.PlatformInputs{Release: hr.GetNamespace() + "/" + hr.GetName(), ChartVersion: runningChartVersion(hr)}
 	out.Domain, _, _ = unstructured.NestedString(vals, "global", "domain")
 	if out.Domain == "" {
 		return out, &ErrRefused{Reason: fmt.Sprintf("the platform's release (HelmRelease %s/%s) carries no global.domain in its values or valuesFrom ConfigMaps: the slice's domain derives from it", hr.GetNamespace(), hr.GetName())}
@@ -231,6 +235,18 @@ func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (co
 	out.Identity, _, _ = unstructured.NestedMap(vals, "global", "identity")
 	out.TLSSecretName, _, _ = unstructured.NestedString(vals, "gatewayApi", "gateway", "tls", "secretName")
 	return out, nil
+}
+
+// runningChartVersion is the chart version a HelmRelease runs: the newest
+// entry of its status.history, empty before the first deployment.
+func runningChartVersion(hr *unstructured.Unstructured) string {
+	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
+	if len(history) == 0 {
+		return ""
+	}
+	newest, _ := history[0].(map[string]any)
+	v, _ := newest["chartVersion"].(string)
+	return v
 }
 
 // chartOf names the chart a HelmRelease installs: its chart label, its

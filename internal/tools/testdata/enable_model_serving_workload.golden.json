@@ -50,7 +50,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.25.0"
+          "tag": "4.27.2"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -223,7 +223,7 @@
   "slice": {
     "name": "wc1-agent-platform",
     "namespace": "org-acme",
-    "chartVersion": "4.25.0",
+    "chartVersion": "4.27.2",
     "domain": "wc1.acme.example.io",
     "modelsHost": "models.wc1.acme.example.io",
     "gpuPool": "gpu-a10g"

@@ -50,6 +50,9 @@ spec:
             {{- end }}
             - --model-manager-namespace={{ .Values.modelManager.namespace }}
             - --serving-namespace={{ .Values.serving.namespace }}
+            {{- with .Values.serving.sliceChartVersion }}
+            - --slice-chart-version={{ . }}
+            {{- end }}
             - --mcp-enabled={{ .Values.mcp.enabled }}
             - --mcp-path={{ .Values.mcp.path }}
             {{- if .Values.oauth.enabled }}
