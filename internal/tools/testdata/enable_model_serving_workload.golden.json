@@ -232,7 +232,8 @@
     "chartVersion": "4.27.2",
     "domain": "wc1.acme.example.io",
     "modelsHost": "models.wc1.acme.example.io",
-    "gpuPool": "gpu-a10g"
+    "gpuPool": "gpu-a10g",
+    "jwks": "https://dex.gazelle.example.io/keys"
   },
   "backend": {
     "kind": "kserve",

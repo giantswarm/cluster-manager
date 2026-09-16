@@ -112,6 +112,10 @@ spec:
           giantswarm.io/machine-pool: gazelle-gpu-l4
       modelsGateway:
         enabled: true
+        jwtAuthentication:
+          jwks:
+            host: dex.giantswarm.svc.cluster.local
+            port: 5556
       serving:
         nodeSelector:
           giantswarm.io/machine-pool: gazelle-gpu-l4

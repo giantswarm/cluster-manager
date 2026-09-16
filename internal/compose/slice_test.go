@@ -84,6 +84,13 @@ func TestSliceGoldens(t *testing.T) {
 			if hasIssuer {
 				assert.Equal(t, DefaultCertificateIssuer, issuer)
 			}
+			jwksHost, hasJWKS, _ := unstructured.NestedString(values, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "host")
+			assert.Equal(t, tc.spec.OwnCluster, hasJWKS, "the in-cluster JWKS source on the own cluster alone; a workload cluster keeps the chart's default, the public issuer")
+			if hasJWKS {
+				assert.Equal(t, "dex.giantswarm.svc.cluster.local", jwksHost, "the platform's Dex service, the source its own JWT policies use")
+				jwksPort, _, _ := unstructured.NestedInt64(values, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "port")
+				assert.Equal(t, DefaultDexJWKSPort, jwksPort, "Dex's plaintext port: no TLS to originate")
+			}
 			for _, component := range ServingComponents[:6] {
 				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
 				assert.True(t, on, component)
@@ -117,6 +124,49 @@ func TestSliceWithoutCertificateIssuer(t *testing.T) {
 func TestSliceRefusesWithoutDomain(t *testing.T) {
 	_, err := Slice(wc1(), SliceSpec{})
 	require.ErrorContains(t, err, "global.domain is empty")
+}
+
+// TestSliceJWKS: the own cluster validates against the platform's Dex
+// service in plaintext — the namespace and port the platform's release names
+// (gateway.jwksEgress), the chart's defaults where it names none; a workload
+// cluster against the public issuer on 443, the issuer's host alone whatever
+// port or path its URL carries; an issuer URL without a host is refused, and
+// Slice with it (giantswarm/cluster-manager#30).
+func TestSliceJWKS(t *testing.T) {
+	named := platform()
+	named.Dex = DexService{Namespace: "identity", Port: 5557}
+	noIssuer := platform()
+	noIssuer.Identity = map[string]any{"clientId": "dex-k8s-authenticator"}
+	oddIssuer := platform()
+	oddIssuer.Identity = map[string]any{"issuerUrl": "https://login.example.io:8443/dex"}
+	cases := []struct {
+		name    string
+		spec    SliceSpec
+		want    JWKSSource
+		url     string
+		refusal string
+	}{
+		{"own cluster, chart defaults", SliceSpec{OwnCluster: true, Platform: platform()}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
+		{"own cluster, the platform's jwksEgress", SliceSpec{OwnCluster: true, Platform: named}, JWKSSource{Host: "dex.identity.svc.cluster.local", Port: 5557}, "http://dex.identity.svc.cluster.local:5557/keys", ""},
+		{"own cluster needs no issuer host", SliceSpec{OwnCluster: true, Platform: noIssuer}, JWKSSource{Host: "dex.giantswarm.svc.cluster.local", Port: 5556}, "http://dex.giantswarm.svc.cluster.local:5556/keys", ""},
+		{"workload cluster, the public issuer", SliceSpec{Platform: platform()}, JWKSSource{Host: "dex.gazelle.example.io", Port: 443}, "https://dex.gazelle.example.io/keys", ""},
+		{"workload cluster, the issuer's host alone", SliceSpec{Platform: oddIssuer}, JWKSSource{Host: "login.example.io", Port: 443}, "https://login.example.io/keys", ""},
+		{"workload cluster without an issuer", SliceSpec{Platform: noIssuer}, JWKSSource{}, "", `global.identity.issuerUrl "" names no host`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := SliceJWKS(tc.spec)
+			if tc.refusal != "" {
+				require.ErrorContains(t, err, tc.refusal)
+				_, err = Slice(wc1(), tc.spec)
+				assert.ErrorContains(t, err, tc.refusal, "Slice refuses the same way")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.url, got.URL())
+		})
+	}
 }
 
 func TestOtherSliceOn(t *testing.T) {
