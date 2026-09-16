@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The version a build resolves from the Go build info is the release alone: the `+dirty` the toolchain appends for a modified working tree is dropped (the tag pipeline's checkout carries build artefacts, so 0.4.1 reported `0.4.1+dirty`); the commit keeps its `-dirty` marker for a local build.
+
+### Fixed
+
 - An installation that does not serve the Cluster API (`cluster.x-k8s.io`, any cluster without the KaaS components) no longer surfaces the apiserver's bare `the server could not find the requested resource`: `list_clusters` answers an empty list with `clusterApi` (`group`, `version`, `state: served|absent|unknown`, `note`), `list_node_pools`, `create_node_pool` and `delete_node_pool` refuse naming the cluster and the missing API group (`cluster x not found: the Cluster API (cluster.x-k8s.io) is not served on this installation`), and `get_info` reports the group's presence as `clusterApi`. One discovery request per call; discovery being open to every authenticated principal, the answer does not depend on the caller's RBAC on the clusters.
 - The image reports its release: a binary built from a tagged checkout resolves `version` (`get_info`, `cluster-manager version`, the start-up log) from the Go toolchain's build info — the tag at HEAD, the commit, its time — when the build passes no `-ldflags -X`; the 0.4.0 image said `dev`.
 

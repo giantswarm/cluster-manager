@@ -30,6 +30,14 @@ func TestResolve(t *testing.T) {
 			version: DevVersion, commit: UnknownCommit, date: UnknownDate, bi: tagged,
 			want: Info{Version: "0.5.0", Commit: "4badca6", Date: "2026-09-15T23:54:44Z"},
 		},
+		"tag at HEAD in a modified tree: the version stays the release, the commit is marked": {
+			version: DevVersion, commit: UnknownCommit, date: UnknownDate,
+			bi: &debug.BuildInfo{
+				Main:     debug.Module{Version: "v0.4.1+dirty"},
+				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "a306a963b69d8e687f75728ecd49c66291ce6d02"}, {Key: "vcs.modified", Value: "true"}},
+			},
+			want: Info{Version: "0.4.1", Commit: "a306a96-dirty", Date: "unknown"},
+		},
 		"ldflags values win": {
 			version: "0.6.0", commit: "1234567", date: "2026-10-01T00:00:00Z", bi: tagged,
 			want: Info{Version: "0.6.0", Commit: "1234567", Date: "2026-10-01T00:00:00Z"},
