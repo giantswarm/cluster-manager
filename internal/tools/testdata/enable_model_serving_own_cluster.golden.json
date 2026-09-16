@@ -171,7 +171,13 @@
           },
           "modelServing": {
             "modelsGateway": {
-              "enabled": true
+              "enabled": true,
+              "jwtAuthentication": {
+                "jwks": {
+                  "host": "dex.giantswarm.svc.cluster.local",
+                  "port": 5556
+                }
+              }
             },
             "serving": {
               "runtimeClassName": "nvidia"
@@ -209,7 +215,8 @@
     "namespace": "org-giantswarm",
     "chartVersion": "4.27.2",
     "domain": "gazelle.example.io",
-    "modelsHost": "models.gazelle.example.io"
+    "modelsHost": "models.gazelle.example.io",
+    "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"
   },
   "backend": {
     "kind": "kserve",

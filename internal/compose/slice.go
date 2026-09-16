@@ -3,6 +3,7 @@ package compose
 import (
 	_ "embed"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,6 +31,24 @@ const (
 	// LabelMachinePool is the node label the gpu-node-pool chart stamps on a
 	// pool's nodes: `<cluster>-<pool>`.
 	LabelMachinePool = "giantswarm.io/machine-pool"
+)
+
+// Where the installation's Dex serves its key set in-cluster
+// (giantswarm/cluster-manager#30): the chart's defaults for the platform's
+// gateway.jwksEgress, what the platform's release runs when it names none —
+// the source its own JWT policies validate against
+// (kagent.controllerRoute.jwtAuthentication.jwks).
+const (
+	// DefaultDexNamespace is the namespace the installation's Dex runs in.
+	DefaultDexNamespace = "giantswarm"
+	// DefaultDexJWKSPort is Dex's plaintext port.
+	DefaultDexJWKSPort int64 = 5556
+	// dexService is the Dex Service's name; jwksPath where Dex serves its
+	// key set (the chart's jwks.path default).
+	dexService = "dex"
+	jwksPath   = "/keys"
+	// httpsPort is the one port that implies TLS to the connectivity chart.
+	httpsPort int64 = 443
 )
 
 // servingSliceProfile is the serving-slice values profile of the chart
@@ -63,6 +82,34 @@ type PlatformInputs struct {
 	// TLSSecretName is the platform's gatewayApi.gateway.tls.secretName,
 	// the wildcard certificate of the domain.
 	TLSSecretName string
+	// Dex is where the installation's Dex serves its key set in-cluster, the
+	// platform's gateway.jwksEgress (namespace and port); a field the
+	// release leaves unset is the chart's default (DefaultDexNamespace,
+	// DefaultDexJWKSPort).
+	Dex DexService
+}
+
+// DexService is where the installation's Dex serves its key set in-cluster.
+type DexService struct {
+	Namespace string
+	Port      int64
+}
+
+// JWKSSource is where the slice's models Gateway fetches the login issuer's
+// key set: a host and a port, TLS implied by 443 alone (the connectivity
+// chart's rule: 443 serves no plain HTTP, every other port is plaintext
+// unless jwks.tls.enabled asks for TLS).
+type JWKSSource struct {
+	Host string
+	Port int64
+}
+
+// URL is the source as a URL, for the messages.
+func (j JWKSSource) URL() string {
+	if j.Port == httpsPort {
+		return "https://" + j.Host + jwksPath
+	}
+	return fmt.Sprintf("http://%s:%d%s", j.Host, j.Port, jwksPath)
 }
 
 // SliceSpec is the slice release's shape for one cluster.
@@ -101,6 +148,36 @@ func SliceDomain(c Cluster, s SliceSpec) string {
 		return s.Platform.Domain
 	}
 	return c.Name + "." + c.BaseDomain
+}
+
+// SliceJWKS is the models Gateway's JWKS source. On the installation's own
+// cluster it is the platform's Dex service in plaintext
+// (dex.<namespace>.svc.cluster.local:5556), the source the platform's own
+// JWT policies validate against: the chart's default, the public issuer on
+// 443, never yielded a key set there, and every id_token was refused as
+// signed by an unknown key until the backend was pointed at the Service by
+// hand (giantswarm/agent-platform#505, proof 1 of giantswarm/giantswarm#37639).
+// A workload cluster cannot reach the installation's Service and keeps the
+// chart's default: the issuer's host on 443, the platform's
+// global.identity.issuerUrl — refused when that names no host, since the
+// policy would validate nothing.
+func SliceJWKS(s SliceSpec) (JWKSSource, error) {
+	if s.OwnCluster {
+		namespace, port := s.Platform.Dex.Namespace, s.Platform.Dex.Port
+		if namespace == "" {
+			namespace = DefaultDexNamespace
+		}
+		if port == 0 {
+			port = DefaultDexJWKSPort
+		}
+		return JWKSSource{Host: fmt.Sprintf("%s.%s.svc.cluster.local", dexService, namespace), Port: port}, nil
+	}
+	issuer, _ := s.Platform.Identity["issuerUrl"].(string)
+	u, err := url.Parse(issuer)
+	if err != nil || u.Hostname() == "" {
+		return JWKSSource{}, fmt.Errorf("the platform's global.identity.issuerUrl %q names no host: the models Gateway's JWT policy validates a person's id_token against the issuer's key set", issuer)
+	}
+	return JWKSSource{Host: u.Hostname(), Port: httpsPort}, nil
 }
 
 // SliceChartVersion resolves the slice release's chart pin: the spec's
@@ -172,7 +249,9 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // platform's wildcard where it covers models.<domain> and is referenceable
 // (the own cluster, the platform naming it), else a cert-manager Certificate
 // of the host from the configured ClusterIssuer — the connectivity chart
-// refuses a Gateway with neither. The GPU
+// refuses a Gateway with neither. The models Gateway's JWKS source is the
+// platform's Dex service on the own cluster (SliceJWKS); a workload cluster
+// keeps the chart's default, the public issuer. The GPU
 // pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
 // placement contract, giantswarm/agent-platform#315) and, until a pinned
 // chart carries that key, to modelServing.serving.nodeSelector, the route the
@@ -180,6 +259,10 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 	if s.Platform.Domain == "" {
 		return nil, fmt.Errorf("the platform's global.domain is empty: the slice's domain and models host derive from it")
+	}
+	jwks, err := SliceJWKS(s)
+	if err != nil {
+		return nil, err
 	}
 	values := map[string]any{}
 	if err := yaml.Unmarshal(servingSliceProfile, &values); err != nil {
@@ -195,6 +278,12 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(identity, "global", "identity"),
 		set(!s.OwnCluster, "components", "agentgateway", "enabled"),
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
+	}
+	if s.OwnCluster {
+		steps = append(steps,
+			set(jwks.Host, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "host"),
+			set(jwks.Port, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "port"),
+		)
 	}
 	switch {
 	case s.OwnCluster && s.Platform.TLSSecretName != "":

@@ -446,6 +446,14 @@ data:
         issuerUrl: https://dex.gazelle.example.io
         clientId: dex-k8s-authenticator
         existingSecret: agent-platform-identity
+    # Where the installation's Dex serves its key set in-cluster, as the
+    # fleet sets it: the slice's models Gateway on the own cluster validates
+    # against it, like the platform's own JWT policies.
+    gateway:
+      jwksEgress:
+        enabled: true
+        namespace: giantswarm
+        port: 5556
     components:
       muster:
         enabled: true

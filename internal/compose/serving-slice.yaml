@@ -88,8 +88,11 @@ modelServing:
     runtimeClassName: nvidia
   # The models Gateway is this slice's: host models.<global.domain>, the
   # platform's wildcard certificate (gatewayApi.gateway.tls.secretName, or
-  # tls.issuerRef.name for a Certificate of the host), the public issuer's
-  # JWKS on 443, the login client's audience.
+  # tls.issuerRef.name for a Certificate of the host), the login client's
+  # audience, and the login issuer's JWKS: the public issuer on 443 (the
+  # chart's default) on a workload cluster, the platform's Dex service in
+  # plaintext (jwtAuthentication.jwks.host/port, set by the composer) on the
+  # installation's own cluster, where the public issuer yields no key set.
   modelsGateway:
     enabled: true
   # cache:

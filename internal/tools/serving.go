@@ -43,6 +43,10 @@ type SliceRelease struct {
 	ModelsHost string `json:"modelsHost"`
 	// GPUPool is the pool the predictors are placed on, empty for none.
 	GPUPool string `json:"gpuPool,omitempty"`
+	// JWKS is where the models Gateway fetches the login issuer's key set:
+	// the platform's Dex service in-cluster on the installation's own
+	// cluster, the public issuer on a workload cluster.
+	JWKS string `json:"jwks"`
 }
 
 // EnableModelServing creates the cluster's slice release with the serving
@@ -165,6 +169,10 @@ func (s *Service) sliceRelease(ctx context.Context, dyn dynamic.Interface, t tar
 	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
+	jwks, err := compose.SliceJWKS(spec)
+	if err != nil {
+		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
+	}
 	objs, err := compose.Slice(facts, spec)
 	if err != nil {
 		return serving, nil, nil, err
@@ -172,7 +180,7 @@ func (s *Service) sliceRelease(ctx context.Context, dyn dynamic.Interface, t tar
 	domain := compose.SliceDomain(facts, spec)
 	slice := &SliceRelease{
 		Name: objs[1].GetName(), Namespace: objs[1].GetNamespace(), ChartVersion: nestedString(objs[0], "spec", "ref", "tag"),
-		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool,
+		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool, JWKS: jwks.URL(),
 	}
 	return serving, slice, objs, nil
 }
@@ -195,10 +203,12 @@ func (s *Service) refuseSecondRelease(ctx context.Context, dyn dynamic.Interface
 }
 
 // platformInputs reads global.domain, global.identity, the wildcard
-// certificate and the chart version it runs (status.history[0].chartVersion)
-// from the installation's own release of the agent-platform chart: the
-// HelmRelease named agent-platform, else the one release of the chart that
-// is not cluster-manager's. Secrets it references are not read.
+// certificate, where the installation's Dex serves its key set in-cluster
+// (gateway.jwksEgress) and the chart version it runs
+// (status.history[0].chartVersion) from the installation's own release of
+// the agent-platform chart: the HelmRelease named agent-platform, else the
+// one release of the chart that is not cluster-manager's. Secrets it
+// references are not read.
 func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (compose.PlatformInputs, error) {
 	hrs, err := dyn.Resource(HelmReleaseGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -240,6 +250,8 @@ func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (co
 	}
 	out.Identity, _, _ = unstructured.NestedMap(vals, "global", "identity")
 	out.TLSSecretName, _, _ = unstructured.NestedString(vals, "gatewayApi", "gateway", "tls", "secretName")
+	out.Dex.Namespace, _, _ = unstructured.NestedString(vals, "gateway", "jwksEgress", "namespace")
+	out.Dex.Port = nestedInt(&unstructured.Unstructured{Object: vals}, "gateway", "jwksEgress", "port")
 	return out, nil
 }
 
