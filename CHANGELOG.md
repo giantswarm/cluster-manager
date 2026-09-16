@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The slice release's pin is the platform's chart version without the build metadata Flux records on a HelmRelease's `status.history[].chartVersion` (the chart's digest: `4.28.0+1c7eb3256e07`): 0.5.1 pinned the whole string as the OCIRepository tag, which no registry serves (`+` is not a tag character), so the slice's source never resolved (giantswarm/giantswarm#37637).
+
 ### Changed
 
 - The `<cluster>-agent-platform` slice release pins the `agent-platform` chart to the version the installation's own platform release runs (`status.history[0].chartVersion` of its HelmRelease — released by construction and known to work on the installation) instead of a version fixed at build time (0.5.0 pinned 4.25.0 while the installations ran 4.27.2), with a floor of 4.27.0, the first chart whose serving slice places the predictors on a tainted GPU pool (`modelServing.gpuPool`, giantswarm/agent-platform#315): a platform below it, one that has not deployed yet or one on a non-semver revision is refused, naming the release, its version and the fix. `--slice-chart-version` (`CLUSTER_MANAGER_SLICE_CHART_VERSION`, chart value `serving.sliceChartVersion`) pins another version as given, for a lab running an unreleased chart. A re-run of `enable_model_serving` or `create_node_pool` on an existing slice release moves the pin (giantswarm/giantswarm#37637).
