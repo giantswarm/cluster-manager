@@ -8,11 +8,13 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
+	discoveryfake "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
@@ -63,12 +65,24 @@ func cluster(name, namespace string) *unstructured.Unstructured {
 
 func newServer(t *testing.T) *handlersServer {
 	t.Helper()
+	return newServerWithClusterAPI(t, true)
+}
+
+// newServerWithClusterAPI builds the server over two clusters; without the
+// Cluster API the discovery serves nothing, as an installation without the
+// KaaS components does.
+func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
+	t.Helper()
+	disc := &discoveryfake.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	if clusterAPI {
+		disc.Resources = []*metav1.APIResourceList{{GroupVersion: tools.ClusterGVR.GroupVersion().String(), APIResources: []metav1.APIResource{{Name: tools.ClusterGVR.Resource, Kind: "Cluster", Namespaced: true}}}}
+	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		tools.ClusterGVR: "ClusterList", tools.MachinePoolGVR: "MachinePoolList", tools.HelmReleaseGVR: "HelmReleaseList", tools.ReleaseGVR: "ReleaseList",
 		tools.AppGVR: "AppList", tools.ConfigMapGVR: "ConfigMapList", compose.SecretGVR: "SecretList", compose.OCIRepositoryGVR: "OCIRepositoryList",
 		detect.NodesGVR: "NodeList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.InferenceServiceGVR: "InferenceServiceList", detect.LLMISVCGVR: "LLMInferenceServiceList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
-	svc := tools.New(func(context.Context) dynamic.Interface { return dyn }, nil, tools.Config{Installation: "gazelle"})
+	svc := tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"})
 	return &handlersServer{NewMCPServer(svc, "test")}
 }
 

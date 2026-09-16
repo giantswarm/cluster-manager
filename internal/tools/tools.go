@@ -7,6 +7,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,15 +16,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 )
 
+// ClusterAPIGroup is the API group the clusters and their MachinePools live
+// in; an installation without the KaaS components does not serve it.
+const ClusterAPIGroup = "cluster.x-k8s.io"
+
 // Kubernetes resources the tools read.
 var (
-	ClusterGVR     = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
-	MachinePoolGVR = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinepools"}
+	ClusterGVR     = schema.GroupVersionResource{Group: ClusterAPIGroup, Version: "v1beta1", Resource: "clusters"}
+	MachinePoolGVR = schema.GroupVersionResource{Group: ClusterAPIGroup, Version: "v1beta1", Resource: "machinepools"}
 	HelmReleaseGVR = compose.HelmReleaseGVR
 	ReleaseGVR     = schema.GroupVersionResource{Group: "release.giantswarm.io", Version: "v1alpha1", Resource: "releases"}
 )
@@ -36,9 +42,16 @@ const (
 	OrgNamespacePrefix  = "org-"
 )
 
-// ClientsFor returns the dynamic client a call uses: the caller's own when
-// the request carries the caller's forwarded token, else the ServiceAccount's.
-type ClientsFor func(ctx context.Context) dynamic.Interface
+// Clients are the Kubernetes clients one call reads through: the dynamic
+// client for the resources, discovery for what the apiserver serves.
+type Clients struct {
+	Dynamic   dynamic.Interface
+	Discovery discovery.DiscoveryInterface
+}
+
+// ClientsFor returns the clients a call uses: the caller's own when the
+// request carries the caller's forwarded token, else the ServiceAccount's.
+type ClientsFor func(ctx context.Context) Clients
 
 // Config is the installation-wide configuration of the tools.
 type Config struct {
@@ -83,9 +96,90 @@ func (e *ErrAmbiguous) Error() string {
 	return fmt.Sprintf("cluster %s exists in several namespaces (%s): name the namespace", e.Name, strings.Join(e.Namespaces, ", "))
 }
 
+// ErrClusterAPIAbsent is returned when a cluster is asked for on an
+// installation that does not serve the Cluster API: no cluster can exist
+// there, so the message names the cluster and the missing API group instead
+// of the apiserver's bare 404.
+type ErrClusterAPIAbsent struct{ Cluster string }
+
+func (e *ErrClusterAPIAbsent) Error() string {
+	if e.Cluster == "" {
+		return clusterAPIAbsentNote
+	}
+	return fmt.Sprintf("cluster %s not found: %s", e.Cluster, clusterAPIAbsentNote)
+}
+
+// Cluster API states as ClusterAPI.State reports them.
+const (
+	ClusterAPIServed  = "served"
+	ClusterAPIAbsent  = "absent"
+	ClusterAPIUnknown = "unknown"
+)
+
+var clusterAPIAbsentNote = fmt.Sprintf("the Cluster API (%s) is not served on this installation", ClusterAPIGroup)
+
+// ClusterAPI reports whether the installation serves the Cluster API the
+// tools read clusters and MachinePools from. An installation without it has
+// no clusters: list_clusters answers an empty list with this note, and the
+// tools that name a cluster refuse.
+type ClusterAPI struct {
+	Group   string `json:"group"`
+	Version string `json:"version"`
+	// State is served, absent, or unknown when discovery failed (Note
+	// carries the error).
+	State string `json:"state"`
+	// Note explains an absent or unknown state; empty when served.
+	Note string `json:"note,omitempty"`
+}
+
+// ClusterAPI checks, with one discovery request, whether the installation
+// serves the Cluster API's group version. Discovery is open to every
+// authenticated principal, so the answer does not depend on the caller's
+// RBAC on the clusters themselves. Never an error: a failed discovery is
+// the unknown state.
+func (s *Service) ClusterAPI(ctx context.Context) ClusterAPI {
+	return clusterAPI(s.clients(ctx).Discovery)
+}
+
+func clusterAPI(disc discovery.DiscoveryInterface) ClusterAPI {
+	gv := ClusterGVR.GroupVersion()
+	out := ClusterAPI{Group: gv.Group, Version: gv.Version, State: ClusterAPIServed}
+	_, err := disc.ServerResourcesForGroupVersion(gv.String())
+	switch {
+	case err == nil:
+	case apierrors.IsNotFound(err):
+		out.State, out.Note = ClusterAPIAbsent, clusterAPIAbsentNote
+	default:
+		out.State, out.Note = ClusterAPIUnknown, fmt.Sprintf("discover %s: %v", gv, err)
+	}
+	return out
+}
+
+// requireClusterAPI is the check before a Cluster API read: absent refuses
+// naming the cluster asked for (empty for a list), unknown surfaces the
+// discovery error.
+func requireClusterAPI(disc discovery.DiscoveryInterface, cluster string) error {
+	switch api := clusterAPI(disc); api.State {
+	case ClusterAPIAbsent:
+		return &ErrClusterAPIAbsent{Cluster: cluster}
+	case ClusterAPIUnknown:
+		return errors.New(api.Note)
+	}
+	return nil
+}
+
 // getCluster finds a Cluster by name: in namespace when given, else across
-// the installation's namespaces (an error when the name is ambiguous).
-func (s *Service) getCluster(ctx context.Context, dyn dynamic.Interface, name, namespace string) (*unstructured.Unstructured, error) {
+// the installation's namespaces (an error when the name is ambiguous). On
+// an installation without the Cluster API the answer is ErrClusterAPIAbsent.
+func (s *Service) getCluster(ctx context.Context, k Clients, name, namespace string) (*unstructured.Unstructured, error) {
+	qualified := name
+	if namespace != "" {
+		qualified = namespace + "/" + name
+	}
+	if err := requireClusterAPI(k.Discovery, qualified); err != nil {
+		return nil, err
+	}
+	dyn := k.Dynamic
 	if namespace != "" {
 		obj, err := dyn.Resource(ClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {

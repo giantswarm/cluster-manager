@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -57,10 +58,27 @@ type CommitTarget struct {
 	Path       string `json:"path"`
 }
 
+// ClusterList is list_clusters' answer: the clusters, and whether the
+// installation serves the Cluster API at all — an empty list on an
+// installation without it comes with the note saying why.
+type ClusterList struct {
+	Clusters   []Cluster  `json:"clusters"`
+	ClusterAPI ClusterAPI `json:"clusterApi"`
+}
+
 // ListClusters lists the installation's clusters with their GPU pool
-// releases, sorted by namespace and name.
-func (s *Service) ListClusters(ctx context.Context) ([]Cluster, error) {
-	dyn := s.clients(ctx)
+// releases, sorted by namespace and name. On an installation without the
+// Cluster API the list is empty and ClusterAPI carries the note.
+func (s *Service) ListClusters(ctx context.Context) (*ClusterList, error) {
+	k := s.clients(ctx)
+	api := clusterAPI(k.Discovery)
+	switch api.State {
+	case ClusterAPIAbsent:
+		return &ClusterList{Clusters: []Cluster{}, ClusterAPI: api}, nil
+	case ClusterAPIUnknown:
+		return nil, errors.New(api.Note)
+	}
+	dyn := k.Dynamic
 	clusters, err := dyn.Resource(ClusterGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list clusters: %w", err)
@@ -103,7 +121,7 @@ func (s *Service) ListClusters(ctx context.Context) ([]Cluster, error) {
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out, nil
+	return &ClusterList{Clusters: out, ClusterAPI: api}, nil
 }
 
 func poolRelease(hr *unstructured.Unstructured) PoolRelease {

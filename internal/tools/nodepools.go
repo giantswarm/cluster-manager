@@ -70,11 +70,12 @@ type ReleaseRef struct {
 // ListNodePools lists the MachinePools of one cluster; namespace may be empty
 // when the cluster's name is unique on the installation.
 func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) (*NodePools, error) {
-	dyn := s.clients(ctx)
-	c, err := s.getCluster(ctx, dyn, cluster, namespace)
+	k := s.clients(ctx)
+	c, err := s.getCluster(ctx, k, cluster, namespace)
 	if err != nil {
 		return nil, err
 	}
+	dyn := k.Dynamic
 	cpVersion := controlPlaneVersion(ctx, dyn, c)
 
 	pools, err := dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(ctx, metav1.ListOptions{
