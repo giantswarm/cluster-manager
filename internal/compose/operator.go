@@ -45,8 +45,11 @@ type OperatorRow struct {
 	Toolkit bool
 }
 
-// The two rows: Flatcar carries driver and toolkit in the image; a node with
-// a pre-installed driver still needs the toolkit.
+// The two rows: the Giant Swarm Flatcar image carries driver and toolkit,
+// and the gpu-node-pool chart's bootstrap makes the toolkit serve them (the
+// runtime in CDI mode, the driver's CDI specification written after
+// nvidia.service; the chart README's image contract); a node with a
+// pre-installed driver still needs the toolkit.
 var (
 	RowFlatcar      = OperatorRow{Name: "flatcar", Driver: false, Toolkit: false}
 	RowPreinstalled = OperatorRow{Name: "pre-installed", Driver: false, Toolkit: true}
