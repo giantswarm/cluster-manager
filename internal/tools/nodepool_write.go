@@ -159,7 +159,9 @@ type ObjectAction struct {
 // the cluster's `<cluster>-agent-platform` slice release with the serving
 // slice on (updated in place on a re-run); a chart-provided serving layer is
 // left alone. After the pool it registers the cluster's kserve backend with
-// model-manager. The answer lists the pool's sizes with what each leaves a
+// model-manager — the document carrying the pool's instance shapes when it
+// is the cluster's only pool, for the fit check at scale-from-zero
+// (giantswarm/cluster-manager#26). The answer lists the pool's sizes with what each leaves a
 // predictor and, where the cluster publishes serving presets, the smallest
 // size that hosts each — a preset no size hosts is a warning
 // (giantswarm/agent-platform#502). Every refusal comes before any write.
@@ -201,11 +203,20 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
-	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, onlyOf(pools))
+	pinned := onlyOf(pools)
+	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, pinned)
 	if err != nil {
 		return nil, err
 	}
-	backend, err := s.backendDocument(ctx, dyn, target)
+	// The backend document names the sizes of the pool the predictors are
+	// pinned to: this one when it is the cluster's only pool; with several
+	// none is pinned and the document names no sizes, so a re-run never
+	// judges a load against a pool it may not land on.
+	var instances []compose.InstanceShape
+	if pinned != "" {
+		instances = shapes
+	}
+	backend, err := s.backendDocument(ctx, dyn, target, instances)
 	if err != nil {
 		return nil, err
 	}
@@ -267,14 +278,14 @@ func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.C
 	return operator, row.Name, compose.Operator(facts, row, pools), nil
 }
 
-// backendDocument renders the kserve backend document for the target and
-// refuses when model-manager's one kserve document is registered for
-// another cluster.
-func (s *Service) backendDocument(ctx context.Context, dyn dynamic.Interface, t target) (*unstructured.Unstructured, error) {
+// backendDocument renders the kserve backend document for the target — with
+// the shapes of the pinned pool, none for no pin — and refuses when
+// model-manager's one kserve document is registered for another cluster.
+func (s *Service) backendDocument(ctx context.Context, dyn dynamic.Interface, t target, instances []compose.InstanceShape) (*unstructured.Unstructured, error) {
 	if t.backendErr != nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the kserve backend of %s cannot be registered with model-manager: %v", t.Cluster, t.backendErr)}
 	}
-	backend, err := compose.KServeBackend(s.cfg.ModelManagerNamespace, t.backend)
+	backend, err := compose.KServeBackend(s.cfg.ModelManagerNamespace, t.backend, instances)
 	if err != nil {
 		return nil, err
 	}

@@ -107,7 +107,8 @@ spec:
     kind: OCIRepository
     name: wc1-gpu-a10g
   values:
-    accelerator: nvidia-a10g
+    pool:
+      accelerator: nvidia-a10g
     replicas: 2
 status:
   lastAttemptedRevision: 0.3.0

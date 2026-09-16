@@ -58,8 +58,13 @@ type BackendTarget struct {
 
 // KServeBackend renders the kserve backend document into model-manager's
 // namespace, labelled with the cluster it registers so the last pool's
-// deletion finds it.
-func KServeBackend(namespace string, t BackendTarget) (*unstructured.Unstructured, error) {
+// deletion finds it. instances are the shapes of the GPU pool the predictors
+// are pinned to, written as spec.kserve.gpuPool.instances — the list
+// model-manager's fit check judges a model against while the pool has no
+// node, and load_model refuses what no size hosts (model-manager 0.23.7,
+// giantswarm/model-manager#97); none writes no gpuPool block, and the
+// discovery ConfigMap's taint and node selector stand either way.
+func KServeBackend(namespace string, t BackendTarget, instances []InstanceShape) (*unstructured.Unstructured, error) {
 	target := map[string]any{
 		"cluster":          t.Cluster,
 		"organization":     t.Organization,
@@ -75,6 +80,9 @@ func KServeBackend(namespace string, t BackendTarget) (*unstructured.Unstructure
 	kserve := map[string]any{"target": target}
 	if t.DiscoveryNamespace != "" {
 		kserve["discovery"] = map[string]any{"namespace": t.DiscoveryNamespace}
+	}
+	if len(instances) > 0 {
+		kserve["gpuPool"] = map[string]any{"instances": instances}
 	}
 	doc := map[string]any{
 		"apiVersion": BackendAPIVersion,

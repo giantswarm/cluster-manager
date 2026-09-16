@@ -48,8 +48,10 @@ type SliceRelease struct {
 // EnableModelServing creates the cluster's slice release with the serving
 // slice on — or updates the one that exists, never a second release of the
 // chart on one cluster — and registers the cluster's kserve backend with
-// model-manager. A pool is not required. Refused where the platform's own
-// release or a human provides serving already.
+// model-manager, the document carrying the pinned pool's instance shapes
+// (read from its release) when the cluster has one pool. A pool is not
+// required. Refused where the platform's own release or a human provides
+// serving already.
 func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
@@ -76,7 +78,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if slice == nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("serving is already present on %s, provided by %s (%s): the slice release is composed only where nothing provides serving — nothing to do", c.GetName(), providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
-	backend, err := s.backendDocument(ctx, dyn, target)
+	instances, err := poolShapes(ctx, dyn, c.GetNamespace(), c.GetName(), pool)
+	if err != nil {
+		return nil, err
+	}
+	backend, err := s.backendDocument(ctx, dyn, target, instances)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +338,40 @@ func onlyOf(names []string) string {
 		return ""
 	}
 	return names[0]
+}
+
+// poolShapes is the instance shapes of the cluster's pool, read from its
+// release's values (the chart's pool.accelerator and pool.sizes; no sizes is
+// the chart's default) — what the backend document names for the pool the
+// predictors are pinned to. Nil for no pool.
+func poolShapes(ctx context.Context, dyn dynamic.Interface, ns, cluster, pool string) ([]compose.InstanceShape, error) {
+	if pool == "" {
+		return nil, nil
+	}
+	name := compose.ReleaseName(cluster, pool)
+	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
+	}
+	accelerator, sizes := poolValues(hr)
+	shapes, err := compose.Shapes(accelerator, sizes)
+	if err != nil {
+		return nil, fmt.Errorf("pool %s of %s (HelmRelease %s/%s): %w", pool, cluster, ns, name, err)
+	}
+	return shapes, nil
+}
+
+// poolValues reads a pool release's accelerator and sizes: the chart's
+// pool.accelerator and pool.sizes values, as compose.Pool writes them.
+func poolValues(hr *unstructured.Unstructured) (string, []string) {
+	raw, _, _ := unstructured.NestedSlice(hr.Object, "spec", "values", "pool", "sizes")
+	sizes := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if size, ok := s.(string); ok {
+			sizes = append(sizes, size)
+		}
+	}
+	return nestedString(hr, "spec", "values", "pool", "accelerator"), sizes
 }
 
 // servedModelsGuard refuses while models are served on the target, naming

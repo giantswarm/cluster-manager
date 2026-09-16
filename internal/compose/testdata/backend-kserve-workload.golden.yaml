@@ -10,6 +10,24 @@ data:
       kserve:
         discovery:
           namespace: org-acme
+        gpuPool:
+          instances:
+          - gpuMemoryGiB: 24
+            gpus: 1
+            instanceType: g6.xlarge
+            memoryGiB: 16
+            size: xlarge
+            usableMemoryGiB: 11.9
+            usableVcpu: 3
+            vcpu: 4
+          - gpuMemoryGiB: 24
+            gpus: 1
+            instanceType: g6.2xlarge
+            memoryGiB: 32
+            size: 2xlarge
+            usableMemoryGiB: 27.1
+            usableVcpu: 7
+            vcpu: 8
         target:
           apiServer: https://api.wc1.acme.example.io:6443
           caBundle: |
