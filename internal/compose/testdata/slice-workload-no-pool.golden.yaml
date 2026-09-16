@@ -105,5 +105,8 @@ spec:
     modelServing:
       modelsGateway:
         enabled: true
+        tls:
+          issuerRef:
+            name: letsencrypt-giantswarm
       serving:
         runtimeClassName: nvidia

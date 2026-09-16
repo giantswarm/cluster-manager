@@ -185,7 +185,12 @@
               }
             },
             "modelsGateway": {
-              "enabled": true
+              "enabled": true,
+              "tls": {
+                "issuerRef": {
+                  "name": "letsencrypt-giantswarm"
+                }
+              }
             },
             "serving": {
               "nodeSelector": {

@@ -4,14 +4,14 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: agent-platform
-    giantswarm.io/cluster: wc1
-  name: wc1-agent-platform
-  namespace: org-acme
+    giantswarm.io/cluster: gazelle
+  name: gazelle-agent-platform
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
-    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+    name: gazelle
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000000
 spec:
   interval: 10m
   ref:
@@ -24,24 +24,24 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: agent-platform
-    giantswarm.io/cluster: wc1
-  name: wc1-agent-platform
-  namespace: org-acme
+    giantswarm.io/cluster: gazelle
+  name: gazelle-agent-platform
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
-    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+    name: gazelle
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000000
 spec:
   chartRef:
     kind: OCIRepository
-    name: wc1-agent-platform
+    name: gazelle-agent-platform
   install:
     crds: CreateReplace
     remediation:
       retries: 3
   interval: 10m
-  releaseName: wc1-agent-platform
+  releaseName: gazelle-agent-platform
   serviceAccountName: automation
   upgrade:
     crds: CreateReplace
@@ -54,7 +54,7 @@ spec:
       agent-platform-mcps:
         enabled: false
       agentgateway:
-        enabled: true
+        enabled: false
       backstage:
         enabled: false
       dicebear:
@@ -95,9 +95,9 @@ spec:
       target:
         kubeConfig:
           secretRef:
-            name: wc1-kubeconfig
+            name: gazelle-kubeconfig
     global:
-      domain: wc1.acme.example.io
+      domain: gazelle.example.io
       identity:
         clientId: dex-k8s-authenticator
         existingSecret: agent-platform-identity
@@ -105,7 +105,7 @@ spec:
     modelServing:
       gpuPool:
         nodeSelector:
-          giantswarm.io/machine-pool: wc1-gpu-l4
+          giantswarm.io/machine-pool: gazelle-gpu-l4
       modelsGateway:
         enabled: true
         tls:
@@ -113,5 +113,5 @@ spec:
             name: letsencrypt-giantswarm
       serving:
         nodeSelector:
-          giantswarm.io/machine-pool: wc1-gpu-l4
+          giantswarm.io/machine-pool: gazelle-gpu-l4
         runtimeClassName: nvidia

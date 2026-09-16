@@ -31,6 +31,7 @@ type serveOptions struct {
 	servingNamespace      string
 	sliceChartVersion     string
 	tenantServiceAccount  string
+	certificateIssuer     string
 
 	mcpEnabled bool
 	mcpPath    string
@@ -71,6 +72,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.servingNamespace, "serving-namespace", envOr("CLUSTER_MANAGER_SERVING_NAMESPACE", "model-serving"), "Namespace on a serving cluster where InferenceServices go, named in the registered kserve backend (CLUSTER_MANAGER_SERVING_NAMESPACE)")
 	f.StringVar(&o.sliceChartVersion, "slice-chart-version", envOr("CLUSTER_MANAGER_SLICE_CHART_VERSION", ""), "Pin the <cluster>-agent-platform slice release's agent-platform chart to this exact version; empty pins the version the installation's own platform release runs, at least "+compose.MinSliceChartVersion+" (CLUSTER_MANAGER_SLICE_CHART_VERSION)")
 	f.StringVar(&o.tenantServiceAccount, "tenant-service-account", envOr("CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT", compose.DefaultTenantServiceAccount), "ServiceAccount in every org namespace the installation's Flux runs a composed release under when its objects live in that namespace (the pool release, the <cluster>-agent-platform slice release); the org's tenant ServiceAccount on Giant Swarm installations, empty renders none (CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT)")
+	f.StringVar(&o.certificateIssuer, "models-certificate-issuer", envOr("CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER", compose.DefaultCertificateIssuer), "cert-manager ClusterIssuer the <cluster>-agent-platform slice release asks for the models host's certificate when the platform's wildcard is not usable (a workload cluster; the own cluster when the platform's release names no gatewayApi.gateway.tls.secretName); empty composes none (CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
@@ -115,7 +117,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			}
 			return target.Dynamic, nil
 		},
-		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount},
+		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer},
 	)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
