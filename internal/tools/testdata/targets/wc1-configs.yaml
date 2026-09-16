@@ -1,0 +1,63 @@
+# wc1 as its apiserver shows it with cluster-manager's serving slice installed
+# and no model served: Flatcar nodes, the KServe and llmisvc APIs served, and
+# the three of KServe's well-known LLMInferenceServiceConfigs this fixture
+# keeps of the ten the slice's kserve-runtime-configs child installs into the
+# release namespace, each with the llm-d controller's finalizer. The
+# controller's Deployment is not here: a test that needs it running adds it.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-decode-worker-data-parallel
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-scheduler
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-template
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}

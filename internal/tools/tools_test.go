@@ -75,11 +75,12 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.ClusterPolicyGVR:    "ClusterPolicyList",
 	detect.InferenceServiceGVR: "InferenceServiceList",
 	detect.LLMISVCGVR:          "LLMInferenceServiceList",
+	detect.LLMISVCConfigGVR:    "LLMInferenceServiceConfigList",
 }
 
 // servingAPIs are the APIs a cluster without the serving layer does not
 // serve.
-var servingAPIs = []schema.GroupVersionResource{detect.InferenceServiceGVR, detect.LLMISVCGVR}
+var servingAPIs = []schema.GroupVersionResource{detect.InferenceServiceGVR, detect.LLMISVCGVR, detect.LLMISVCConfigGVR}
 
 // newFake is a fake dynamic client over a fixture; the APIs named absent
 // answer every list with not found, as an apiserver without them does.

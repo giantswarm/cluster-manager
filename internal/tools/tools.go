@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -81,6 +82,12 @@ type Config struct {
 	// release names no gatewayApi.gateway.tls.secretName):
 	// `letsencrypt-giantswarm` on Giant Swarm clusters; empty composes none.
 	CertificateIssuer string
+	// ConfigTeardownTimeout bounds how long a teardown of the serving slice
+	// waits for the llm-d controller to clear the well-known
+	// LLMInferenceServiceConfigs after their release went, before it removes
+	// them itself (giantswarm/cluster-manager#28); zero is
+	// DefaultConfigTeardownTimeout.
+	ConfigTeardownTimeout time.Duration
 }
 
 // Service implements the tools.

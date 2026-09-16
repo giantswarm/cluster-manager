@@ -98,6 +98,10 @@ var (
 	ClusterPolicyGVR    = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}
 	InferenceServiceGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1beta1", Resource: "inferenceservices"}
 	LLMISVCGVR          = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceservices"}
+	// LLMISVCConfigGVR is the well-known LLMInferenceServiceConfigs an
+	// LLMInferenceService composes from (the kserve-runtime-configs chart
+	// installs ten into the slice's release namespace).
+	LLMISVCConfigGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceserviceconfigs"}
 )
 
 // Labels the detection reads.
@@ -132,8 +136,18 @@ const (
 	// storage uri.
 	hfScheme = "hf://"
 	// Flux's labels on every object a HelmRelease installed, naming it.
-	labelFluxReleaseName      = "helm.toolkit.fluxcd.io/name"
-	labelFluxReleaseNamespace = "helm.toolkit.fluxcd.io/namespace"
+	LabelFluxReleaseName      = "helm.toolkit.fluxcd.io/name"
+	LabelFluxReleaseNamespace = "helm.toolkit.fluxcd.io/namespace"
+	// LLMISVCController is the `control-plane` label of the llm-d controller,
+	// the one that puts LLMISVCConfigFinalizer on every
+	// LLMInferenceServiceConfig and clears it once no LLMInferenceService
+	// references the config any more.
+	LLMISVCController = "llmisvc-controller-manager"
+	// LLMISVCConfigFinalizer is that finalizer. With the controller gone
+	// nothing clears it: a deleted config sits terminating for as long as
+	// the CRD exists, and a slice installed next adopts and loses it
+	// (giantswarm/cluster-manager#28).
+	LLMISVCConfigFinalizer = "serving.kserve.io/llmisvcconfig-finalizer"
 )
 
 // GPUOperator reports the GPU operator on the target, in this order of
@@ -241,7 +255,7 @@ func releaseProvider(hr *unstructured.Unstructured) Provider {
 // kserve-llmisvc-resources charts). One of them on the cluster is what makes
 // serving present; the CRDs alone do not — Helm never removes CRDs, so a
 // serving layer that went leaves them behind, and CRDs serve no model.
-var KServeControllers = []string{"kserve-controller-manager", "llmisvc-controller-manager"}
+var KServeControllers = []string{"kserve-controller-manager", LLMISVCController}
 
 // KServeCharts are the charts of the KServe controllers, as the platform's
 // release or a hand install names them in a HelmRelease.
@@ -283,17 +297,89 @@ func Serving(ctx context.Context, t Target) Component {
 		}
 	}
 	apis := servedAPIs(ctx, t.Reader)
+	stranded := strandedEvidence(ctx, t.Reader, t.Namespace)
 	if len(found) == 0 {
 		c := Component{Status: StatusAbsent}
 		for _, api := range apis {
 			c.Evidence = append(c.Evidence, api+" (CRDs only, no controller)")
 		}
+		c.Evidence = append(c.Evidence, stranded...)
 		return c
 	}
 	c := verdict(found)
 	c.Evidence = append(c.Evidence, apis...)
+	c.Evidence = append(c.Evidence, stranded...)
 	sort.Strings(c.Evidence)
 	return c
+}
+
+// strandedEvidence names the LLMInferenceServiceConfigs terminating in the
+// slice's release namespace on the target: left by a serving layer that went
+// with their finalizer uncleared, they break the next slice installed there
+// (its release adopts and loses them) until create_node_pool or
+// enable_model_serving heals them. Nothing when there are none.
+func strandedEvidence(ctx context.Context, reader dynamic.Interface, namespace string) []string {
+	configs, err := Configs(ctx, reader, namespace)
+	if err != nil {
+		return nil
+	}
+	terminating := Terminating(configs)
+	if len(terminating) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%d LLMInferenceServiceConfig(s) terminating in %s with %s uncleared (stranded; healed by the next create_node_pool or enable_model_serving): %s",
+		len(terminating), namespace, LLMISVCConfigFinalizer, strings.Join(Names(terminating), ", "))}
+}
+
+// Configs lists the LLMInferenceServiceConfigs of a namespace on the target,
+// sorted by name; an API the target does not serve has none.
+func Configs(ctx context.Context, reader dynamic.Interface, namespace string) ([]unstructured.Unstructured, error) {
+	items, err := reader.Resource(LLMISVCConfigGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list %s in %s: %w", LLMISVCConfigGVR.GroupResource(), namespace, err)
+	}
+	sort.Slice(items.Items, func(i, j int) bool { return items.Items[i].GetName() < items.Items[j].GetName() })
+	return items.Items, nil
+}
+
+// Terminating is the subset of objs with a deletionTimestamp.
+func Terminating(objs []unstructured.Unstructured) []unstructured.Unstructured {
+	var out []unstructured.Unstructured
+	for i := range objs {
+		if objs[i].GetDeletionTimestamp() != nil {
+			out = append(out, objs[i])
+		}
+	}
+	return out
+}
+
+// Names lists objects by name, in order.
+func Names(objs []unstructured.Unstructured) []string {
+	out := make([]string, 0, len(objs))
+	for i := range objs {
+		out = append(out, objs[i].GetName())
+	}
+	return out
+}
+
+// LLMISVCControllerRuns reports whether the llm-d controller has a ready
+// replica on the target — the only thing that clears LLMISVCConfigFinalizer.
+// Unreadable Deployments count as no controller: what cannot be seen cannot
+// be waited for.
+func LLMISVCControllerRuns(ctx context.Context, reader dynamic.Interface) bool {
+	deps, err := list(ctx, reader, DeploymentGVR, metav1.NamespaceAll, LabelControlPlane+"="+LLMISVCController)
+	if err != nil {
+		return false
+	}
+	for i := range deps.Items {
+		if NestedInt(&deps.Items[i], "status", "readyReplicas") > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // servedAPIs names the KServe APIs the target serves.
@@ -340,7 +426,7 @@ func servingControllers(ctx context.Context, reader dynamic.Interface, owner Pro
 			p := owner
 			if p != ProviderClusterManager {
 				labels := d.GetLabels()
-				if rp, ok := releases[labels[labelFluxReleaseNamespace]+"/"+labels[labelFluxReleaseName]]; ok {
+				if rp, ok := releases[labels[LabelFluxReleaseNamespace]+"/"+labels[LabelFluxReleaseName]]; ok {
 					p = rp
 				}
 			}

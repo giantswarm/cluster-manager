@@ -31,5 +31,8 @@
   },
   "serving": {
     "status": ""
-  }
+  },
+  "warnings": [
+    "whether LLMInferenceServiceConfigs remain in org-acme on wc1 cannot be told (cluster wc1 not readable as you through https://api.wc1.acme.example.io:6443: connection refused): one left terminating with serving.kserve.io/llmisvcconfig-finalizer uncleared breaks the next serving slice installed there — check the namespace, or heal it by re-running create_node_pool once the cluster is readable as you"
+  ]
 }
