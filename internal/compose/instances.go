@@ -20,18 +20,42 @@ var (
 	instanceFamilies = map[string]string{"nvidia-l4": "g6", "nvidia-a10g": "g5", "nvidia-t4": "g4dn", "nvidia-l40s": "g6e"}
 	gpuMemoryGiB     = map[string]int{"g6": 24, "g5": 24, "g4dn": 16, "g6e": 48}
 	// familySizes lists every size of a family with its nominal vCPU, memory
-	// (GiB) and GPUs, smallest first.
+	// (GiB) and GPUs, smallest first. The G families share their size names,
+	// vCPU and GPU counts (gSizes); they differ in the memory per vCPU — 4 GiB
+	// on g4dn, g5 and g6, 8 GiB on g6e — and g4dn has no 24xlarge and ends
+	// in metal instead of 48xlarge. So g6.xlarge is 4 vCPU / 16 GiB / 1 L4, g6.2xlarge 8 / 32 / 1,
+	// g6.12xlarge 48 / 192 / 4, g6e.xlarge 4 / 32 / 1 L40S, g4dn.metal
+	// 96 / 384 / 8 T4.
 	familySizes = map[string][]nominal{
-		// L4 (g6) and A10G (g5): 16 GiB per 4 vCPU; one GPU up to 8xlarge and
-		// on 16xlarge, four on 12xlarge and 24xlarge, eight on 48xlarge.
-		"g6": {{"xlarge", 4, 16, 1}, {"2xlarge", 8, 32, 1}, {"4xlarge", 16, 64, 1}, {"8xlarge", 32, 128, 1}, {"12xlarge", 48, 192, 4}, {"16xlarge", 64, 256, 1}, {"24xlarge", 96, 384, 4}, {"48xlarge", 192, 768, 8}},
-		"g5": {{"xlarge", 4, 16, 1}, {"2xlarge", 8, 32, 1}, {"4xlarge", 16, 64, 1}, {"8xlarge", 32, 128, 1}, {"12xlarge", 48, 192, 4}, {"16xlarge", 64, 256, 1}, {"24xlarge", 96, 384, 4}, {"48xlarge", 192, 768, 8}},
-		// L40S (g6e): 32 GiB per 4 vCPU, the same GPU counts.
-		"g6e": {{"xlarge", 4, 32, 1}, {"2xlarge", 8, 64, 1}, {"4xlarge", 16, 128, 1}, {"8xlarge", 32, 256, 1}, {"12xlarge", 48, 384, 4}, {"16xlarge", 64, 512, 1}, {"24xlarge", 96, 768, 4}, {"48xlarge", 192, 1536, 8}},
-		// T4 (g4dn): 16 GiB per 4 vCPU; metal in place of 48xlarge.
-		"g4dn": {{"xlarge", 4, 16, 1}, {"2xlarge", 8, 32, 1}, {"4xlarge", 16, 64, 1}, {"8xlarge", 32, 128, 1}, {"12xlarge", 48, 192, 4}, {"16xlarge", 64, 256, 1}, {"metal", 96, 384, 8}},
+		"g6":   gFamily(4, false),
+		"g5":   gFamily(4, false),
+		"g6e":  gFamily(8, false),
+		"g4dn": gFamily(4, true),
 	}
+	// gSizes are the sizes of the G families: one GPU up to 8xlarge and on
+	// 16xlarge, four on 12xlarge and 24xlarge, eight on 48xlarge (metal).
+	gSizes = []nominal{{"xlarge", 4, 0, 1}, {"2xlarge", 8, 0, 1}, {"4xlarge", 16, 0, 1}, {"8xlarge", 32, 0, 1}, {"12xlarge", 48, 0, 4}, {"16xlarge", 64, 0, 1}, {"24xlarge", 96, 0, 4}, {"48xlarge", 192, 0, 8}}
 )
+
+// gFamily fills gSizes' memory from the family's GiB per vCPU. metal is the
+// g4dn shape: no 24xlarge, and a 96 vCPU / 8 GPU bare-metal size in place of
+// the 48xlarge.
+func gFamily(gibPerVCPU int, metal bool) []nominal {
+	out := make([]nominal, 0, len(gSizes))
+	for _, n := range gSizes {
+		if metal {
+			switch n.size {
+			case "24xlarge":
+				continue
+			case "48xlarge":
+				n = nominal{"metal", 96, 0, 8}
+			}
+		}
+		n.gib = n.vcpu * gibPerVCPU
+		out = append(out, n)
+	}
+	return out
+}
 
 // What a node keeps from its nominal shape before a predictor may have the
 // rest — the fleet's shape as measured on gazelle: the hypervisor's ~5 % of
