@@ -279,6 +279,38 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 	assert.Contains(t, err.Error(), `size "3xlarge": not a size of the g6 family (nvidia-l4); the sizes are xlarge, 2xlarge, 4xlarge, 8xlarge, 12xlarge, 16xlarge, 24xlarge, 48xlarge`)
 }
 
+// TestCreateNodePoolBackendDocumentFollowsTheSizes (giantswarm/cluster-manager#26):
+// the kserve backend document of a cluster's only pool names the pool's
+// instance shapes (spec.kserve.gpuPool.instances) for model-manager's fit
+// check at the pool's scale-from-zero, and a re-run with other sizes updates
+// them.
+func TestCreateNodePoolBackendDocumentFollowsTheSizes(t *testing.T) {
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+
+	narrow := l4("wc2", "gpu-l4b", false)
+	narrow.Pool.Sizes = []string{"xlarge"}
+	out, err := svc.CreateNodePool(ctx, narrow)
+	require.NoError(t, err)
+	assert.Contains(t, backendDoc(out), "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n", "the one pool's shapes, in the pool's order")
+	assert.NotContains(t, backendDoc(out), "g6.2xlarge", "the pool's sizes only")
+
+	drift, err := svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	backend := drift.Objects[len(drift.Objects)-1]
+	assert.Equal(t, "would-update", backend.Action, "the document follows the pool's sizes")
+	assert.Equal(t, []string{"data.backend.yaml"}, backend.Changes)
+	assert.Contains(t, backendDoc(drift), "instanceType: g6.4xlarge\n", "the chart's default sizes on the re-run")
+}
+
+// backendDoc is the kserve backend document a write renders — the last
+// manifest, the backend ConfigMap's backend.yaml.
+func backendDoc(out *WriteResult) string {
+	data, _ := out.Manifests[len(out.Manifests)-1]["data"].(map[string]any)
+	doc, _ := data["backend.yaml"].(string)
+	return doc
+}
+
 func sizeNames(shapes []compose.InstanceShape) []string {
 	out := make([]string, 0, len(shapes))
 	for _, s := range shapes {

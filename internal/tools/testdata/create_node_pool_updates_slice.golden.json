@@ -67,7 +67,10 @@
       "kind": "ConfigMap",
       "name": "model-backend-kserve",
       "namespace": "agent-platform",
-      "action": "unchanged"
+      "action": "would-update",
+      "changes": [
+        "data.backend.yaml"
+      ]
     }
   ],
   "manifests": [

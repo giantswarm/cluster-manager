@@ -174,15 +174,17 @@ func ownerRelease(mp *unstructured.Unstructured) *ReleaseRef {
 	return &ReleaseRef{Name: name, Namespace: ns}
 }
 
-// releaseAccelerator is spec.values.accelerator of a pool release, "" when
-// the release is unreadable or names none.
+// releaseAccelerator is the accelerator of a pool release — the chart's
+// pool.accelerator value, as compose.Pool writes it — "" when the release
+// is unreadable or names none.
 func releaseAccelerator(ctx context.Context, dyn dynamic.Interface, ref ReleaseRef) string {
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		slog.Debug("owner release not readable", "release", ref.Namespace+"/"+ref.Name, "error", err)
 		return ""
 	}
-	return nestedString(hr, "spec", "values", "accelerator")
+	accelerator, _ := poolValues(hr)
+	return accelerator
 }
 
 // instanceTypes reads the pool's infrastructure object: a launch template's
