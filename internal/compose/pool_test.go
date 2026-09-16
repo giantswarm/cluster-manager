@@ -17,11 +17,13 @@ var update = flag.Bool("update", false, "rewrite the golden files from the curre
 
 // wc1 is the fixture cluster the goldens are rendered for: release aws-31.0.0
 // (kubernetes 1.31.4, flatcar 4081.2.1, os-tooling 1.26.1), one registry
-// mirror without credentials, no proxy, teleport on.
+// mirror without credentials, no proxy, teleport on, the fleet's tenant
+// ServiceAccount in its org namespace.
 func wc1() Cluster {
 	return Cluster{
 		Name: "wc1", Namespace: "org-acme", Organization: "acme", UID: "6f1c0c1e-8a4a-4c1e-9c3a-000000000001",
-		KubernetesVersion: "1.31.4", MachineImage: "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs",
+		TenantServiceAccount: DefaultTenantServiceAccount,
+		KubernetesVersion:    "1.31.4", MachineImage: "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs",
 		BaseDomain: "acme.example.io", ManagementCluster: "gazelle",
 		RegistryMirrors: map[string][]string{"gsoci.azurecr.io": {"gsoci.azurecr.io"}},
 		CiliumIPAMMode:  "kubernetes", Teleport: true,
@@ -67,8 +69,21 @@ func TestPoolGoldens(t *testing.T) {
 			raw, err := yaml.Marshal(release.Object["spec"].(map[string]any)["values"])
 			require.NoError(t, err)
 			assert.NotContains(t, string(raw), "s3cret", "credentials never in spec.values")
+			sa, _, _ := unstructured.NestedString(release.Object, "spec", "serviceAccountName")
+			assert.Equal(t, DefaultTenantServiceAccount, sa, "the pool's Cluster API objects live in the org namespace: delivered as the tenant")
 		})
 	}
+}
+
+// TestPoolWithoutTenantServiceAccount: an installation without the tenancy
+// policy names no ServiceAccount, and the release carries none.
+func TestPoolWithoutTenantServiceAccount(t *testing.T) {
+	c := wc1()
+	c.TenantServiceAccount = ""
+	objs, err := Pool(c, PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 1})
+	require.NoError(t, err)
+	_, found, _ := unstructured.NestedString(objs[len(objs)-1].Object, "spec", "serviceAccountName")
+	assert.False(t, found)
 }
 
 func TestPoolRefusesBadInput(t *testing.T) {
@@ -84,8 +99,9 @@ func TestPoolRefusesBadInput(t *testing.T) {
 	assert.NoError(t, err, "gpu00 passes the name pattern")
 }
 
-// assertGolden compares the objects' YAML with testdata/<name>.golden.yaml;
-// -update rewrites the file.
+// assertGolden compares the objects' YAML with testdata/<name>.golden.yaml
+// (-update rewrites the file) and holds every HelmRelease among them to the
+// fleet's multi-tenancy policy.
 func assertGolden(t *testing.T, name string, objs []*unstructured.Unstructured) {
 	t.Helper()
 	var sb strings.Builder
@@ -96,6 +112,9 @@ func assertGolden(t *testing.T, name string, objs []*unstructured.Unstructured) 
 		raw, err := yaml.Marshal(o.Object)
 		require.NoError(t, err)
 		sb.Write(raw)
+		if o.GetKind() == "HelmRelease" {
+			assertMultiTenancy(t, o)
+		}
 	}
 	path := filepath.Join("testdata", name+".golden.yaml")
 	if *update {
@@ -105,4 +124,24 @@ func assertGolden(t *testing.T, name string, objs []*unstructured.Unstructured) 
 	want, err := os.ReadFile(path) //nolint:gosec // golden file named by the test
 	require.NoError(t, err, "run with -update to create the golden file")
 	assert.Equal(t, string(want), sb.String())
+}
+
+// assertMultiTenancy is the fleet's `flux-multi-tenancy` policy as the
+// admission webhook applies it to a HelmRelease in `org-<org>` (the
+// composer's dry run cannot see admission, so the goldens hold the constraint
+// instead): either spec.serviceAccountName or spec.kubeConfig.secretRef.name
+// is set, and targetNamespace and storageNamespace leave the release's
+// namespace only through a kubeconfig.
+func assertMultiTenancy(t *testing.T, release *unstructured.Unstructured) {
+	t.Helper()
+	spec, _, _ := unstructured.NestedMap(release.Object, "spec")
+	sa, _, _ := unstructured.NestedString(spec, "serviceAccountName")
+	kubeconfig, _, _ := unstructured.NestedString(spec, "kubeConfig", "secretRef", "name")
+	assert.True(t, sa != "" || kubeconfig != "", "%s: either .spec.serviceAccountName or .spec.kubeConfig.secretRef.name is required", release.GetName())
+	for _, field := range []string{"targetNamespace", "storageNamespace"} {
+		ns, set, _ := unstructured.NestedString(spec, field)
+		if set && ns != release.GetNamespace() {
+			assert.NotEmpty(t, kubeconfig, "%s: spec.%s must be the same as metadata.namespace unless kubeConfig.secretRef.name is set", release.GetName(), field)
+		}
+	}
 }

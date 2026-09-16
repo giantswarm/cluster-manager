@@ -92,6 +92,7 @@
         },
         "interval": "10m",
         "releaseName": "wc2-gpu-l4b",
+        "serviceAccountName": "automation",
         "upgrade": {
           "remediation": {
             "retries": 3

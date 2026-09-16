@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Every composed HelmRelease passes the fleet's `flux-multi-tenancy` admission policy on the installation's own cluster as on a workload cluster (giantswarm/cluster-manager#15): the `<cluster>-gpu-operator` release is delivered through the cluster's `<cluster>-kubeconfig` Secret on every cluster (0.5.2 left the own cluster's plain, into `kube-system`, and Kyverno denied it), the pool release and the `<cluster>-agent-platform` slice release run under the org's tenant ServiceAccount (`serviceAccountName: automation`, the shape of the fleet's own `*-bundle` releases; `--tenant-service-account` / `flux.tenantServiceAccount`, empty renders none), and the slice's target knob is set for the own cluster too so every child release carries the kubeconfig and may install outside `org-<org>`. The goldens hold the policy's constraint on every composed HelmRelease.
 - The slice release's pin is the platform's chart version without the build metadata Flux records on a HelmRelease's `status.history[].chartVersion` (the chart's digest: `4.28.0+1c7eb3256e07`): 0.5.1 pinned the whole string as the OCIRepository tag, which no registry serves (`+` is not a tag character), so the slice's source never resolved (giantswarm/giantswarm#37637).
 
 ### Changed

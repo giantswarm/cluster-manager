@@ -26,11 +26,6 @@ const (
 	// upstream operator under.
 	OperatorValuesKey = "gpu-operator"
 
-	// KubeconfigSecretSuffix names the CAPI kubeconfig Secret of a cluster;
-	// a release targeting a workload cluster reads it through
-	// spec.kubeConfig.secretRef.
-	KubeconfigSecretSuffix = "-kubeconfig" //nolint:gosec // a Secret's name, not a credential
-
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
 	// operator not to deploy the driver.
@@ -121,17 +116,14 @@ func DeriveOperatorRow(nodes []Node, machineImage string) (OperatorRow, error) {
 // OperatorReleaseName names the operator release of a cluster.
 func OperatorReleaseName(cluster string) string { return cluster + OperatorReleaseSuffix }
 
-// KubeconfigSecretName names the CAPI kubeconfig Secret of a cluster.
-func KubeconfigSecretName(cluster string) string { return cluster + KubeconfigSecretSuffix }
-
 // Operator renders the `<cluster>-gpu-operator` release: an OCIRepository
 // following the chart's 1.x line and a HelmRelease installing into
-// kube-system of the target — through the cluster's kubeconfig Secret when
-// the target is a workload cluster (ownCluster false), plain on the
-// installation's own cluster — configured from the table's row. The objects
-// carry the fleet's labels and, in apply mode, an ownerReference to the
-// Cluster.
-func Operator(c Cluster, row OperatorRow, ownCluster bool) []*unstructured.Unstructured {
+// kube-system of the target through the cluster's kubeconfig Secret — the
+// installation's own cluster included, whose Secret points at the same API
+// server (see Delivery in compose.go) — configured from the table's row. The
+// objects carry the fleet's labels and, in apply mode, an ownerReference to
+// the Cluster.
+func Operator(c Cluster, row OperatorRow) []*unstructured.Unstructured {
 	name := OperatorReleaseName(c.Name)
 	meta := objectMeta(c, map[string]any{
 		LabelChartName: OperatorChart,
@@ -147,9 +139,7 @@ func Operator(c Cluster, row OperatorRow, ownCluster bool) []*unstructured.Unstr
 	})
 	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}
 	spec["targetNamespace"], spec["storageNamespace"] = OperatorNamespace, OperatorNamespace
-	if !ownCluster {
-		spec["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": KubeconfigSecretName(c.Name)}}
-	}
+	deliverThroughKubeconfig(spec, c.Name)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}
 }
 

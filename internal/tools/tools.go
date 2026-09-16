@@ -68,6 +68,12 @@ type Config struct {
 	// chart as given instead of the version the installation's platform
 	// release runs — for a lab running an unreleased chart, or a test.
 	SliceChartVersion string
+	// TenantServiceAccount is the ServiceAccount in every org namespace the
+	// installation's helm-controller runs a composed release under when the
+	// release's objects live in that namespace (the pool release, the slice
+	// release): `automation` on Giant Swarm installations; empty renders
+	// none, for an installation without the tenancy policy.
+	TenantServiceAccount string
 }
 
 // Service implements the tools.
@@ -220,6 +226,13 @@ func (s *Service) getCluster(ctx context.Context, k Clients, name, namespace str
 
 // organization derives a cluster's organization: the organization label,
 // else the `org-` namespace prefix stripped.
+// identity is what every composed release knows about its cluster before
+// anything is read from it: the names, the UID the objects own-reference
+// and the tenant the org namespace's releases run under.
+func (s *Service) identity(c *unstructured.Unstructured) compose.Cluster {
+	return compose.Cluster{Name: c.GetName(), Namespace: c.GetNamespace(), Organization: organization(c), UID: string(c.GetUID()), TenantServiceAccount: s.cfg.TenantServiceAccount}
+}
+
 func organization(obj *unstructured.Unstructured) string {
 	if org := obj.GetLabels()[LabelOrganization]; org != "" {
 		return org

@@ -142,6 +142,9 @@ func (l *lab) service(cfg Config) *Service {
 	if cfg.ServingNamespace == "" {
 		cfg.ServingNamespace = "model-serving"
 	}
+	if cfg.TenantServiceAccount == "" {
+		cfg.TenantServiceAccount = compose.DefaultTenantServiceAccount // the lab is a Giant Swarm installation: the org's tenant exists
+	}
 	return New(
 		func(context.Context) Clients { return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)} },
 		func(_ context.Context, apiServer string, _ []byte) (dynamic.Interface, error) {

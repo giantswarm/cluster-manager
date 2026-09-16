@@ -155,6 +155,7 @@
         },
         "interval": "10m",
         "releaseName": "wc1-gpu-l4",
+        "serviceAccountName": "automation",
         "upgrade": {
           "remediation": {
             "retries": 3
@@ -348,6 +349,7 @@
         },
         "interval": "10m",
         "releaseName": "wc1-agent-platform",
+        "serviceAccountName": "automation",
         "upgrade": {
           "crds": "CreateReplace",
           "remediation": {

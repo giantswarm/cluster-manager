@@ -245,7 +245,7 @@ func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.C
 	if err != nil {
 		return operator, "", nil, &ErrRefused{Reason: err.Error()}
 	}
-	return operator, row.Name, compose.Operator(facts, row, t.backend.OwnCluster), nil
+	return operator, row.Name, compose.Operator(facts, row), nil
 }
 
 // backendDocument renders the kserve backend document for the target and
@@ -442,7 +442,7 @@ func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, ns, 
 // cluster's Release CR, the credential-free snapshot from the cluster's
 // values, teleport from the join-token Secret's presence.
 func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (compose.Cluster, error) {
-	facts := compose.Cluster{Name: c.GetName(), Namespace: c.GetNamespace(), Organization: organization(c), UID: string(c.GetUID())}
+	facts := s.identity(c)
 	if err := s.releasePins(ctx, dyn, c, &facts); err != nil {
 		return facts, err
 	}

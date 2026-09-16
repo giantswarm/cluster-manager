@@ -19,8 +19,9 @@ func serving(cluster string, dryRun bool) ModelServingInput {
 
 // TestEnableModelServingOwnCluster composes the slice beside the platform's
 // release on the installation's own cluster: the platform's domain,
-// identity and wildcard certificate, agentgateway off, no target knob, the
-// backend as the local target. No pool exists: no node selector.
+// identity and wildcard certificate, agentgateway off, the target knob with
+// its own kubeconfig, the backend as the local target. No pool exists: no
+// node selector.
 func TestEnableModelServingOwnCluster(t *testing.T) {
 	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	out, err := svc.EnableModelServing(context.Background(), serving("gazelle", true))
@@ -31,8 +32,10 @@ func TestEnableModelServingOwnCluster(t *testing.T) {
 	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
 	agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
 	assert.False(t, agentgateway, "the platform's release owns the Gateway API data plane of its own cluster")
-	_, hasTarget, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
-	assert.False(t, hasTarget)
+	target, _, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
+	assert.Equal(t, "gazelle-kubeconfig", target, "the target knob on the own cluster too: its children are kubeconfig-delivered, as the fleet's tenancy policy wants")
+	sa, _, _ := unstructured.NestedString(out.Manifests[1], "spec", "serviceAccountName")
+	assert.Equal(t, compose.DefaultTenantServiceAccount, sa, "the slice release runs as the org's tenant")
 	tls, _, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
 	assert.Equal(t, "gazelle-wildcard-tls", tls, "from the platform's inline values")
 	issuer, _, _ := unstructured.NestedString(values, "global", "identity", "issuerUrl")

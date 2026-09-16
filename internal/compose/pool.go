@@ -56,6 +56,12 @@ type Cluster struct {
 	// UID is the Cluster's UID; the release's objects own-reference it so
 	// they are garbage-collected with the cluster (apply mode).
 	UID string
+	// TenantServiceAccount is the ServiceAccount in the cluster's org
+	// namespace the installation's helm-controller runs a release under when
+	// the release's objects live in that namespace (deliverAsTenant):
+	// DefaultTenantServiceAccount on Giant Swarm installations; empty
+	// renders none.
+	TenantServiceAccount string
 
 	// KubernetesVersion (`1.33.1`) and MachineImage are the pool's pins,
 	// from the cluster's Release CR.
@@ -130,8 +136,10 @@ func ValuesSecretName(cluster, pool string) string { return ReleaseName(cluster,
 
 // Pool renders the pool release: the OCIRepository, the HelmRelease and — only
 // when the cluster carries registry credentials — the valuesFrom Secret. The
-// objects carry the fleet's labels and, in apply mode, an ownerReference to
-// the Cluster.
+// release runs under the org's tenant ServiceAccount (its Cluster API objects
+// live in the org namespace on the installation; see Delivery in
+// compose.go). The objects carry the fleet's labels and, in apply mode, an
+// ownerReference to the Cluster.
 func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -150,6 +158,7 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(PoolChartURL, "tag", version)})
 	spec := helmReleaseSpec(name, false, values(c, p))
+	deliverAsTenant(spec, c.TenantServiceAccount)
 	objs := []*unstructured.Unstructured{source}
 	if len(c.RegistryCredentials) > 0 {
 		secret, err := credentialsSecret(c, p, meta(ValuesSecretName(c.Name, p.Name)))
