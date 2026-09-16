@@ -15,7 +15,7 @@ metadata:
 spec:
   interval: 10m
   ref:
-    tag: 4.25.0
+    tag: 4.27.2
   url: oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2

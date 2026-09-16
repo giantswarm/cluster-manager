@@ -64,6 +64,10 @@ type Config struct {
 	// ServingNamespace is where the InferenceServices go on a serving
 	// cluster (the backend document's target.servingNamespace).
 	ServingNamespace string
+	// SliceChartVersion, when set, pins the slice release's agent-platform
+	// chart as given instead of the version the installation's platform
+	// release runs — for a lab running an unreleased chart, or a test.
+	SliceChartVersion string
 }
 
 // Service implements the tools.

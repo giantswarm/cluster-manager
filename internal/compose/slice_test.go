@@ -10,6 +10,8 @@ import (
 
 func platform() PlatformInputs {
 	return PlatformInputs{
+		Release:       "flux-giantswarm/agent-platform",
+		ChartVersion:  "4.27.2",
 		Domain:        "gazelle.example.io",
 		Identity:      map[string]any{"issuerUrl": "https://dex.gazelle.example.io", "clientId": "dex-k8s-authenticator", "existingSecret": "agent-platform-identity"},
 		TLSSecretName: "gazelle-wildcard-tls",
@@ -46,7 +48,7 @@ func TestSliceGoldens(t *testing.T) {
 			assert.Equal(t, SliceChart, release.GetLabels()[LabelChartName])
 			assert.Equal(t, tc.cluster.Name, release.GetOwnerReferences()[0].Name, "owned by the Cluster in apply mode")
 			tag, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "tag")
-			assert.Equal(t, DefaultSliceChartVersion, tag, "the slice pins the chart exactly")
+			assert.Equal(t, platform().ChartVersion, tag, "the slice pins the version the platform's release runs")
 			_, hasKubeconfig, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
 			assert.False(t, hasKubeconfig, "the meta chart's own HelmRelease stays on the installation; the target knob is in its values")
 
@@ -101,4 +103,39 @@ func TestOtherSliceOn(t *testing.T) {
 	assert.False(t, OtherSliceOn(values))
 	require.NoError(t, unstructured.SetNestedField(values, true, "components", "kagent", "enabled"))
 	assert.True(t, OtherSliceOn(values), "the runtime slice shares the release")
+}
+
+// TestSliceChartVersion: the pin is the version the platform's release runs,
+// refused below the floor (naming the release, the version, the floor and
+// why), before the first deployment and for a non-semver revision; an
+// explicit version is honoured as given, floor or not.
+func TestSliceChartVersion(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    SliceSpec
+		want    string
+		refusal string
+	}{
+		{"platform's version", SliceSpec{Platform: platform()}, "4.27.2", ""},
+		{"exactly the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinSliceChartVersion}}, MinSliceChartVersion, ""},
+		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.25.0"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.25.0, below 4.27.0, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to 4.27.0 or newer and re-run"},
+		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.27.0-rc.1"}}, "", "runs agent-platform chart 4.27.0-rc.1, below 4.27.0"},
+		{"not deployed yet", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform"}}, "", "flux-giantswarm/agent-platform has not deployed a chart yet (no status.history)"},
+		{"not a semver", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "latest"}}, "", `runs agent-platform chart "latest", not a semantic version`},
+		{"override wins", SliceSpec{ChartVersion: "0.0.0-lab", Platform: PlatformInputs{ChartVersion: "4.25.0"}}, "0.0.0-lab", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := SliceChartVersion(tc.spec)
+			if tc.refusal != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.refusal)
+				_, err = Slice(wc1(), tc.spec)
+				assert.Error(t, err, "Slice refuses the same way")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

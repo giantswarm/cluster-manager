@@ -95,7 +95,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	slice := out.Manifests[6]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
-	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: compose.DefaultSliceChartVersion, Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
+	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.27.2", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
 	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
 
