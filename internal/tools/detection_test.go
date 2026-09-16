@@ -126,6 +126,40 @@ func TestDetectServing(t *testing.T) {
 		assert.Contains(t, got.Evidence, "HelmRelease org-acme/wc1-agent-platform")
 		assert.Contains(t, got.Evidence, "Deployment agent-platform/kserve-controller-manager (1/1 ready)")
 	})
+
+	// The slice's meta release reports Ready whether or not its children
+	// installed: a child that is not Ready is named with its condition's
+	// reason and message (giantswarm/cluster-manager#30), a Ready one and
+	// another release's child are not — with the cluster readable or not.
+	t.Run("a slice child that is not Ready is named", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		_, err := l.service(Config{Installation: "gazelle"}).EnableModelServing(context.Background(), serving("wc1", false))
+		require.NoError(t, err)
+		for _, child := range loadFixtures(t, "slice-children.yaml") {
+			u := child.(*unstructured.Unstructured)
+			_, err := l.installation.Resource(HelmReleaseGVR).Namespace(u.GetNamespace()).Create(context.Background(), u, metav1.CreateOptions{})
+			require.NoError(t, err)
+		}
+		failed := `HelmRelease org-acme/agent-platform-connectivity not Ready (Ready=False [InstallFailed] Helm install failed for release org-acme/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14): modelServing.modelsGateway.jwtAuthentication.enabled is true with an in-cluster jwks.host ("dex.giantswarm.svc.cluster.local") but gateway.jwksEgress.enabled is false.)`
+		pending := "HelmRelease org-acme/kserve-llmisvc-resources not Ready (no Ready condition yet)"
+		for name, target := range map[string]func(){
+			"cluster readable":   func() { l.target(t, wc1APIServer, "chart-kserve.yaml") },
+			"cluster unreadable": func() { l.unreachable(wc1APIServer) },
+		} {
+			t.Run(name, func(t *testing.T) {
+				target()
+				got := wc1Cluster(t, l).Serving
+				assert.Equal(t, detect.StatusPresent, got.Status)
+				assert.Equal(t, detect.ProviderClusterManager, got.Provider)
+				assert.Contains(t, got.Evidence, failed, "the failed child, with the chart's own account")
+				assert.Contains(t, got.Evidence, pending, "a child without a Ready condition is not Ready either")
+				for _, e := range got.Evidence {
+					assert.NotContains(t, e, "kserve-resources not Ready", "a Ready child is not named")
+					assert.NotContains(t, e, "wc2-agent-platform-connectivity", "another release's child is not the slice's")
+				}
+			})
+		}
+	})
 }
 
 // TestCreateNodePoolComposesTheOperator: wc1 is Flatcar without an operator,

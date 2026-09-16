@@ -271,19 +271,24 @@ var KServeCharts = []string{"kserve-resources", "kserve-llmisvc-resources"}
 // absent with a note.
 func Serving(ctx context.Context, t Target) Component {
 	var found []finding
+	var children []string
 	provider := ProviderManual
 	if t.Installation != nil {
 		hr, err := t.Installation.Resource(compose.HelmReleaseGVR).Namespace(t.Namespace).Get(ctx, compose.SliceReleaseName(t.Cluster), metav1.GetOptions{})
 		if err == nil && compose.OwnedBy(hr) {
 			provider = ProviderClusterManager
 			found = append(found, finding{provider, "HelmRelease " + t.Namespace + "/" + hr.GetName()})
+			children = sliceChildrenNotReady(ctx, t.Installation, t.Namespace, hr.GetName())
 		}
 	}
 	if t.Reader == nil {
 		if len(found) == 0 {
 			return Unknown(t.Reason)
 		}
-		return verdict(found)
+		c := verdict(found)
+		c.Evidence = append(c.Evidence, children...)
+		sort.Strings(c.Evidence)
+		return c
 	}
 	found = append(found, servingControllers(ctx, t.Reader, provider)...)
 	if cms, err := list(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingConfig+"=true"); err == nil {
@@ -309,8 +314,69 @@ func Serving(ctx context.Context, t Target) Component {
 	c := verdict(found)
 	c.Evidence = append(c.Evidence, apis...)
 	c.Evidence = append(c.Evidence, stranded...)
+	c.Evidence = append(c.Evidence, children...)
 	sort.Strings(c.Evidence)
 	return c
+}
+
+// sliceChildrenNotReady names the children of the slice release that are not
+// Ready — the component HelmReleases the meta chart renders into the slice's
+// namespace on the installation, labelled by Flux as the release's — with
+// their Ready condition's reason and message, the child's own account of
+// what failed. The meta release reports Ready whether or not a child
+// installed: on gazelle the connectivity child failed its render and the
+// slice served no models Gateway while serving read present
+// (giantswarm/cluster-manager#30). Nothing when every child is Ready.
+func sliceChildrenNotReady(ctx context.Context, installation dynamic.Interface, namespace, release string) []string {
+	selector := fmt.Sprintf("%s=%s,%s=%s", LabelFluxReleaseName, release, LabelFluxReleaseNamespace, namespace)
+	hrs, err := list(ctx, installation, compose.HelmReleaseGVR, namespace, selector)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for i := range hrs.Items {
+		hr := &hrs.Items[i]
+		ready, found := ReadyCondition(hr)
+		if found && ready.Status == "True" {
+			continue
+		}
+		detail := "no Ready condition yet"
+		if found {
+			detail = "Ready=" + ready.Status
+			if ready.Reason != "" {
+				detail += " [" + ready.Reason + "]"
+			}
+			if message := strings.Join(strings.Fields(ready.Message), " "); message != "" {
+				detail += " " + message
+			}
+		}
+		out = append(out, fmt.Sprintf("HelmRelease %s/%s not Ready (%s)", hr.GetNamespace(), hr.GetName(), detail))
+	}
+	return out
+}
+
+// Condition is one entry of an object's status.conditions.
+type Condition struct {
+	Status  string
+	Reason  string
+	Message string
+}
+
+// ReadyCondition reads the Ready condition of an object's status.conditions;
+// found is false when it has none.
+func ReadyCondition(obj *unstructured.Unstructured) (ready Condition, found bool) {
+	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, c := range conds {
+		m, ok := c.(map[string]any)
+		if !ok || m["type"] != "Ready" {
+			continue
+		}
+		ready.Status, _ = m["status"].(string)
+		ready.Reason, _ = m["reason"].(string)
+		ready.Message, _ = m["message"].(string)
+		return ready, true
+	}
+	return Condition{}, false
 }
 
 // strandedEvidence names the LLMInferenceServiceConfigs terminating in the

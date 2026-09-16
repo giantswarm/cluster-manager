@@ -98,11 +98,18 @@ type DexService struct {
 // JWKSSource is where the slice's models Gateway fetches the login issuer's
 // key set: a host and a port, TLS implied by 443 alone (the connectivity
 // chart's rule: 443 serves no plain HTTP, every other port is plaintext
-// unless jwks.tls.enabled asks for TLS).
+// unless jwks.tls.enabled asks for TLS). Namespace is the one an in-cluster
+// host resolves in — the platform's gateway.jwksEgress.namespace —, empty
+// for a public issuer.
 type JWKSSource struct {
-	Host string
-	Port int64
+	Host      string
+	Port      int64
+	Namespace string
 }
+
+// InCluster reports whether the source is a Service of the cluster (the
+// platform's Dex) rather than a public issuer.
+func (j JWKSSource) InCluster() bool { return j.Namespace != "" }
 
 // URL is the source as a URL, for the messages.
 func (j JWKSSource) URL() string {
@@ -170,7 +177,7 @@ func SliceJWKS(s SliceSpec) (JWKSSource, error) {
 		if port == 0 {
 			port = DefaultDexJWKSPort
 		}
-		return JWKSSource{Host: fmt.Sprintf("%s.%s.svc.cluster.local", dexService, namespace), Port: port}, nil
+		return JWKSSource{Host: fmt.Sprintf("%s.%s.svc.cluster.local", dexService, namespace), Port: port, Namespace: namespace}, nil
 	}
 	issuer, _ := s.Platform.Identity["issuerUrl"].(string)
 	u, err := url.Parse(issuer)
@@ -250,8 +257,17 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // (the own cluster, the platform naming it), else a cert-manager Certificate
 // of the host from the configured ClusterIssuer — the connectivity chart
 // refuses a Gateway with neither. The models Gateway's JWKS source is the
-// platform's Dex service on the own cluster (SliceJWKS); a workload cluster
-// keeps the chart's default, the public issuer. The GPU
+// platform's Dex service on the own cluster (SliceJWKS), and with an
+// in-cluster host travels gateway.jwksEgress — enabled, the host's namespace
+// and port —, the connectivity chart's precondition for one: it renders no
+// route to an in-cluster issuer its egress does not name and refuses the
+// values (validate.yaml, `gateway.jwksEgress.enabled is false`), which on
+// gazelle left the slice without its models Gateway while the meta release
+// read Ready (giantswarm/cluster-manager#30). The slice runs no agentgateway
+// controller of its own beside the platform's release, so the block states
+// the same facts the platform's release does and opens nothing new. A
+// workload cluster keeps the chart's default, the public issuer, and no
+// jwksEgress. The GPU
 // pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
 // placement contract, giantswarm/agent-platform#315) and, until a pinned
 // chart carries that key, to modelServing.serving.nodeSelector, the route the
@@ -279,10 +295,13 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(!s.OwnCluster, "components", "agentgateway", "enabled"),
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
 	}
-	if s.OwnCluster {
+	if jwks.InCluster() {
 		steps = append(steps,
 			set(jwks.Host, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "host"),
 			set(jwks.Port, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "port"),
+			set(true, "gateway", "jwksEgress", "enabled"),
+			set(jwks.Namespace, "gateway", "jwksEgress", "namespace"),
+			set(jwks.Port, "gateway", "jwksEgress", "port"),
 		)
 	}
 	switch {

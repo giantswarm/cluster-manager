@@ -91,8 +91,10 @@ modelServing:
   # tls.issuerRef.name for a Certificate of the host), the login client's
   # audience, and the login issuer's JWKS: the public issuer on 443 (the
   # chart's default) on a workload cluster, the platform's Dex service in
-  # plaintext (jwtAuthentication.jwks.host/port, set by the composer) on the
-  # installation's own cluster, where the public issuer yields no key set.
+  # plaintext (jwtAuthentication.jwks.host/port, set by the composer, with
+  # gateway.jwksEgress enabled on its namespace and port — the chart's
+  # precondition for an in-cluster host) on the installation's own cluster,
+  # where the public issuer yields no key set.
   modelsGateway:
     enabled: true
   # cache:
