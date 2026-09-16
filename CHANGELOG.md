@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The pool release pins `gpu-node-pool` 0.3.1 by default (giantswarm/gpu-node-pool#8): a pool node on the Giant Swarm Flatcar image reaches `nvidia.com/gpu` allocatable — the chart's bootstrap writes the driver's CDI specification after `nvidia.service` and sets the image's NVIDIA container runtime to CDI mode; 0.3.0's node mounted `nvidia-smi` at `/opt/bin` in every container, off the PATH, and the GPU operator's toolkit validation never passed. The `flatcar` row of the operator's table is unchanged (driver and toolkit off — the image carries both, the pool's bootstrap makes the toolkit serve them); its description and the README point at the chart's image contract.
+
 ### Fixed
 
 - `list_clusters` and the writes report serving as present only with a KServe controller on the cluster — the `kserve-controller-manager` or `llmisvc-controller-manager` Deployment, a HelmRelease of the `kserve-resources` / `kserve-llmisvc-resources` charts, the platform's model-serving discovery ConfigMap — or with cluster-manager's own slice release; the KServe CRDs alone are `absent`, the served APIs noted in the evidence (giantswarm/cluster-manager#21). Helm never removes CRDs, so after `delete_node_pool` of the cluster's last pool the eight `*.serving.kserve.io` CRDs the slice's `kserve-crd` and `kserve-llmisvc-crd` children installed stayed, 0.5.5 reported `serving: present, provider: manual` from the served APIs alone, and the next `create_node_pool` on the cluster composed no slice and registered no backend.

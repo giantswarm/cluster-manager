@@ -4,7 +4,7 @@
   "pool": "gpu-l4",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.3.0",
+  "chartVersion": "0.3.1",
   "kubernetesVersion": "1.31.4",
   "controlPlaneVersion": "v1.31.4",
   "machineImage": "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs",
@@ -95,7 +95,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "0.3.0"
+          "tag": "0.3.1"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }

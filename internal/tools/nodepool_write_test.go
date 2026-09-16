@@ -31,7 +31,7 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	assert.Equal(t, "1.31.4", out.KubernetesVersion, "from the Release CR")
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
 	assert.Equal(t, "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
-	assert.Equal(t, "0.3.0", out.ChartVersion)
+	assert.Equal(t, "0.3.1", out.ChartVersion)
 	require.Len(t, out.Objects, 8, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the slice's OCIRepository and HelmRelease; the backend ConfigMap")
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
 	for _, o := range out.Objects {
