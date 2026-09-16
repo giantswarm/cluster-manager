@@ -287,17 +287,16 @@ func (s *Service) sliceCluster(ctx context.Context, dyn dynamic.Interface, c *un
 	return facts, nil
 }
 
-// onlyPool is the GPU pool the slice's predictors are pinned to: the
-// cluster's one pool release of cluster-manager's (adding counts as one),
-// by pool name. Empty when the cluster has none or several — the predictors
-// are then placed by their GPU request alone, on whichever pool offers it —
-// so the rule is the same for every write and never flips between pools.
-func onlyPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) (string, error) {
+// poolNames are the cluster's GPU pools of cluster-manager's, by pool name,
+// sorted: its pool releases plus adding (the pool a write creates), counted
+// once. The operator's Node Feature Discovery worker is pinned to all of
+// them (compose.PoolAffinity); the slice's predictors to the one of them.
+func poolNames(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) ([]string, error) {
 	pools, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: compose.LabelChartName + "=" + compose.PoolChart + "," + compose.LabelCluster + "=" + cluster + "," + compose.LabelManagedBy + "=" + compose.ManagedBy,
 	})
 	if err != nil {
-		return "", fmt.Errorf("list pool releases of %s: %w", cluster, err)
+		return nil, fmt.Errorf("list pool releases of %s: %w", cluster, err)
 	}
 	names := map[string]bool{}
 	if adding != "" {
@@ -306,13 +305,33 @@ func onlyPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding st
 	for i := range pools.Items {
 		names[pools.Items[i].GetLabels()[compose.LabelPool]] = true
 	}
-	if len(names) != 1 {
-		return "", nil
-	}
+	out := make([]string, 0, len(names))
 	for name := range names {
-		return name, nil
+		out = append(out, name)
 	}
-	return "", nil
+	sort.Strings(out)
+	return out, nil
+}
+
+// onlyPool is the GPU pool the slice's predictors are pinned to: the
+// cluster's one pool release of cluster-manager's (adding counts as one),
+// by pool name. Empty when the cluster has none or several — the predictors
+// are then placed by their GPU request alone, on whichever pool offers it —
+// so the rule is the same for every write and never flips between pools.
+func onlyPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) (string, error) {
+	pools, err := poolNames(ctx, dyn, ns, cluster, adding)
+	if err != nil {
+		return "", err
+	}
+	return onlyOf(pools), nil
+}
+
+// onlyOf is the one name of a list of one, else empty.
+func onlyOf(names []string) string {
+	if len(names) != 1 {
+		return ""
+	}
+	return names[0]
 }
 
 // servedModelsGuard refuses while models are served on the target, naming

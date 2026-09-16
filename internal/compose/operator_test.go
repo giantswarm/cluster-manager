@@ -60,14 +60,20 @@ func TestOperatorGoldens(t *testing.T) {
 		name    string
 		cluster Cluster
 		row     OperatorRow
+		pools   []string
+		// pinned are the machine-pool label values the worker's affinity
+		// selects; none renders no affinity.
+		pinned []any
 	}{
-		{"flatcar-workload", wc1(), RowFlatcar},
-		{"preinstalled-workload", wc1(), RowPreinstalled},
-		{"flatcar-own-cluster", own, RowFlatcar},
+		{"flatcar-workload", wc1(), RowFlatcar, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}},
+		{"preinstalled-workload", wc1(), RowPreinstalled, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}},
+		{"flatcar-own-cluster", own, RowFlatcar, []string{"gpu-l4"}, []any{"gazelle-gpu-l4"}},
+		{"flatcar-two-pools", wc1(), RowFlatcar, []string{"gpu-t4", "gpu-l4", "gpu-t4"}, []any{"wc1-gpu-l4", "wc1-gpu-t4"}},
+		{"flatcar-no-pool", wc1(), RowFlatcar, nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			objs := Operator(tc.cluster, tc.row)
+			objs := Operator(tc.cluster, tc.row, tc.pools)
 			assertGolden(t, "operator-"+tc.name, objs)
 			require.Len(t, objs, 2)
 			source, release := objs[0], objs[1]
@@ -84,6 +90,16 @@ func TestOperatorGoldens(t *testing.T) {
 			driver, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "driver", "enabled")
 			toolkit, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "toolkit", "enabled")
 			assert.Equal(t, tc.row, OperatorRow{Name: tc.row.Name, Driver: driver, Toolkit: toolkit})
+			affinity, hasAffinity, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "affinity")
+			if tc.pinned == nil {
+				assert.False(t, hasAffinity, "no pool pins the worker nowhere: the chart runs it everywhere, as upstream")
+				return
+			}
+			terms, _, _ := unstructured.NestedSlice(affinity, "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms")
+			require.Len(t, terms, 1)
+			expressions, _, _ := unstructured.NestedSlice(terms[0].(map[string]any), "matchExpressions")
+			require.Len(t, expressions, 1)
+			assert.Equal(t, map[string]any{"key": LabelMachinePool, "operator": "In", "values": tc.pinned}, expressions[0], "NFD's worker runs on the GPU pools' nodes only, sorted and deduplicated")
 		})
 	}
 }

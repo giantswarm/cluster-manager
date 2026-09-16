@@ -147,7 +147,9 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	kubeconfig, _, _ := unstructured.NestedString(hr, "spec", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", kubeconfig, "a workload cluster is targeted through its kubeconfig Secret")
 	values, _, _ := unstructured.NestedMap(hr, "spec", "values", "gpu-operator")
-	assert.Equal(t, map[string]any{"driver": map[string]any{"enabled": false}, "toolkit": map[string]any{"enabled": false}}, values, "the Flatcar row")
+	assert.Equal(t, map[string]any{"enabled": false}, values["driver"], "the Flatcar row")
+	assert.Equal(t, map[string]any{"enabled": false}, values["toolkit"], "the Flatcar row")
+	assert.Equal(t, compose.PoolAffinity(compose.Cluster{Name: "wc1"}, []string{"gpu-a10g", "gpu-l4"}), values[compose.NFDValuesKey].(map[string]any)["worker"].(map[string]any)["affinity"], "NFD's worker pinned to wc1's existing pool and the one being created")
 
 	slice := out.Manifests[6]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])

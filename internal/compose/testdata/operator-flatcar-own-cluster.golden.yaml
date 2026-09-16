@@ -55,5 +55,16 @@ spec:
     gpu-operator:
       driver:
         enabled: false
+      node-feature-discovery:
+        worker:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: giantswarm.io/machine-pool
+                    operator: In
+                    values:
+                    - gazelle-gpu-l4
       toolkit:
         enabled: false

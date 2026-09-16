@@ -177,15 +177,15 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	target := s.target(ctx, dyn, c)
-	operator, row, operatorObjs, err := s.operatorRelease(ctx, target, facts)
+	pools, err := poolNames(ctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
 	if err != nil {
 		return nil, err
 	}
-	pool, err := onlyPool(ctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
+	operator, row, operatorObjs, err := s.operatorRelease(ctx, target, facts, pools)
 	if err != nil {
 		return nil, err
 	}
-	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, pool)
+	serving, slice, sliceObjs, err := s.sliceRelease(ctx, dyn, target, facts, onlyOf(pools))
 	if err != nil {
 		return nil, err
 	}
@@ -227,9 +227,10 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 // runs on the target and someone else provides it (the platform's chart, a
 // human), the `<cluster>-gpu-operator` release from the table's row when
 // none does — or when the one running is cluster-manager's own, so the
-// re-run is its update —, a refusal when the cluster cannot be read or its
-// nodes match no row.
-func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.Cluster) (detect.Component, string, []*unstructured.Unstructured, error) {
+// re-run is its update, which also moves the worker's pin to the cluster's
+// pools (pools) —, a refusal when the cluster cannot be read or its nodes
+// match no row.
+func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.Cluster, pools []string) (detect.Component, string, []*unstructured.Unstructured, error) {
 	operator := detect.GPUOperator(ctx, t.Target)
 	switch {
 	case operator.Status == detect.StatusUnknown:
@@ -245,7 +246,7 @@ func (s *Service) operatorRelease(ctx context.Context, t target, facts compose.C
 	if err != nil {
 		return operator, "", nil, &ErrRefused{Reason: err.Error()}
 	}
-	return operator, row.Name, compose.Operator(facts, row), nil
+	return operator, row.Name, compose.Operator(facts, row, pools), nil
 }
 
 // backendDocument renders the kserve backend document for the target and
