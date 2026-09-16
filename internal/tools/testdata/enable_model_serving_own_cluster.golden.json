@@ -183,7 +183,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
+        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-giantswarm\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
       },
       "kind": "ConfigMap",
       "metadata": {

@@ -8,6 +8,8 @@ data:
     spec:
       kind: kserve
       kserve:
+        discovery:
+          namespace: org-giantswarm
         target:
           cluster: local
           organization: giantswarm

@@ -8,6 +8,8 @@ data:
     spec:
       kind: kserve
       kserve:
+        discovery:
+          namespace: org-acme
         target:
           apiServer: https://api.wc1.acme.example.io:6443
           caBundle: |
