@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // ClusterAPIGroup is the API group the clusters and their MachinePools live
@@ -297,18 +298,7 @@ func nestedString(obj *unstructured.Unstructured, path ...string) string {
 	return v
 }
 
-// nestedInt reads an integer field; a JSON-decoded object carries numbers as
-// float64, the API machinery's decoder as int64.
+// nestedInt reads an integer field, whichever decoder produced the object.
 func nestedInt(obj *unstructured.Unstructured, path ...string) int64 {
-	v, found, err := unstructured.NestedFieldNoCopy(obj.Object, path...)
-	if err != nil || !found {
-		return 0
-	}
-	switch n := v.(type) {
-	case int64:
-		return n
-	case float64:
-		return int64(n)
-	}
-	return 0
+	return detect.NestedInt(obj, path...)
 }

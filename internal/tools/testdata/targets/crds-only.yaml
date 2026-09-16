@@ -1,0 +1,22 @@
+# wc1 as its apiserver shows it after the last GPU pool went: Flatcar nodes,
+# the KServe and llmisvc APIs still served — Helm never removes the CRDs the
+# slice's kserve-crd and kserve-llmisvc-crd children installed — and no
+# controller, release or discovery ConfigMap: nothing serves a model.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-def00-a1b2c
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)

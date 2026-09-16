@@ -1,0 +1,24 @@
+# wc1 with KServe installed by hand: the controller Deployment in the kserve
+# namespace (upstream's control-plane label), no HelmRelease of its chart, no
+# discovery ConfigMap.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-controller-manager
+  namespace: kserve
+  labels:
+    control-plane: kserve-controller-manager
+spec:
+  replicas: 1
+status:
+  readyReplicas: 1

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
@@ -68,6 +69,62 @@ func TestDetectGPUOperator(t *testing.T) {
 		got := wc1Cluster(t, l).GPUOperator
 		assert.Equal(t, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderClusterManager, Evidence: []string{"HelmRelease org-acme/wc1-gpu-operator"}}, got,
 			"the release in org-acme targets wc1 through its kubeconfig; the installation side sees it even when the cluster does not")
+	})
+}
+
+// TestDetectServing runs every branch of the serving detection over wc1's
+// apiserver: the platform's chart (its KServe releases and controllers, or
+// its discovery ConfigMap), a controller by hand, the KServe CRDs alone —
+// what Helm leaves behind when a serving layer goes — and nothing.
+func TestDetectServing(t *testing.T) {
+	cases := []struct {
+		fixture  string
+		absent   []schema.GroupVersionResource
+		want     detect.Component
+		evidence []string
+	}{
+		{"chart-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
+			"Deployment agent-platform/kserve-controller-manager (1/1 ready)", "Deployment agent-platform/llmisvc-controller-manager (0/1 ready)",
+			"HelmRelease agent-platform/kserve-llmisvc-resources", "HelmRelease agent-platform/kserve-resources",
+			"KServe API serving.kserve.io/v1beta1 served", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+		{"wc2.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
+			"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+		{"manual-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderManual}, []string{
+			"Deployment kserve/kserve-controller-manager (1/1 ready)", "KServe API serving.kserve.io/v1beta1 served", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+		{"crds-only.yaml", nil, detect.Component{Status: detect.StatusAbsent}, []string{
+			"KServe API serving.kserve.io/v1beta1 served (CRDs only, no controller)", "llmisvc API serving.kserve.io/v1alpha1 served (CRDs only, no controller)"}},
+		{"wc1.yaml", servingAPIs, detect.Component{Status: detect.StatusAbsent}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			l := newLab(t, "installation.yaml").target(t, wc1APIServer, tc.fixture, tc.absent...)
+			got := wc1Cluster(t, l).Serving
+			tc.want.Evidence = tc.evidence
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	t.Run("CRDs alone compose the slice", func(t *testing.T) {
+		l := newLab(t, "installation.yaml").target(t, wc1APIServer, "crds-only.yaml")
+		out, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(context.Background(), l4("wc1", "gpu-l4", true))
+		require.NoError(t, err)
+		assert.Equal(t, detect.StatusAbsent, out.Serving.Status)
+		require.NotNil(t, out.Slice, "the CRDs a serving layer left behind serve no model: the slice is composed")
+		assert.Equal(t, "wc1-agent-platform", out.Slice.Name)
+		require.Len(t, out.Objects, 8, "pool source, Secret, release; operator source, release; slice source, release; backend")
+		assertGolden(t, "serving_crds_only", out.Serving)
+	})
+
+	t.Run("cluster-manager's own slice release", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		svc := l.service(Config{Installation: "gazelle"})
+		_, err := svc.EnableModelServing(context.Background(), serving("wc1", false))
+		require.NoError(t, err)
+		l.target(t, wc1APIServer, "chart-kserve.yaml")
+		got := wc1Cluster(t, l).Serving
+		assert.Equal(t, detect.ProviderClusterManager, got.Provider, "the controllers on the cluster are the slice release's children, whatever their chart label says")
+		assert.Contains(t, got.Evidence, "HelmRelease org-acme/wc1-agent-platform")
+		assert.Contains(t, got.Evidence, "Deployment agent-platform/kserve-controller-manager (1/1 ready)")
 	})
 }
 
@@ -201,6 +258,13 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 	assert.Empty(t, last.SliceKept)
 	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).GPUOperator.Status, "nothing of cluster-manager's remains")
 	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).Serving.Status, "the slice release went with the last pool")
+
+	l.target(t, wc1APIServer, "crds-only.yaml")
+	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).Serving.Status, "the KServe CRDs Helm left behind are not a serving layer")
+	next, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	assert.NotNil(t, next.Slice, "the next pool composes the slice again")
+	assert.NotNil(t, next.Backend, "and registers the backend")
 }
 
 // assertNothingLanded checks that a refused create left no release.

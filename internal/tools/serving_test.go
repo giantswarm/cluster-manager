@@ -160,7 +160,7 @@ func TestDisableModelServing(t *testing.T) {
 	require.NoError(t, err)
 	l.target(t, wc1APIServer, "wc1-serving.yaml")
 	_, err = svc.DisableModelServing(ctx, serving("wc1", false))
-	assertRefused(t, err, "1 model(s) are served on wc1 (LLMInferenceService model-serving/llama-3-8b)")
+	assertRefused(t, err, "2 model(s) are served on wc1 (InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)): unload them first (model-manager's unload_model")
 
 	l.unreachable(wc1APIServer)
 	_, err = svc.DisableModelServing(ctx, serving("wc1", false))

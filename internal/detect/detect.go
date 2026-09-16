@@ -64,7 +64,8 @@ var precedence = map[Provider]int{ProviderChart: 3, ProviderClusterManager: 2, P
 type Component struct {
 	Status   Status   `json:"status"`
 	Provider Provider `json:"provider,omitempty"`
-	// Evidence names the objects the verdict rests on.
+	// Evidence names the objects the verdict rests on — and, on an absent
+	// serving layer, the KServe APIs still served without a controller.
 	Evidence []string `json:"evidence,omitempty"`
 	// Reason says why the status is unknown.
 	Reason string `json:"reason,omitempty"`
@@ -92,6 +93,7 @@ type Target struct {
 // Resources the detection reads on the target.
 var (
 	NodesGVR            = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	DeploymentGVR       = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	AppGVR              = schema.GroupVersionResource{Group: "application.giantswarm.io", Version: "v1alpha1", Resource: "apps"}
 	ClusterPolicyGVR    = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}
 	InferenceServiceGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1beta1", Resource: "inferenceservices"}
@@ -112,6 +114,19 @@ const (
 	GPUResource = "nvidia.com/gpu"
 	// LabelServingConfig marks the model-serving discovery ConfigMap.
 	LabelServingConfig = "agent-platform.giantswarm.io/model-serving-config"
+	// LabelControlPlane is KServe's label on its controller Deployments:
+	// `control-plane: kserve-controller-manager` on the InferenceService
+	// controller, `llmisvc-controller-manager` on the llm-d one.
+	LabelControlPlane = "control-plane"
+	// AnnotationModel is model-manager's annotation on a serving object it
+	// composed: the id of the model it serves.
+	AnnotationModel = "model-manager.giantswarm.io/model"
+	// hfScheme prefixes a Hugging Face repository in a serving object's
+	// storage uri.
+	hfScheme = "hf://"
+	// Flux's labels on every object a HelmRelease installed, naming it.
+	labelFluxReleaseName      = "helm.toolkit.fluxcd.io/name"
+	labelFluxReleaseNamespace = "helm.toolkit.fluxcd.io/namespace"
 )
 
 // GPUOperator reports the GPU operator on the target, in this order of
@@ -213,10 +228,26 @@ func releaseProvider(hr *unstructured.Unstructured) Provider {
 	}
 }
 
-// Serving reports the serving layer on the target: the KServe and llmisvc
-// APIs served, the model-serving discovery ConfigMap (rendered by the
-// platform's chart — or, once cluster-manager's `<cluster>-agent-platform`
-// slice release exists in the cluster's namespace, by that).
+// KServeControllers are the Deployments of the KServe control plane, by
+// their `control-plane` label: the InferenceService controller and the
+// llm-d LLMInferenceService controller (the kserve-resources and
+// kserve-llmisvc-resources charts). One of them on the cluster is what makes
+// serving present; the CRDs alone do not — Helm never removes CRDs, so a
+// serving layer that went leaves them behind, and CRDs serve no model.
+var KServeControllers = []string{"kserve-controller-manager", "llmisvc-controller-manager"}
+
+// KServeCharts are the charts of the KServe controllers, as the platform's
+// release or a hand install names them in a HelmRelease.
+var KServeCharts = []string{"kserve-resources", "kserve-llmisvc-resources"}
+
+// Serving reports the serving layer on the target: present with a KServe
+// controller — one of KServeControllers running, a HelmRelease of
+// KServeCharts, the model-serving discovery ConfigMap the platform's chart
+// renders — or with cluster-manager's own `<cluster>-agent-platform` slice
+// release in the cluster's namespace, whose children they then are. The
+// KServe and llmisvc APIs served are evidence, never the verdict: on their
+// own they are the CRDs a serving layer left behind, and the answer is
+// absent with a note.
 func Serving(ctx context.Context, t Target) Component {
 	var found []finding
 	provider := ProviderManual
@@ -233,14 +264,7 @@ func Serving(ctx context.Context, t Target) Component {
 		}
 		return verdict(found)
 	}
-	for _, api := range []struct {
-		gvr  schema.GroupVersionResource
-		what string
-	}{{InferenceServiceGVR, "KServe API"}, {LLMISVCGVR, "llmisvc API"}} {
-		if _, err := list(ctx, t.Reader, api.gvr, metav1.NamespaceAll, ""); err == nil {
-			found = append(found, finding{provider, api.what + " " + api.gvr.GroupVersion().String() + " served"})
-		}
-	}
+	found = append(found, servingControllers(ctx, t.Reader, provider)...)
 	if cms, err := list(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingConfig+"=true"); err == nil {
 		for i := range cms.Items {
 			cm := &cms.Items[i]
@@ -251,14 +275,119 @@ func Serving(ctx context.Context, t Target) Component {
 			found = append(found, finding{p, fmt.Sprintf("discovery ConfigMap %s/%s", cm.GetNamespace(), cm.GetName())})
 		}
 	}
-	return verdict(found)
+	apis := servedAPIs(ctx, t.Reader)
+	if len(found) == 0 {
+		c := Component{Status: StatusAbsent}
+		for _, api := range apis {
+			c.Evidence = append(c.Evidence, api+" (CRDs only, no controller)")
+		}
+		return c
+	}
+	c := verdict(found)
+	c.Evidence = append(c.Evidence, apis...)
+	sort.Strings(c.Evidence)
+	return c
+}
+
+// servedAPIs names the KServe APIs the target serves.
+func servedAPIs(ctx context.Context, reader dynamic.Interface) []string {
+	var out []string
+	for _, api := range []struct {
+		gvr  schema.GroupVersionResource
+		what string
+	}{{InferenceServiceGVR, "KServe API"}, {LLMISVCGVR, "llmisvc API"}} {
+		if _, err := list(ctx, reader, api.gvr, metav1.NamespaceAll, ""); err == nil {
+			out = append(out, api.what+" "+api.gvr.GroupVersion().String()+" served")
+		}
+	}
+	return out
+}
+
+// servingControllers finds the KServe controllers on the target: the
+// HelmReleases of their charts and the controller Deployments. With
+// cluster-manager's slice release on the cluster (owner) they are its
+// children; otherwise a release rendered by the platform's chart is the
+// chart's, a Deployment is its release's (Flux labels every object it
+// installs with the release), and anything else is a hand install.
+func servingControllers(ctx context.Context, reader dynamic.Interface, owner Provider) []finding {
+	var found []finding
+	releases := map[string]Provider{}
+	if hrs, err := list(ctx, reader, compose.HelmReleaseGVR, metav1.NamespaceAll, ""); err == nil {
+		for i := range hrs.Items {
+			hr := &hrs.Items[i]
+			if !isKServeRelease(hr) {
+				continue
+			}
+			p := owner
+			if p != ProviderClusterManager {
+				p = releaseProvider(hr)
+			}
+			releases[hr.GetNamespace()+"/"+hr.GetName()] = p
+			found = append(found, finding{p, fmt.Sprintf("HelmRelease %s/%s", hr.GetNamespace(), hr.GetName())})
+		}
+	}
+	selector := LabelControlPlane + " in (" + strings.Join(KServeControllers, ",") + ")"
+	if deps, err := list(ctx, reader, DeploymentGVR, metav1.NamespaceAll, selector); err == nil {
+		for i := range deps.Items {
+			d := &deps.Items[i]
+			p := owner
+			if p != ProviderClusterManager {
+				labels := d.GetLabels()
+				if rp, ok := releases[labels[labelFluxReleaseNamespace]+"/"+labels[labelFluxReleaseName]]; ok {
+					p = rp
+				}
+			}
+			ready, replicas := NestedInt(d, "status", "readyReplicas"), NestedInt(d, "spec", "replicas")
+			found = append(found, finding{p, fmt.Sprintf("Deployment %s/%s (%d/%d ready)", d.GetNamespace(), d.GetName(), ready, replicas)})
+		}
+	}
+	return found
+}
+
+// isKServeRelease recognises a HelmRelease of a KServe controller chart by
+// its name, chart label, chart spec or chart source.
+func isKServeRelease(hr *unstructured.Unstructured) bool {
+	chart, _, _ := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "chart")
+	ref, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "name")
+	for _, c := range KServeCharts {
+		if hr.GetName() == c || hr.GetLabels()[compose.LabelChartName] == c || chart == c || ref == c {
+			return true
+		}
+	}
+	return false
+}
+
+// ServedModel is one model served on a target: the serving object and the
+// model it serves, as model-manager names it (its unload_model takes the
+// object's name or the model's id).
+type ServedModel struct {
+	Kind      string
+	Namespace string
+	Name      string
+	// Model is the served model's id: model-manager's annotation on the
+	// object, else the LLMInferenceService's spec.model.name or the
+	// repository of its hf:// uri, else the repository of the
+	// InferenceService's hf:// storageUri; empty when the object names none.
+	Model string
+}
+
+// String names the object and, when known, its model:
+// `LLMInferenceService model-serving/qwen3-4b-instruct (Qwen/Qwen3-4B-Instruct-2507)`.
+func (m ServedModel) String() string {
+	s := m.Kind + " " + m.Namespace + "/" + m.Name
+	if m.Model != "" {
+		s += " (" + m.Model + ")"
+	}
+	return s
 }
 
 // ServedModels lists the models served on the target — every
-// LLMInferenceService and InferenceService, as namespace/name — read as the
-// caller; an API the target does not serve counts as no model of that kind.
-func ServedModels(ctx context.Context, reader dynamic.Interface) ([]string, error) {
-	var out []string
+// LLMInferenceService and InferenceService whatever its readiness: a
+// predictor still Pending holds its GPU node as a Ready one does — read as
+// the caller; an API the target does not serve counts as no model of that
+// kind.
+func ServedModels(ctx context.Context, reader dynamic.Interface) ([]ServedModel, error) {
+	var out []ServedModel
 	for _, gvr := range []schema.GroupVersionResource{LLMISVCGVR, InferenceServiceGVR} {
 		items, err := reader.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -268,11 +397,31 @@ func ServedModels(ctx context.Context, reader dynamic.Interface) ([]string, erro
 			return nil, fmt.Errorf("list %s: %w", gvr.GroupResource(), err)
 		}
 		for i := range items.Items {
-			out = append(out, fmt.Sprintf("%s %s/%s", items.Items[i].GetKind(), items.Items[i].GetNamespace(), items.Items[i].GetName()))
+			obj := &items.Items[i]
+			out = append(out, ServedModel{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Model: modelOf(obj)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out, nil
+}
+
+// modelOf is the model a serving object serves: model-manager's annotation,
+// else the LLMInferenceService's spec.model.name, else the repository of an
+// hf:// uri (spec.model.uri, or the InferenceService's
+// spec.predictor.model.storageUri).
+func modelOf(obj *unstructured.Unstructured) string {
+	if m := obj.GetAnnotations()[AnnotationModel]; m != "" {
+		return m
+	}
+	if m, _, _ := unstructured.NestedString(obj.Object, "spec", "model", "name"); m != "" {
+		return m
+	}
+	for _, path := range [][]string{{"spec", "model", "uri"}, {"spec", "predictor", "model", "storageUri"}} {
+		if uri, _, _ := unstructured.NestedString(obj.Object, path...); strings.HasPrefix(uri, hfScheme) {
+			return strings.TrimPrefix(uri, hfScheme)
+		}
+	}
+	return ""
 }
 
 // Node is one node of the target as the detection and the operator's
@@ -329,6 +478,22 @@ func verdict(found []finding) Component {
 	}
 	sort.Strings(c.Evidence)
 	return c
+}
+
+// NestedInt reads an integer field of an object; the API machinery's decoder
+// carries numbers as int64, a JSON-decoded object as float64. Missing is 0.
+func NestedInt(obj *unstructured.Unstructured, path ...string) int64 {
+	v, found, err := unstructured.NestedFieldNoCopy(obj.Object, path...)
+	if err != nil || !found {
+		return 0
+	}
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+	return 0
 }
 
 // list lists a resource; an API the target does not serve is an error the

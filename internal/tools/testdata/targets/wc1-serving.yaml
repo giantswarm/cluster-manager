@@ -1,5 +1,8 @@
-# wc1 as its apiserver shows it once cluster-manager's slice serves a model:
-# Flatcar nodes, the KServe and llmisvc APIs served, one LLMInferenceService.
+# wc1 as its apiserver shows it once cluster-manager's slice serves models:
+# Flatcar nodes, the KServe and llmisvc APIs served, an LLMInferenceService
+# model-manager composed (its annotation names the model; Pending, as a
+# predictor waiting for its GPU node is) and an InferenceService by hand (the
+# model from its storageUri).
 ---
 apiVersion: v1
 kind: Node
@@ -15,6 +18,28 @@ kind: LLMInferenceService
 metadata:
   name: llama-3-8b
   namespace: model-serving
+  labels:
+    app.kubernetes.io/managed-by: model-manager
+    agent-platform.giantswarm.io/preset: llama-3-8b
+  annotations:
+    model-manager.giantswarm.io/model: meta-llama/Llama-3.1-8B-Instruct
 spec:
   model:
     uri: hf://meta-llama/Llama-3.1-8B-Instruct
+    name: meta-llama/Llama-3.1-8B-Instruct
+  replicas: 1
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: HTTPRoutesNotReady
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: mistral-7b
+  namespace: model-serving
+spec:
+  predictor:
+    model:
+      storageUri: hf://mistralai/Mistral-7B-Instruct-v0.3
