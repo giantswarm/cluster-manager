@@ -475,6 +475,10 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "certificateIssuer": {
+                    "type": "string",
+                    "description": "cert-manager `ClusterIssuer` the `<cluster>-agent-platform` slice release asks for the certificate of `models.<domain>` when the platform's wildcard is not usable: on a workload cluster (another domain) and on the installation's own cluster when the platform's release names no `gatewayApi.gateway.tls.secretName` (TLS terminated at the fleet's edge Gateway, its wildcard in another namespace). `letsencrypt-giantswarm` is the issuer every Giant Swarm cluster runs. Empty composes none — the connectivity chart then refuses a models Gateway without a certificate."
+                },
                 "namespace": {
                     "type": "string",
                     "description": "Namespace on a serving cluster where the InferenceServices go, named as `target.servingNamespace` in the registered `kserve` backend."
@@ -482,10 +486,6 @@
                 "sliceChartVersion": {
                     "type": "string",
                     "description": "Exact `agent-platform` chart version the `<cluster>-agent-platform` slice release pins. Empty pins the version the installation's own platform release runs (at least 4.27.0, the first chart that places the predictors on a tainted GPU pool); set it only for a lab running an unreleased chart."
-                },
-                "certificateIssuer": {
-                    "type": "string",
-                    "description": "cert-manager `ClusterIssuer` the `<cluster>-agent-platform` slice release asks for the certificate of `models.<domain>` when the platform's wildcard is not usable: on a workload cluster and on the installation's own cluster when the platform's release names no `gatewayApi.gateway.tls.secretName`. Empty composes none."
                 }
             }
         },
