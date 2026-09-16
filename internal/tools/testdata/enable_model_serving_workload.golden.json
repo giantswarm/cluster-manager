@@ -88,6 +88,7 @@
         },
         "interval": "10m",
         "releaseName": "wc1-agent-platform",
+        "serviceAccountName": "automation",
         "upgrade": {
           "crds": "CreateReplace",
           "remediation": {

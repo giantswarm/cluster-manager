@@ -73,7 +73,9 @@ type SliceSpec struct {
 	ChartVersion string
 	// OwnCluster marks the installation's own cluster: the release runs
 	// beside the platform's, which owns the Gateway API data plane, so
-	// agentgateway stays off and the domain is the platform's.
+	// agentgateway stays off and the domain is the platform's. Delivery
+	// does not differ: the own cluster's kubeconfig Secret exists like any
+	// cluster's.
 	OwnCluster bool
 	Platform   PlatformInputs
 	// Pool is the GPU pool the predictors are placed on (its name within
@@ -124,12 +126,15 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 }
 
 // Slice renders the `<cluster>-agent-platform` release: an OCIRepository
-// pinning the chart exactly (SliceChartVersion) and a HelmRelease in the cluster's namespace on
-// the installation whose values are the serving-slice profile filled from
-// the platform's inputs. The HelmRelease itself carries no kubeConfig: the
-// meta chart renders the component HelmReleases onto the installation and
-// the target knob in its values (gitops.target.kubeConfig.secretRef) makes
-// the installation's helm-controller install them into a workload cluster.
+// pinning the chart exactly (SliceChartVersion) and a HelmRelease in the
+// cluster's namespace on the installation whose values are the serving-slice
+// profile filled from the platform's inputs. The HelmRelease runs under the
+// org's tenant ServiceAccount (see Delivery in compose.go): the meta chart
+// renders the component HelmReleases into that namespace on the
+// installation, and the target knob in its values
+// (gitops.target.kubeConfig.secretRef) makes the installation's
+// helm-controller install each of them into the cluster through its
+// kubeconfig Secret — the installation's own cluster included.
 func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 	values, err := SliceValues(c, s)
 	if err != nil {
@@ -147,13 +152,16 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 	})
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(SliceChartURL, "tag", version)})
 	spec := helmReleaseSpec(name, true, values)
+	deliverAsTenant(spec, c.TenantServiceAccount)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}, nil
 }
 
 // SliceValues is the release's values: the profile with the installation's
 // inputs layered on. agentgateway is on for a workload cluster (the target
-// runs no controller of its own) and off beside the platform's release; a
-// workload cluster gets the target knob with its kubeconfig Secret. The GPU
+// runs no controller of its own) and off beside the platform's release; every
+// cluster gets the target knob with its kubeconfig Secret, so each child
+// release is kubeconfig-delivered and may install outside the org namespace
+// (see Delivery in compose.go). The GPU
 // pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
 // placement contract, giantswarm/agent-platform#315) and, until a pinned
 // chart carries that key, to modelServing.serving.nodeSelector, the route the
@@ -175,12 +183,10 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(SliceDomain(c, s), "global", "domain"),
 		set(identity, "global", "identity"),
 		set(!s.OwnCluster, "components", "agentgateway", "enabled"),
+		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
 	}
 	if s.OwnCluster && s.Platform.TLSSecretName != "" {
 		steps = append(steps, set(s.Platform.TLSSecretName, "gatewayApi", "gateway", "tls", "secretName"))
-	}
-	if !s.OwnCluster {
-		steps = append(steps, set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"))
 	}
 	if s.Pool != "" {
 		selector := map[string]any{LabelMachinePool: ReleaseName(c.Name, s.Pool)}

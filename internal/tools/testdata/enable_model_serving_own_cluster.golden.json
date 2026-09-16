@@ -72,6 +72,7 @@
         },
         "interval": "10m",
         "releaseName": "gazelle-agent-platform",
+        "serviceAccountName": "automation",
         "upgrade": {
           "crds": "CreateReplace",
           "remediation": {
@@ -148,6 +149,15 @@
             "gateway": {
               "tls": {
                 "secretName": "gazelle-wildcard-tls"
+              }
+            }
+          },
+          "gitops": {
+            "target": {
+              "kubeConfig": {
+                "secretRef": {
+                  "name": "gazelle-kubeconfig"
+                }
               }
             }
           },

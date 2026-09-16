@@ -53,6 +53,19 @@ serving:
   # unreleased chart.
   sliceChartVersion: ""
 
+flux:
+  # -- ServiceAccount in every org namespace the installation's Flux runs a
+  # composed release under when the release's objects live in that namespace:
+  # the pool release (its Cluster API objects) and the `<cluster>-agent-platform`
+  # slice release (its child HelmReleases). Giant Swarm installations enforce the
+  # `flux-multi-tenancy` policy on every HelmRelease in `org-<org>` — a
+  # `serviceAccountName` or a kubeconfig on each —, and `automation` is the org's
+  # tenant ServiceAccount there. A release installing into a cluster (the
+  # `<cluster>-gpu-operator` release, the slice's children) is delivered through
+  # the cluster's `<cluster>-kubeconfig` Secret instead, the installation's own
+  # cluster included. Empty renders none, for a lab without the policy.
+  tenantServiceAccount: automation
+
 mcp:
   # -- Serve the MCP streamable-HTTP endpoint (the server's only surface).
   enabled: true

@@ -50,24 +50,24 @@ func TestDeriveOperatorRow(t *testing.T) {
 }
 
 // TestOperatorGoldens pins the `<cluster>-gpu-operator` release byte for
-// byte: the two rows on a workload cluster (kubeconfig-targeted) and the
-// Flatcar row on the installation's own cluster (plain).
+// byte: the two rows on a workload cluster and the Flatcar row on the
+// installation's own cluster — every one delivered through the cluster's
+// kubeconfig Secret into its kube-system.
 func TestOperatorGoldens(t *testing.T) {
 	own := wc1()
 	own.Name, own.Namespace, own.Organization = "gazelle", "org-giantswarm", "giantswarm"
 	cases := []struct {
-		name       string
-		cluster    Cluster
-		row        OperatorRow
-		ownCluster bool
+		name    string
+		cluster Cluster
+		row     OperatorRow
 	}{
-		{"flatcar-workload", wc1(), RowFlatcar, false},
-		{"preinstalled-workload", wc1(), RowPreinstalled, false},
-		{"flatcar-own-cluster", own, RowFlatcar, true},
+		{"flatcar-workload", wc1(), RowFlatcar},
+		{"preinstalled-workload", wc1(), RowPreinstalled},
+		{"flatcar-own-cluster", own, RowFlatcar},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			objs := Operator(tc.cluster, tc.row, tc.ownCluster)
+			objs := Operator(tc.cluster, tc.row)
 			assertGolden(t, "operator-"+tc.name, objs)
 			require.Len(t, objs, 2)
 			source, release := objs[0], objs[1]
@@ -77,11 +77,10 @@ func TestOperatorGoldens(t *testing.T) {
 			assert.Equal(t, tc.cluster.Name, release.GetOwnerReferences()[0].Name, "owned by the Cluster in apply mode")
 			semver, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "semver")
 			assert.Equal(t, OperatorChartRange, semver, "the operator follows the 1.x line")
-			kubeconfig, found, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
-			assert.Equal(t, !tc.ownCluster, found, "kubeconfig-targeted exactly on a workload cluster")
-			if found {
-				assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), kubeconfig)
-			}
+			kubeconfig, _, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
+			assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), kubeconfig, "into kube-system through the cluster's kubeconfig, own cluster included")
+			_, hasSA, _ := unstructured.NestedString(release.Object, "spec", "serviceAccountName")
+			assert.False(t, hasSA, "the kubeconfig is the identity")
 			driver, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "driver", "enabled")
 			toolkit, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "toolkit", "enabled")
 			assert.Equal(t, tc.row, OperatorRow{Name: tc.row.Name, Driver: driver, Toolkit: toolkit})

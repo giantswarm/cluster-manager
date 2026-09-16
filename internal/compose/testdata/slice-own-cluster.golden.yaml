@@ -42,6 +42,7 @@ spec:
       retries: 3
   interval: 10m
   releaseName: gazelle-agent-platform
+  serviceAccountName: automation
   upgrade:
     crds: CreateReplace
     remediation:
@@ -94,6 +95,11 @@ spec:
       gateway:
         tls:
           secretName: gazelle-wildcard-tls
+    gitops:
+      target:
+        kubeConfig:
+          secretRef:
+            name: gazelle-kubeconfig
     global:
       domain: gazelle.example.io
       identity:

@@ -101,6 +101,16 @@
             "type": "array",
             "description": "Image pull secrets."
         },
+        "flux": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "tenantServiceAccount": {
+                    "type": "string",
+                    "description": "ServiceAccount in every org namespace the installation's Flux runs a composed release under when the release's objects live in that namespace (the pool release, the `<cluster>-agent-platform` slice release); `automation` is the org's tenant ServiceAccount on Giant Swarm installations. Empty renders none."
+                }
+            }
+        },
         "installation": {
             "type": "object",
             "additionalProperties": false,

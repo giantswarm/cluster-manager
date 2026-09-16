@@ -21,8 +21,8 @@ func platform() PlatformInputs {
 // TestSliceGoldens pins the `<cluster>-agent-platform` release byte for
 // byte: the slice beside the platform's release on the installation's own
 // cluster (agentgateway off, the platform's domain and certificate), onto a
-// workload cluster with a pool (kubeconfig target knob, agentgateway on,
-// the pool's label as node selector), and onto a workload cluster without a
+// workload cluster with a pool (agentgateway on, the pool's label as node
+// selector), and onto a workload cluster without a
 // pool (enable_model_serving before any pool).
 func TestSliceGoldens(t *testing.T) {
 	own := wc1()
@@ -51,6 +51,8 @@ func TestSliceGoldens(t *testing.T) {
 			assert.Equal(t, platform().ChartVersion, tag, "the slice pins the version the platform's release runs")
 			_, hasKubeconfig, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
 			assert.False(t, hasKubeconfig, "the meta chart's own HelmRelease stays on the installation; the target knob is in its values")
+			sa, _, _ := unstructured.NestedString(release.Object, "spec", "serviceAccountName")
+			assert.Equal(t, DefaultTenantServiceAccount, sa, "the meta chart's Flux objects live in the org namespace: delivered as the tenant")
 
 			values, _, _ := unstructured.NestedMap(release.Object, "spec", "values")
 			domain, _, _ := unstructured.NestedString(values, "global", "domain")
@@ -64,11 +66,8 @@ func TestSliceGoldens(t *testing.T) {
 			assert.False(t, modelManager, "one model-manager per installation")
 			agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
 			assert.Equal(t, !tc.spec.OwnCluster, agentgateway)
-			target, hasTarget, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
-			assert.Equal(t, !tc.spec.OwnCluster, hasTarget, "the target knob exactly on a workload cluster")
-			if hasTarget {
-				assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), target)
-			}
+			target, _, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
+			assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), target, "the target knob on every cluster: each child release is kubeconfig-delivered")
 			tls, hasTLS, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
 			assert.Equal(t, tc.spec.OwnCluster, hasTLS, "the platform's wildcard certificate covers models.<domain> only on its own cluster")
 			if hasTLS {

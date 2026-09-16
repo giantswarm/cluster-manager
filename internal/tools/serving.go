@@ -272,7 +272,7 @@ func chartOf(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstru
 // cluster: its identity and, on a workload cluster, the base domain from
 // its values (the models host is models.<cluster>.<base domain>).
 func (s *Service) sliceCluster(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (compose.Cluster, error) {
-	facts := compose.Cluster{Name: c.GetName(), Namespace: c.GetNamespace(), Organization: organization(c), UID: string(c.GetUID())}
+	facts := s.identity(c)
 	if s.ownCluster(c) {
 		return facts, nil
 	}
