@@ -4,7 +4,8 @@ The Agent Platform's MCP-only cluster write surface — the installation's clust
 
 The chart deploys one Deployment that serves the MCP streamable-HTTP endpoint
 under `/mcp` — cluster-manager's only surface. Its tools (`get_info`,
-`list_clusters`, `list_node_pools`, `create_node_pool`, `delete_node_pool`) read the
+`list_clusters`, `list_node_pools`, `create_node_pool`, `delete_node_pool`,
+`enable_model_serving`, `disable_model_serving`) read the
 installation's Cluster API objects, Flux HelmReleases and Giant Swarm Releases.
 
 With `oauth.enabled` the server is an mcp-oauth resource server: muster
@@ -32,7 +33,7 @@ from the platform identity contract (`global.identity`, `global.domain`).
 | nameOverride | string | `""` | Override the chart name. |
 | fullnameOverride | string | `""` | Override the fully qualified app name. |
 | installation.name | string | `""` | Name of the installation. `list_clusters` reports the Cluster of that name as the installation's own cluster (its management cluster); empty marks none. |
-| modelManager.namespace | string | `"agent-platform"` | Namespace model-manager runs in on the installation. `create_node_pool` registers the serving cluster's `kserve` backend there by writing the `model-backend-kserve` ConfigMap of model-manager's runtime-registration contract; `delete_node_pool` of the cluster's last pool removes it. |
+| modelManager.namespace | string | `"agent-platform"` | Namespace model-manager runs in on the installation. `create_node_pool` registers the serving cluster's `kserve` backend there by writing the `model-backend-kserve` ConfigMap of model-manager's runtime-registration contract; `delete_node_pool` of the cluster's last pool removes it; `enable_model_serving` and `disable_model_serving` register and remove it too. |
 | serving.namespace | string | `"model-serving"` | Namespace on a serving cluster where the InferenceServices go, named as `target.servingNamespace` in the registered `kserve` backend. |
 | mcp.enabled | bool | `true` | Serve the MCP streamable-HTTP endpoint (the server's only surface). |
 | mcp.path | string | `"/mcp"` | MCP endpoint path. |

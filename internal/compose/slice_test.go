@@ -1,0 +1,104 @@
+package compose
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+func platform() PlatformInputs {
+	return PlatformInputs{
+		Domain:        "gazelle.example.io",
+		Identity:      map[string]any{"issuerUrl": "https://dex.gazelle.example.io", "clientId": "dex-k8s-authenticator", "existingSecret": "agent-platform-identity"},
+		TLSSecretName: "gazelle-wildcard-tls",
+	}
+}
+
+// TestSliceGoldens pins the `<cluster>-agent-platform` release byte for
+// byte: the slice beside the platform's release on the installation's own
+// cluster (agentgateway off, the platform's domain and certificate), onto a
+// workload cluster with a pool (kubeconfig target knob, agentgateway on,
+// the pool's label as node selector), and onto a workload cluster without a
+// pool (enable_model_serving before any pool).
+func TestSliceGoldens(t *testing.T) {
+	own := wc1()
+	own.Name, own.Namespace, own.Organization, own.UID = "gazelle", "org-giantswarm", "giantswarm", "6f1c0c1e-8a4a-4c1e-9c3a-000000000000"
+	cases := []struct {
+		name    string
+		cluster Cluster
+		spec    SliceSpec
+		domain  string
+	}{
+		{"own-cluster", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l4"}, "gazelle.example.io"},
+		{"workload", wc1(), SliceSpec{Platform: platform(), Pool: "gpu-l4"}, "wc1.acme.example.io"},
+		{"workload-no-pool", wc1(), SliceSpec{Platform: platform()}, "wc1.acme.example.io"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			objs, err := Slice(tc.cluster, tc.spec)
+			require.NoError(t, err)
+			assertGolden(t, "slice-"+tc.name, objs)
+			require.Len(t, objs, 2)
+			source, release := objs[0], objs[1]
+			assert.Equal(t, SliceReleaseName(tc.cluster.Name), release.GetName())
+			assert.Equal(t, SliceChart, release.GetLabels()[LabelChartName])
+			assert.Equal(t, tc.cluster.Name, release.GetOwnerReferences()[0].Name, "owned by the Cluster in apply mode")
+			tag, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "tag")
+			assert.Equal(t, DefaultSliceChartVersion, tag, "the slice pins the chart exactly")
+			_, hasKubeconfig, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
+			assert.False(t, hasKubeconfig, "the meta chart's own HelmRelease stays on the installation; the target knob is in its values")
+
+			values, _, _ := unstructured.NestedMap(release.Object, "spec", "values")
+			domain, _, _ := unstructured.NestedString(values, "global", "domain")
+			assert.Equal(t, tc.domain, domain)
+			assert.Equal(t, "models."+tc.domain, ModelsHost(domain))
+			identity, _, _ := unstructured.NestedMap(values, "global", "identity")
+			assert.Equal(t, platform().Identity, identity, "the platform's identity as its release has it")
+			flux, _, _ := unstructured.NestedBool(values, "components", "flux", "enabled")
+			assert.False(t, flux, "the installation's Flux delivers")
+			modelManager, _, _ := unstructured.NestedBool(values, "components", "model-manager", "enabled")
+			assert.False(t, modelManager, "one model-manager per installation")
+			agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
+			assert.Equal(t, !tc.spec.OwnCluster, agentgateway)
+			target, hasTarget, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
+			assert.Equal(t, !tc.spec.OwnCluster, hasTarget, "the target knob exactly on a workload cluster")
+			if hasTarget {
+				assert.Equal(t, KubeconfigSecretName(tc.cluster.Name), target)
+			}
+			tls, hasTLS, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
+			assert.Equal(t, tc.spec.OwnCluster, hasTLS, "the platform's wildcard certificate covers models.<domain> only on its own cluster")
+			if hasTLS {
+				assert.Equal(t, "gazelle-wildcard-tls", tls)
+			}
+			for _, component := range ServingComponents[:6] {
+				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
+				assert.True(t, on, component)
+			}
+			runtimeClass, _, _ := unstructured.NestedString(values, "modelServing", "serving", "runtimeClassName")
+			assert.Equal(t, "nvidia", runtimeClass)
+			selector, hasSelector, _ := unstructured.NestedMap(values, "modelServing", "gpuPool", "nodeSelector")
+			assert.Equal(t, tc.spec.Pool != "", hasSelector)
+			if hasSelector {
+				assert.Equal(t, map[string]any{LabelMachinePool: tc.cluster.Name + "-" + tc.spec.Pool}, selector)
+				serving, _, _ := unstructured.NestedMap(values, "modelServing", "serving", "nodeSelector")
+				assert.Equal(t, selector, serving, "the same selector on the route the pinned chart honours")
+			}
+			assert.False(t, OtherSliceOn(values), "the serving slice alone")
+		})
+	}
+}
+
+func TestSliceRefusesWithoutDomain(t *testing.T) {
+	_, err := Slice(wc1(), SliceSpec{})
+	require.ErrorContains(t, err, "global.domain is empty")
+}
+
+func TestOtherSliceOn(t *testing.T) {
+	values, err := SliceValues(wc1(), SliceSpec{Platform: platform()})
+	require.NoError(t, err)
+	assert.False(t, OtherSliceOn(values))
+	require.NoError(t, unstructured.SetNestedField(values, true, "components", "kagent", "enabled"))
+	assert.True(t, OtherSliceOn(values), "the runtime slice shares the release")
+}

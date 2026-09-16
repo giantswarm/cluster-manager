@@ -218,6 +218,15 @@
     "status": "absent"
   },
   "operatorRow": "pre-installed",
+  "serving": {
+    "status": "present",
+    "provider": "chart",
+    "evidence": [
+      "KServe API serving.kserve.io/v1beta1 served",
+      "discovery ConfigMap agent-platform/agent-platform-model-serving",
+      "llmisvc API serving.kserve.io/v1alpha1 served"
+    ]
+  },
   "backend": {
     "kind": "kserve",
     "namespace": "agent-platform",

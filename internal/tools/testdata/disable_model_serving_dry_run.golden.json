@@ -1,22 +1,28 @@
 {
   "cluster": "wc1",
   "namespace": "org-acme",
-  "pool": "gpu-a10g",
   "mode": "apply",
   "dryRun": true,
   "objects": [
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
-      "name": "wc1-gpu-a10g",
+      "name": "wc1-agent-platform",
       "namespace": "org-acme",
       "action": "would-delete"
     },
     {
       "apiVersion": "source.toolkit.fluxcd.io/v1",
       "kind": "OCIRepository",
-      "name": "wc1-gpu-a10g",
+      "name": "wc1-agent-platform",
       "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
       "action": "would-delete"
     }
   ],
@@ -25,6 +31,5 @@
   },
   "serving": {
     "status": ""
-  },
-  "lastPool": true
+  }
 }

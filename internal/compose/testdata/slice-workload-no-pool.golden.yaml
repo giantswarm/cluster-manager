@@ -1,0 +1,108 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    app.kubernetes.io/name: agent-platform
+    giantswarm.io/cluster: wc1
+  name: wc1-agent-platform
+  namespace: org-acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: wc1
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+spec:
+  interval: 10m
+  ref:
+    tag: 4.25.0
+  url: oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    app.kubernetes.io/name: agent-platform
+    giantswarm.io/cluster: wc1
+  name: wc1-agent-platform
+  namespace: org-acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: wc1
+    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-agent-platform
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  interval: 10m
+  releaseName: wc1-agent-platform
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    components:
+      agent-manager:
+        enabled: false
+      agent-platform-mcps:
+        enabled: false
+      agentgateway:
+        enabled: true
+      backstage:
+        enabled: false
+      dicebear:
+        enabled: false
+      flux:
+        enabled: false
+      kagent:
+        enabled: false
+      kagent-crds:
+        enabled: false
+      klaus-gateway:
+        enabled: false
+      kserve-crd:
+        enabled: true
+      kserve-llmisvc-crd:
+        enabled: true
+      kserve-llmisvc-resources:
+        enabled: true
+      kserve-resources:
+        enabled: true
+      kserve-runtime-configs:
+        enabled: true
+      mcp-kubernetes:
+        enabled: false
+      model-manager:
+        enabled: false
+      modelServing:
+        enabled: true
+      muster:
+        enabled: false
+      substrate:
+        enabled: false
+      substrate-crds:
+        enabled: false
+      valkey:
+        enabled: false
+    gitops:
+      target:
+        kubeConfig:
+          secretRef:
+            name: wc1-kubeconfig
+    global:
+      domain: wc1.acme.example.io
+      identity:
+        clientId: dex-k8s-authenticator
+        existingSecret: agent-platform-identity
+        issuerUrl: https://dex.gazelle.example.io
+    modelServing:
+      modelsGateway:
+        enabled: true
+      serving:
+        runtimeClassName: nvidia

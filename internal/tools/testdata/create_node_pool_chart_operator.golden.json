@@ -200,6 +200,14 @@
       "node wc1-gpu-1 labelled nvidia.com/gpu.present=true"
     ]
   },
+  "serving": {
+    "status": "present",
+    "provider": "manual",
+    "evidence": [
+      "KServe API serving.kserve.io/v1beta1 served",
+      "llmisvc API serving.kserve.io/v1alpha1 served"
+    ]
+  },
   "backend": {
     "kind": "kserve",
     "namespace": "agent-platform",

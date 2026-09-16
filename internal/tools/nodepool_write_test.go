@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 func l4(cluster, name string, dryRun bool) CreateNodePoolInput {
@@ -31,7 +32,7 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
 	assert.Equal(t, "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
 	assert.Equal(t, "0.3.0", out.ChartVersion)
-	require.Len(t, out.Objects, 6, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the backend ConfigMap")
+	require.Len(t, out.Objects, 8, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the slice's OCIRepository and HelmRelease; the backend ConfigMap")
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
 	for _, o := range out.Objects {
 		assert.Equal(t, "would-create", o.Action, o.Kind)
@@ -58,7 +59,9 @@ func TestCreateNodePoolAppLayoutNoTeleport(t *testing.T) {
 	assert.Equal(t, map[string]any{"driver": map[string]any{"enabled": false}, "toolkit": map[string]any{"enabled": true}}, operator)
 	proxy, _, _ := unstructured.NestedMap(values, "cluster", "proxy")
 	assert.Equal(t, "10.0.0.0/8,.acme.example.io", proxy["noProxy"])
-	require.Len(t, out.Objects, 5, "no credentials: no Secret")
+	require.Len(t, out.Objects, 5, "no credentials: no Secret; the platform's release serves wc2: no slice")
+	assert.Equal(t, detect.ProviderChart, out.Serving.Provider)
+	assert.Nil(t, out.Slice, "a chart-provided serving layer is never re-created")
 	assertGolden(t, "create_node_pool_app_layout", out)
 }
 
@@ -71,7 +74,7 @@ func TestCreateNodePoolIdempotent(t *testing.T) {
 
 	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create"}, actions(out))
+	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create", "create", "create"}, actions(out))
 	hr, err := lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-l4", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "wc1", hr.GetOwnerReferences()[0].Name, "owned by the Cluster")
@@ -79,13 +82,13 @@ func TestCreateNodePoolIdempotent(t *testing.T) {
 
 	again, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(again))
+	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(again))
 
 	bigger := l4("wc1", "gpu-l4", true)
 	bigger.Pool.MaxGPUs = 8
 	drift, err := svc.CreateNodePool(ctx, bigger)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"unchanged", "unchanged", "would-update", "unchanged", "unchanged", "unchanged"}, actions(drift), "only the pool release changes; its source and Secret, the operator and the backend stand")
+	assert.Equal(t, []string{"unchanged", "unchanged", "would-update", "unchanged", "unchanged", "unchanged", "unchanged", "unchanged"}, actions(drift), "only the pool release changes; its source and Secret, the operator, the slice and the backend stand")
 	assert.Equal(t, []string{"spec.values.pool.maxSize.nvidia.com/gpu"}, drift.Objects[2].Changes, "the dry-run is the drift check")
 
 	bigger.DryRun = false

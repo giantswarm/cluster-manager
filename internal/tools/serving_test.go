@@ -1,0 +1,182 @@
+package tools
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
+)
+
+func serving(cluster string, dryRun bool) ModelServingInput {
+	return ModelServingInput{Cluster: cluster, Mode: ModeApply, DryRun: dryRun}
+}
+
+// TestEnableModelServingOwnCluster composes the slice beside the platform's
+// release on the installation's own cluster: the platform's domain,
+// identity and wildcard certificate, agentgateway off, no target knob, the
+// backend as the local target. No pool exists: no node selector.
+func TestEnableModelServingOwnCluster(t *testing.T) {
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	out, err := svc.EnableModelServing(context.Background(), serving("gazelle", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-create", "would-create", "would-create"}, actions(out), "slice source, release; backend")
+	assert.Equal(t, &SliceRelease{Name: "gazelle-agent-platform", Namespace: "org-giantswarm", ChartVersion: compose.DefaultSliceChartVersion, Domain: "gazelle.example.io", ModelsHost: "models.gazelle.example.io"}, out.Slice)
+	assert.Equal(t, compose.BackendTargetLocal, out.Backend.Target)
+	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
+	agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
+	assert.False(t, agentgateway, "the platform's release owns the Gateway API data plane of its own cluster")
+	_, hasTarget, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
+	assert.False(t, hasTarget)
+	tls, _, _ := unstructured.NestedString(values, "gatewayApi", "gateway", "tls", "secretName")
+	assert.Equal(t, "gazelle-wildcard-tls", tls, "from the platform's inline values")
+	issuer, _, _ := unstructured.NestedString(values, "global", "identity", "issuerUrl")
+	assert.Equal(t, "https://dex.gazelle.example.io", issuer, "from the platform's valuesFrom ConfigMap")
+	assertGolden(t, "enable_model_serving_own_cluster", out)
+}
+
+// TestEnableModelServingWorkload composes the slice onto wc1 before any
+// pool of this call: the one pool release wc1 has (gpu-a10g) pins the
+// predictors, the target knob names the kubeconfig Secret, agentgateway is
+// on; applied, the re-run is unchanged and list_clusters reports serving
+// present through cluster-manager.
+func TestEnableModelServingWorkload(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	dry, err := svc.EnableModelServing(ctx, serving("wc1", true))
+	require.NoError(t, err)
+	assert.Equal(t, "gpu-a10g", dry.Slice.GPUPool)
+	assert.Equal(t, "models.wc1.acme.example.io", dry.Slice.ModelsHost, "models.<cluster>.<base domain>")
+	values, _, _ := unstructured.NestedMap(dry.Manifests[1], "spec", "values")
+	target, _, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
+	assert.Equal(t, "wc1-kubeconfig", target)
+	agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
+	assert.True(t, agentgateway, "a workload cluster runs no controller of its own")
+	assertGolden(t, "enable_model_serving_workload", dry)
+
+	out, err := svc.EnableModelServing(ctx, serving("wc1", false))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"create", "create", "create"}, actions(out))
+	again, err := svc.EnableModelServing(ctx, serving("wc1", false))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged"}, actions(again), "idempotent")
+	assert.Equal(t, detect.ProviderClusterManager, again.Serving.Provider)
+	assert.Equal(t, detect.ProviderClusterManager, wc1Cluster(t, l).Serving.Provider, "list_clusters: serving present through cluster-manager")
+}
+
+// TestCreateNodePoolUpdatesTheSliceInPlace: with the slice on wc1 from
+// enable_model_serving, a second pool makes create_node_pool update the one
+// release — its dry-run names the changed paths (the selector goes: two
+// pools) — and never composes a second release of the chart.
+func TestCreateNodePoolUpdatesTheSliceInPlace(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.EnableModelServing(ctx, serving("wc1", false))
+	require.NoError(t, err)
+
+	drift, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-create", "would-create", "would-create", "would-create", "would-create", "unchanged", "would-update", "unchanged"}, actions(drift), "pool and operator new; the slice's source stands, its release updates; the backend stands")
+	assert.Equal(t, []string{"spec.values.modelServing.gpuPool.nodeSelector.giantswarm.io/machine-pool", "spec.values.modelServing.serving.nodeSelector.giantswarm.io/machine-pool"}, drift.Objects[6].Changes)
+	assertGolden(t, "create_node_pool_updates_slice", drift)
+
+	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
+	require.NoError(t, err)
+	assert.Equal(t, "update", out.Objects[6].Action)
+	hrs, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").List(ctx, metav1.ListOptions{LabelSelector: compose.LabelChartName + "=" + compose.SliceChart})
+	require.NoError(t, err)
+	assert.Len(t, hrs.Items, 1, "one release of the chart per cluster")
+}
+
+// TestEnableModelServingRefusals: a chart-provided serving layer (wc2), a
+// release of the chart under another name, an unreadable cluster. Nothing
+// lands.
+func TestEnableModelServingRefusals(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+
+	_, err := svc.EnableModelServing(ctx, serving("wc2", false))
+	assertRefused(t, err, "provided by the platform's own release")
+
+	other := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"name": "wc1-model-serving", "namespace": "org-acme", "labels": map[string]any{
+			compose.LabelChartName: compose.SliceChart, compose.LabelCluster: "wc1", "kustomize.toolkit.fluxcd.io/name": "workload-clusters",
+		}},
+		"spec": map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "wc1-model-serving"}},
+	}}
+	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Create(ctx, other, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = svc.EnableModelServing(ctx, serving("wc1", false))
+	assertRefused(t, err, "already has a release of the agent-platform chart under another name (HelmRelease org-acme/wc1-model-serving, is owned by GitOps (Flux Kustomization workload-clusters))")
+	assertNothingLanded(t, l, "wc1-agent-platform")
+	require.NoError(t, l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Delete(ctx, "wc1-model-serving", metav1.DeleteOptions{}))
+
+	l.unreachable(wc1APIServer)
+	_, err = svc.EnableModelServing(ctx, serving("wc1", false))
+	assertRefused(t, err, "cannot tell whether serving runs on wc1")
+	assertNothingLanded(t, l, "wc1-agent-platform")
+}
+
+// TestDisableModelServing: refused while a model is served (named), plainly
+// when the cluster is unreadable; force removes the slice and the backend;
+// a second call finds nothing.
+func TestDisableModelServing(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.DisableModelServing(ctx, serving("wc1", false))
+	var notFound *ErrNotFound
+	require.ErrorAs(t, err, &notFound)
+
+	_, err = svc.EnableModelServing(ctx, serving("wc1", false))
+	require.NoError(t, err)
+	l.target(t, wc1APIServer, "wc1-serving.yaml")
+	_, err = svc.DisableModelServing(ctx, serving("wc1", false))
+	assertRefused(t, err, "1 model(s) are served on wc1 (LLMInferenceService model-serving/llama-3-8b)")
+
+	l.unreachable(wc1APIServer)
+	_, err = svc.DisableModelServing(ctx, serving("wc1", false))
+	assertRefused(t, err, "cannot tell whether models are served on wc1")
+
+	dry, err := svc.DisableModelServing(ctx, ModelServingInput{Cluster: "wc1", Mode: ModeApply, Force: true, DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-delete", "would-delete", "would-delete"}, actions(dry), "release, source, backend")
+	assertGolden(t, "disable_model_serving_dry_run", dry)
+
+	out, err := svc.DisableModelServing(ctx, ModelServingInput{Cluster: "wc1", Mode: ModeApply, Force: true})
+	require.NoError(t, err)
+	assert.Len(t, out.Objects, 3)
+	_, err = svc.DisableModelServing(ctx, serving("wc1", false))
+	require.ErrorAs(t, err, &notFound, "nothing left to remove")
+}
+
+// TestDeleteLastPoolKeepsASharedSlice: a slice release carrying another
+// slice (the runtime slice's kagent on) stays when the last pool goes, and
+// the backend registration with it.
+func TestDeleteLastPoolKeepsASharedSlice(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.EnableModelServing(ctx, serving("wc1", false))
+	require.NoError(t, err)
+	hr, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-agent-platform", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(hr.Object, true, "spec", "values", "components", "kagent", "enabled"))
+	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Update(ctx, hr, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
+	require.NoError(t, err)
+	assert.True(t, out.LastPool)
+	assert.Equal(t, "org-acme/wc1-agent-platform", out.SliceKept)
+	assert.Equal(t, []string{"would-delete", "would-delete"}, actions(out), "pool release and source (no operator of cluster-manager's on wc1 here); the slice and the backend stay")
+}

@@ -112,8 +112,6 @@ const (
 	GPUResource = "nvidia.com/gpu"
 	// LabelServingConfig marks the model-serving discovery ConfigMap.
 	LabelServingConfig = "agent-platform.giantswarm.io/model-serving-config"
-	// SliceReleaseSuffix names cluster-manager's serving slice release.
-	SliceReleaseSuffix = "-agent-platform"
 )
 
 // GPUOperator reports the GPU operator on the target, in this order of
@@ -223,7 +221,7 @@ func Serving(ctx context.Context, t Target) Component {
 	var found []finding
 	provider := ProviderManual
 	if t.Installation != nil {
-		hr, err := t.Installation.Resource(compose.HelmReleaseGVR).Namespace(t.Namespace).Get(ctx, t.Cluster+SliceReleaseSuffix, metav1.GetOptions{})
+		hr, err := t.Installation.Resource(compose.HelmReleaseGVR).Namespace(t.Namespace).Get(ctx, compose.SliceReleaseName(t.Cluster), metav1.GetOptions{})
 		if err == nil && compose.OwnedBy(hr) {
 			provider = ProviderClusterManager
 			found = append(found, finding{provider, "HelmRelease " + t.Namespace + "/" + hr.GetName()})
@@ -254,6 +252,27 @@ func Serving(ctx context.Context, t Target) Component {
 		}
 	}
 	return verdict(found)
+}
+
+// ServedModels lists the models served on the target — every
+// LLMInferenceService and InferenceService, as namespace/name — read as the
+// caller; an API the target does not serve counts as no model of that kind.
+func ServedModels(ctx context.Context, reader dynamic.Interface) ([]string, error) {
+	var out []string
+	for _, gvr := range []schema.GroupVersionResource{LLMISVCGVR, InferenceServiceGVR} {
+		items, err := reader.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				continue
+			}
+			return nil, fmt.Errorf("list %s: %w", gvr.GroupResource(), err)
+		}
+		for i := range items.Items {
+			out = append(out, fmt.Sprintf("%s %s/%s", items.Items[i].GetKind(), items.Items[i].GetNamespace(), items.Items[i].GetName()))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Node is one node of the target as the detection and the operator's
