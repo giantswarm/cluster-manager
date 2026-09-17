@@ -97,7 +97,9 @@
         {
           "name": "nodes",
           "state": "done",
-          "message": "2 node(s) ready (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002)"
+          "since": "2026-09-16T10:02:00Z",
+          "finishedAt": "2026-09-16T10:02:00Z",
+          "message": "2 node(s) ready (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002), 2 idle since 2026-09-16T12:30:00Z (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2): delete_node_pool removes an idle node with the pool"
         }
       ]
     }

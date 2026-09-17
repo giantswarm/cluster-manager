@@ -6,6 +6,20 @@
   "dryRun": true,
   "objects": [
     {
+      "apiVersion": "karpenter.sh/v1",
+      "kind": "NodeClaim",
+      "name": "wc1-gpu-a10g-k7m2p",
+      "namespace": "",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "karpenter.sh/v1",
+      "kind": "NodeClaim",
+      "name": "wc1-gpu-a10g-q9x4z",
+      "namespace": "",
+      "action": "would-delete"
+    },
+    {
       "apiVersion": "source.toolkit.fluxcd.io/v1",
       "kind": "OCIRepository",
       "name": "wc1-gpu-a10g",

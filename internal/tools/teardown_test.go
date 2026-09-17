@@ -161,7 +161,8 @@ func stuckChild(t *testing.T, l *lab) {
 	require.NoError(t, err)
 }
 
-// emptyPool scales wc1's pool to zero, so a delete needs no force.
+// emptyPool scales wc1's pool to zero on the installation: with the cluster
+// not readable, the MachinePool's replicas are all the nodes guard has.
 func emptyPool(t *testing.T, l *lab) {
 	t.Helper()
 	ctx := context.Background()
@@ -243,7 +244,6 @@ func TestDeleteLastPoolTearsDownInOrder(t *testing.T) {
 	l, svc := servingLab(t, "wc1-configs.yaml")
 	l.controllerRuns(t, wc1APIServer)
 	fluxUninstallsController(t, l, 2)
-	emptyPool(t, l)
 	ctx := context.Background()
 
 	dry := deleteLastPool(t, svc, ctx, false, true)
@@ -315,7 +315,6 @@ func TestDeleteLastPoolPurgesTheConfigsThroughTheStorageVersion(t *testing.T) {
 	fluxUninstallsController(t, l, 1)
 	moreConfigs(t, l, 7)
 	conversionWebhookGoesWithTheController(t, l)
-	emptyPool(t, l)
 	ctx := context.Background()
 	require.Len(t, remainingConfigs(t, l), 10)
 
@@ -356,7 +355,6 @@ func TestDeleteLastPoolWithForceTakesTheSameOrder(t *testing.T) {
 // clear the finalizer, so the configs go without a wait.
 func TestDeleteLastPoolWithoutAControllerStripsTheConfigs(t *testing.T) {
 	l, svc := servingLab(t, "wc1-configs.yaml")
-	emptyPool(t, l)
 	out := deleteLastPool(t, svc, context.Background(), false, false)
 	assert.Equal(t, orderedTeardown, objectNames(out))
 	assert.Empty(t, remainingConfigs(t, l))
@@ -371,7 +369,6 @@ func TestDeleteLastPoolWithoutAControllerStripsTheConfigs(t *testing.T) {
 func TestDeleteLastPoolAnswersPartialWhileTheControllerLingers(t *testing.T) {
 	l, svc := servingLab(t, "wc1-configs.yaml")
 	l.controllerRuns(t, wc1APIServer)
-	emptyPool(t, l)
 	ctx, cancel := context.WithTimeout(context.Background(), writeReserve+300*time.Millisecond)
 	defer cancel()
 
@@ -400,7 +397,6 @@ func TestDeleteLastPoolAnswersPartialWhileTheControllerLingers(t *testing.T) {
 func TestDeleteLastPoolCutAfterSomeWritesAnswersPartial(t *testing.T) {
 	const slow, head = 500 * time.Millisecond, 800 * time.Millisecond
 	l, svc := servingLab(t, "wc1-configs.yaml")
-	emptyPool(t, l)
 	var slowWrites atomic.Bool
 	slowWrites.Store(true)
 	fakeInstallation(t, l).PrependReactor("delete", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -435,7 +431,6 @@ func TestDeleteLastPoolRetriesAStuckChildRelease(t *testing.T) {
 	l, svc := servingLab(t, "wc1-configs.yaml")
 	l.controllerRuns(t, wc1APIServer)
 	fluxUninstallsController(t, l, 1)
-	emptyPool(t, l)
 	stuckChild(t, l)
 
 	assert.Contains(t, wc1Cluster(t, l).Serving.Evidence, "HelmRelease org-acme/kserve-runtime-configs not Ready (deleted since 2026-09-17T07:41:45Z, Ready=False [UninstallFailed] Helm uninstall failed for release org-acme/kserve-runtime-configs.v1 with chart kserve-runtime-configs@0.2.4: failed to delete release: kserve-runtime-configs)")

@@ -173,11 +173,11 @@ func TestListClustersAndNodePools(t *testing.T) {
 // structured block answers two text contents — the message, then the block
 // as JSON — so the portal renders it without parsing prose.
 func TestErrResultRefused(t *testing.T) {
-	res := errResult(&tools.ErrRefused{Reason: "node pool x still runs 1 node(s)", Refused: &tools.Refused{Nodes: []string{"aws:///a/i-1"}, Models: []string{}, Hint: "h"}})
+	res := errResult(&tools.ErrRefused{Reason: "node pool x still runs 1 busy node(s)", Refused: &tools.Refused{Nodes: []string{"ip-10-0-1-1"}, Idle: []string{"ip-10-0-1-2"}, Models: []string{}, Hint: "h", ReadFrom: "cluster"}})
 	assert.True(t, res.IsError)
 	require.Len(t, res.Content, 2)
-	assert.Equal(t, "node pool x still runs 1 node(s)", res.Content[0].(mcp.TextContent).Text)
-	assert.JSONEq(t, `{"refused":{"nodes":["aws:///a/i-1"],"models":[],"hint":"h"}}`, res.Content[1].(mcp.TextContent).Text)
+	assert.Equal(t, "node pool x still runs 1 busy node(s)", res.Content[0].(mcp.TextContent).Text)
+	assert.JSONEq(t, `{"refused":{"nodes":["ip-10-0-1-1"],"idle":["ip-10-0-1-2"],"models":[],"hint":"h","readFrom":"cluster"}}`, res.Content[1].(mcp.TextContent).Text)
 
 	plain := errResult(&tools.ErrRefused{Reason: "mode commit is not available"})
 	assert.True(t, plain.IsError)
