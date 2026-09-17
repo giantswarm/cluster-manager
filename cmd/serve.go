@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/giantswarm/cluster-manager/internal/api"
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/kube"
+	"github.com/giantswarm/cluster-manager/internal/registry"
 	"github.com/giantswarm/cluster-manager/internal/server"
 	"github.com/giantswarm/cluster-manager/internal/tools"
 )
@@ -121,6 +123,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			return target.Dynamic, nil
 		},
 		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, ApplyBudget: o.applyBudget},
+		// The platform's charts from their registry, anonymously: what the
+		// slice would install is read from there before it exists.
+		tools.WithChartReader(&registry.Client{HTTP: &http.Client{Timeout: 20 * time.Second}}),
 	)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}

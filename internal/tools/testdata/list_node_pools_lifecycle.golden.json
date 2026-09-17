@@ -39,6 +39,47 @@
         "g5.xlarge"
       ],
       "accelerator": "nvidia-a10g",
+      "sizes": [
+        {
+          "instanceType": "g5.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.258,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g5.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.5156,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g5.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 2.03081,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-a10g",
         "namespace": "org-acme"
@@ -69,6 +110,47 @@
       "readyReplicas": 0,
       "instanceTypes": [],
       "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 1.65466,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-gone",
         "namespace": "org-acme"
@@ -115,6 +197,47 @@
       "readyReplicas": 0,
       "instanceTypes": [],
       "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 1.65466,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-half",
         "namespace": "org-acme"
@@ -161,6 +284,47 @@
       "readyReplicas": 0,
       "instanceTypes": [],
       "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 1.65466,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-new",
         "namespace": "org-acme"
@@ -195,6 +359,47 @@
         "g6.xlarge"
       ],
       "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 1.65466,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-term",
         "namespace": "org-acme"
@@ -233,6 +438,47 @@
         "g6.xlarge"
       ],
       "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 1.65466,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
       "ownerRelease": {
         "name": "wc1-gpu-zero",
         "namespace": "org-acme"
