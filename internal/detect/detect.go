@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -349,6 +350,11 @@ func sliceChildrenNotReady(ctx context.Context, installation dynamic.Interface, 
 			if message := strings.Join(strings.Fields(ready.Message), " "); message != "" {
 				detail += " " + message
 			}
+		}
+		if deleted := hr.GetDeletionTimestamp(); deleted != nil {
+			// A child whose uninstall failed stays, deleted, until Flux's
+			// retry succeeds (giantswarm/cluster-manager#37).
+			detail = "deleted since " + deleted.UTC().Format(time.RFC3339) + ", " + detail
 		}
 		out = append(out, fmt.Sprintf("HelmRelease %s/%s not Ready (%s)", hr.GetNamespace(), hr.GetName(), detail))
 	}

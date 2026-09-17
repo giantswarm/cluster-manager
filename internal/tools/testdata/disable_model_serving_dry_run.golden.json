@@ -5,10 +5,10 @@
   "dryRun": true,
   "objects": [
     {
-      "apiVersion": "helm.toolkit.fluxcd.io/v2",
-      "kind": "HelmRelease",
-      "name": "wc1-agent-platform",
-      "namespace": "org-acme",
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
       "action": "would-delete"
     },
     {
@@ -19,10 +19,10 @@
       "action": "would-delete"
     },
     {
-      "apiVersion": "v1",
-      "kind": "ConfigMap",
-      "name": "model-backend-kserve",
-      "namespace": "agent-platform",
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc1-agent-platform",
+      "namespace": "org-acme",
       "action": "would-delete"
     }
   ],

@@ -8,20 +8,6 @@
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
-      "name": "wc1-gpu-a10g",
-      "namespace": "org-acme",
-      "action": "would-delete"
-    },
-    {
-      "apiVersion": "source.toolkit.fluxcd.io/v1",
-      "kind": "OCIRepository",
-      "name": "wc1-gpu-a10g",
-      "namespace": "org-acme",
-      "action": "would-delete"
-    },
-    {
-      "apiVersion": "helm.toolkit.fluxcd.io/v2",
-      "kind": "HelmRelease",
       "name": "wc1-gpu-operator",
       "namespace": "org-acme",
       "action": "would-delete"
@@ -30,20 +16,6 @@
       "apiVersion": "source.toolkit.fluxcd.io/v1",
       "kind": "OCIRepository",
       "name": "wc1-gpu-operator",
-      "namespace": "org-acme",
-      "action": "would-delete"
-    },
-    {
-      "apiVersion": "helm.toolkit.fluxcd.io/v2",
-      "kind": "HelmRelease",
-      "name": "wc1-agent-platform",
-      "namespace": "org-acme",
-      "action": "would-delete"
-    },
-    {
-      "apiVersion": "source.toolkit.fluxcd.io/v1",
-      "kind": "OCIRepository",
-      "name": "wc1-agent-platform",
       "namespace": "org-acme",
       "action": "would-delete"
     },
@@ -52,6 +24,34 @@
       "kind": "ConfigMap",
       "name": "model-backend-kserve",
       "namespace": "agent-platform",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "wc1-agent-platform",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc1-agent-platform",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
       "action": "would-delete"
     }
   ],

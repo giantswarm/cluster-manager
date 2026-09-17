@@ -82,22 +82,17 @@ type Config struct {
 	// release names no gatewayApi.gateway.tls.secretName):
 	// `letsencrypt-giantswarm` on Giant Swarm clusters; empty composes none.
 	CertificateIssuer string
-	// ConfigTeardownTimeout bounds how long a teardown of the serving slice
-	// waits for the llm-d controller to clear the well-known
-	// LLMInferenceServiceConfigs after their release went, before it removes
-	// them itself (giantswarm/cluster-manager#28); zero is
-	// DefaultConfigTeardownTimeout.
-	ConfigTeardownTimeout time.Duration
-	// ApplyBudget is how long an apply (create_node_pool,
-	// enable_model_serving) may take from its start before it stops writing
-	// and answers with what it wrote, the rest pending: the aggregator's
-	// deadline for an upstream tool call less the answer's way back
-	// (giantswarm/cluster-manager#34). A deadline the request itself carries
-	// wins when it is earlier. Zero is DefaultApplyBudget.
+	// ApplyBudget is how long a write call (create_node_pool,
+	// enable_model_serving, delete_node_pool, disable_model_serving) may
+	// take from its start before it stops writing and answers with what it
+	// did, the rest pending: the aggregator's deadline for an upstream tool
+	// call less the answer's way back (giantswarm/cluster-manager#34, #37).
+	// A deadline the request itself carries wins when it is earlier. Zero
+	// is DefaultApplyBudget.
 	ApplyBudget time.Duration
 }
 
-// DefaultApplyBudget is the apply budget: muster cancels an upstream tool
+// DefaultApplyBudget is the write budget: muster cancels an upstream tool
 // call at about ten seconds; two of them are the answer's.
 const DefaultApplyBudget = 8 * time.Second
 
