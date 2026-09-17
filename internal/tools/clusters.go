@@ -150,8 +150,14 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 		serving.Component, serving.Readiness = detect.ServingState(gctx, target.Target)
 		return nil
 	})
-	g.Go(func() error { serving.Readiness.Backend = s.backendState(gctx, dyn, c.GetName()); return nil })
+	// The backend is read on the installation beside the target reads and
+	// joins the serving readiness after the wait: assigned into it while
+	// ServingState assigns the whole struct, it was lost whenever the
+	// target reads finished last (giantswarm/cluster-manager#41).
+	var backend detect.BackendState
+	g.Go(func() error { backend = s.backendState(gctx, dyn, c.GetName()); return nil })
 	_ = g.Wait()
+	serving.Readiness.Backend = backend
 	return Cluster{
 		Name:           c.GetName(),
 		Namespace:      c.GetNamespace(),
@@ -168,13 +174,18 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 }
 
 // backendState says whether model-manager's kserve backend document is
-// registered for the cluster, and where it is.
+// registered for the cluster, and where it is; a read failure is answered
+// as such, with registered unknown.
 func (s *Service) backendState(ctx context.Context, dyn dynamic.Interface, cluster string) detect.BackendState {
 	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
-	if err != nil || !registered {
-		return detect.BackendState{}
+	if err != nil {
+		return detect.BackendState{Error: err.Error()}
 	}
-	return detect.BackendState{Registered: true, Namespace: s.cfg.ModelManagerNamespace, Name: compose.BackendConfigMapName}
+	state := detect.BackendState{Registered: &registered}
+	if registered {
+		state.Namespace, state.Name = s.cfg.ModelManagerNamespace, compose.BackendConfigMapName
+	}
+	return state
 }
 
 func poolRelease(hr *unstructured.Unstructured) PoolRelease {
