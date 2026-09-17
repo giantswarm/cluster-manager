@@ -6,10 +6,26 @@
     "releaseVersion": "31.0.0",
     "ownCluster": false,
     "gpuOperator": {
-      "status": "absent"
+      "status": "absent",
+      "readiness": {
+        "release": null,
+        "clusterPolicy": null,
+        "operands": []
+      }
     },
     "serving": {
-      "status": "absent"
+      "status": "absent",
+      "readiness": {
+        "release": null,
+        "children": [],
+        "controllers": [],
+        "configs": null,
+        "backend": {
+          "registered": false
+        },
+        "presets": null,
+        "modelsGateway": null
+      }
     },
     "poolReleases": [
       {
@@ -28,7 +44,12 @@
     "releaseVersion": "30.1.0",
     "ownCluster": false,
     "gpuOperator": {
-      "status": "absent"
+      "status": "absent",
+      "readiness": {
+        "release": null,
+        "clusterPolicy": null,
+        "operands": []
+      }
     },
     "serving": {
       "status": "present",
@@ -37,7 +58,20 @@
         "KServe API serving.kserve.io/v1beta1 served",
         "discovery ConfigMap agent-platform/agent-platform-model-serving",
         "llmisvc API serving.kserve.io/v1alpha1 served"
-      ]
+      ],
+      "readiness": {
+        "release": null,
+        "children": [],
+        "controllers": [],
+        "configs": null,
+        "backend": {
+          "registered": false
+        },
+        "presets": {
+          "count": 3
+        },
+        "modelsGateway": null
+      }
     },
     "poolReleases": [
       {
@@ -56,10 +90,26 @@
     "releaseVersion": "31.0.0",
     "ownCluster": true,
     "gpuOperator": {
-      "status": "absent"
+      "status": "absent",
+      "readiness": {
+        "release": null,
+        "clusterPolicy": null,
+        "operands": []
+      }
     },
     "serving": {
-      "status": "absent"
+      "status": "absent",
+      "readiness": {
+        "release": null,
+        "children": [],
+        "controllers": [],
+        "configs": null,
+        "backend": {
+          "registered": false
+        },
+        "presets": null,
+        "modelsGateway": null
+      }
     },
     "poolReleases": [],
     "commitTarget": null

@@ -80,7 +80,7 @@ func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		tools.ClusterGVR: "ClusterList", tools.MachinePoolGVR: "MachinePoolList", tools.HelmReleaseGVR: "HelmReleaseList", tools.ReleaseGVR: "ReleaseList",
 		tools.AppGVR: "AppList", tools.ConfigMapGVR: "ConfigMapList", compose.SecretGVR: "SecretList", compose.OCIRepositoryGVR: "OCIRepositoryList",
-		detect.NodesGVR: "NodeList", detect.DeploymentGVR: "DeploymentList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.InferenceServiceGVR: "InferenceServiceList", detect.LLMISVCGVR: "LLMInferenceServiceList", detect.LLMISVCConfigResource.WithVersion("v1alpha2"): "LLMInferenceServiceConfigList",
+		detect.NodesGVR: "NodeList", detect.DeploymentGVR: "DeploymentList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.InferenceServiceGVR: "InferenceServiceList", detect.LLMISVCGVR: "LLMInferenceServiceList", detect.LLMISVCConfigResource.WithVersion("v1alpha2"): "LLMInferenceServiceConfigList", detect.DaemonSetGVR: "DaemonSetList", detect.NodeClaimGVR: "NodeClaimList", detect.GatewayGVR: "GatewayList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
 	svc := tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"})
 	return &handlersServer{NewMCPServer(svc, "test")}
@@ -167,4 +167,19 @@ func TestListClustersAndNodePools(t *testing.T) {
 	text, isErr = callTool(t, srv, ToolListNodePools, nil)
 	require.True(t, isErr, "cluster is required")
 	assert.Contains(t, text, "cluster")
+}
+
+// TestErrResultRefused (giantswarm/cluster-manager#41): a refusal with a
+// structured block answers two text contents — the message, then the block
+// as JSON — so the portal renders it without parsing prose.
+func TestErrResultRefused(t *testing.T) {
+	res := errResult(&tools.ErrRefused{Reason: "node pool x still runs 1 node(s)", Refused: &tools.Refused{Nodes: []string{"aws:///a/i-1"}, Models: []string{}, Hint: "h"}})
+	assert.True(t, res.IsError)
+	require.Len(t, res.Content, 2)
+	assert.Equal(t, "node pool x still runs 1 node(s)", res.Content[0].(mcp.TextContent).Text)
+	assert.JSONEq(t, `{"refused":{"nodes":["aws:///a/i-1"],"models":[],"hint":"h"}}`, res.Content[1].(mcp.TextContent).Text)
+
+	plain := errResult(&tools.ErrRefused{Reason: "mode commit is not available"})
+	assert.True(t, plain.IsError)
+	assert.Len(t, plain.Content, 1, "a refusal without a block stays one text")
 }

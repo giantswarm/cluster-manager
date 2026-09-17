@@ -1,0 +1,264 @@
+{
+  "cluster": "wc1",
+  "namespace": "org-acme",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "wc1-def00",
+      "namespace": "org-acme",
+      "version": "v1.30.8",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 3,
+      "readyReplicas": 2,
+      "instanceTypes": [
+        "m5.xlarge"
+      ],
+      "ownerRelease": null,
+      "phase": "scaling",
+      "steps": [
+        {
+          "name": "machinePool",
+          "state": "done"
+        },
+        {
+          "name": "nodes",
+          "state": "inProgress",
+          "message": "2 of 3 node(s) ready"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 2,
+      "readyReplicas": 2,
+      "instanceTypes": [
+        "g5.2xlarge",
+        "g5.xlarge"
+      ],
+      "accelerator": "nvidia-a10g",
+      "ownerRelease": {
+        "name": "wc1-gpu-a10g",
+        "namespace": "org-acme"
+      },
+      "phase": "ready",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done"
+        },
+        {
+          "name": "machinePool",
+          "state": "done"
+        },
+        {
+          "name": "nodes",
+          "state": "done",
+          "message": "2 node(s) ready (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002)"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-gone",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l4",
+      "ownerRelease": {
+        "name": "wc1-gpu-gone",
+        "namespace": "org-acme"
+      },
+      "phase": "removing",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-17T06:00:40Z",
+          "finishedAt": "2026-09-17T06:00:40Z"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-17T06:02:10Z",
+          "finishedAt": "2026-09-17T06:02:10Z"
+        },
+        {
+          "name": "nodes",
+          "state": "done",
+          "since": "2026-09-17T06:02:10Z",
+          "finishedAt": "2026-09-17T06:02:10Z",
+          "message": "0 nodes: scale-to-zero, a node launches with the first predictor"
+        }
+      ],
+      "deleting": true,
+      "pending": [
+        {
+          "apiVersion": "helm.toolkit.fluxcd.io/v2",
+          "kind": "HelmRelease",
+          "name": "wc1-gpu-gone",
+          "namespace": "org-acme",
+          "action": "terminating"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-half",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l4",
+      "ownerRelease": {
+        "name": "wc1-gpu-half",
+        "namespace": "org-acme"
+      },
+      "phase": "removing",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-17T05:00:40Z",
+          "finishedAt": "2026-09-17T05:00:40Z"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-17T05:02:10Z",
+          "finishedAt": "2026-09-17T05:02:10Z"
+        },
+        {
+          "name": "nodes",
+          "state": "done",
+          "since": "2026-09-17T05:02:10Z",
+          "finishedAt": "2026-09-17T05:02:10Z",
+          "message": "0 nodes: scale-to-zero, a node launches with the first predictor"
+        }
+      ],
+      "deleting": true,
+      "pending": [
+        {
+          "apiVersion": "helm.toolkit.fluxcd.io/v2",
+          "kind": "HelmRelease",
+          "name": "wc1-gpu-half",
+          "namespace": "org-acme",
+          "action": "pending"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-new",
+      "namespace": "org-acme",
+      "version": "",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l4",
+      "ownerRelease": {
+        "name": "wc1-gpu-new",
+        "namespace": "org-acme"
+      },
+      "phase": "creating",
+      "steps": [
+        {
+          "name": "release",
+          "state": "inProgress",
+          "since": "2026-09-17T09:00:05Z",
+          "message": "Running 'install' action with timeout of 5m0s"
+        },
+        {
+          "name": "machinePool",
+          "state": "pending",
+          "message": "MachinePool not created yet"
+        },
+        {
+          "name": "nodes",
+          "state": "pending"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-term",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 1,
+      "readyReplicas": 1,
+      "instanceTypes": [
+        "g6.xlarge"
+      ],
+      "accelerator": "nvidia-l4",
+      "ownerRelease": {
+        "name": "wc1-gpu-term",
+        "namespace": "org-acme"
+      },
+      "phase": "scaling",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-17T07:00:40Z",
+          "finishedAt": "2026-09-17T07:00:40Z"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-17T07:02:10Z",
+          "finishedAt": "2026-09-17T07:02:10Z"
+        },
+        {
+          "name": "nodes",
+          "state": "inProgress",
+          "since": "2026-09-17T09:40:00Z",
+          "message": "0 NodeClaim(s) launching, 0 ready, 1 terminating"
+        }
+      ]
+    },
+    {
+      "name": "wc1-gpu-zero",
+      "namespace": "org-acme",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [
+        "g6.2xlarge",
+        "g6.xlarge"
+      ],
+      "accelerator": "nvidia-l4",
+      "ownerRelease": {
+        "name": "wc1-gpu-zero",
+        "namespace": "org-acme"
+      },
+      "phase": "ready",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-17T08:00:40Z",
+          "finishedAt": "2026-09-17T08:00:40Z"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-17T08:02:10Z",
+          "finishedAt": "2026-09-17T08:02:10Z"
+        },
+        {
+          "name": "nodes",
+          "state": "done",
+          "since": "2026-09-17T08:02:10Z",
+          "finishedAt": "2026-09-17T08:02:10Z",
+          "message": "0 nodes: scale-to-zero, a node launches with the first predictor"
+        }
+      ]
+    }
+  ]
+}

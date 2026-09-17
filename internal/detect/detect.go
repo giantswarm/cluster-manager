@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -165,13 +164,30 @@ const (
 // gpu-operator chart (cluster-manager's own, or by hand), a ClusterPolicy,
 // GPU labels or resources on nodes.
 func GPUOperator(ctx context.Context, t Target) Component {
-	var found []finding
-	found = append(found, operatorReleases(ctx, t)...)
+	c, _ := GPUOperatorState(ctx, t)
+	return c
+}
+
+// GPUOperatorState is GPUOperator's verdict with the operator's readiness
+// beside it: the provider's release and its Ready condition, the
+// ClusterPolicy's status.state, and the device plugin and GPU feature
+// discovery DaemonSets' scheduled and ready pods (0/0 at scale-to-zero).
+func GPUOperatorState(ctx context.Context, t Target) (Component, OperatorReadiness) {
+	releases := operatorReleases(ctx, t)
+	found := make([]finding, 0, len(releases))
+	r := OperatorReadiness{Operands: []OperandState{}}
+	for _, rel := range releases {
+		found = append(found, rel.finding)
+		if r.Release == nil || precedence[rel.provider] > precedence[r.releaseProvider] {
+			state := NewReleaseState(rel.hr)
+			r.Release, r.releaseProvider = &state, rel.provider
+		}
+	}
 	if t.Reader == nil {
 		if len(found) == 0 {
-			return Unknown(t.Reason)
+			return Unknown(t.Reason), r
 		}
-		return verdict(found)
+		return verdict(found), r
 	}
 	if apps, err := list(ctx, t.Reader, AppGVR, metav1.NamespaceAll, ""); err == nil {
 		for i := range apps.Items {
@@ -183,12 +199,16 @@ func GPUOperator(ctx context.Context, t Target) Component {
 	}
 	if policies, err := list(ctx, t.Reader, ClusterPolicyGVR, "", ""); err == nil {
 		for i := range policies.Items {
-			found = append(found, finding{ProviderManual, "ClusterPolicy " + policies.Items[i].GetName()})
+			policy := &policies.Items[i]
+			found = append(found, finding{ProviderManual, "ClusterPolicy " + policy.GetName()})
+			state, _, _ := unstructured.NestedString(policy.Object, "status", "state")
+			r.ClusterPolicy = &ClusterPolicyState{Name: policy.GetName(), State: state}
 		}
 	}
+	r.Operands = operands(ctx, t.Reader)
 	nodes, err := Nodes(ctx, t.Reader)
 	if err != nil && len(found) == 0 {
-		return Unknown("nodes of " + t.Cluster + " not readable: " + err.Error())
+		return Unknown("nodes of " + t.Cluster + " not readable: " + err.Error()), r
 	}
 	for _, n := range nodes {
 		if n.Labels[LabelGPUPresent] == "true" {
@@ -197,15 +217,21 @@ func GPUOperator(ctx context.Context, t Target) Component {
 			found = append(found, finding{ProviderManual, fmt.Sprintf("node %s advertises %s", n.Name, GPUResource)})
 		}
 	}
-	return verdict(found)
+	return verdict(found), r
+}
+
+// release is a HelmRelease found by the detection with its finding.
+type release struct {
+	finding
+	hr *unstructured.Unstructured
 }
 
 // operatorReleases lists the HelmReleases of the gpu-operator chart: on the
 // target itself (the platform's component, an install by hand) and, from
 // the installation, the releases in the cluster's namespace that target it
 // through its kubeconfig (cluster-manager's own among them).
-func operatorReleases(ctx context.Context, t Target) []finding {
-	var found []finding
+func operatorReleases(ctx context.Context, t Target) []release {
+	var found []release
 	seen := map[string]bool{}
 	add := func(hr *unstructured.Unstructured) {
 		key := hr.GetNamespace() + "/" + hr.GetName()
@@ -213,7 +239,7 @@ func operatorReleases(ctx context.Context, t Target) []finding {
 			return
 		}
 		seen[key] = true
-		found = append(found, finding{releaseProvider(hr), "HelmRelease " + key})
+		found = append(found, release{finding{releaseProvider(hr), "HelmRelease " + key}, hr})
 	}
 	if t.Reader != nil {
 		if hrs, err := list(ctx, t.Reader, compose.HelmReleaseGVR, metav1.NamespaceAll, ""); err == nil {
@@ -279,27 +305,44 @@ var KServeCharts = []string{"kserve-resources", "kserve-llmisvc-resources"}
 // own they are the CRDs a serving layer left behind, and the answer is
 // absent with a note.
 func Serving(ctx context.Context, t Target) Component {
+	c, _ := ServingState(ctx, t)
+	return c
+}
+
+// ServingState is Serving's verdict with the layer's readiness beside it:
+// cluster-manager's slice release and every child of it with their Ready
+// conditions, the KServe controllers' available replicas, the counts of
+// LLMInferenceServiceConfigs in the release namespace and of published
+// serving presets, and the models Gateway's Programmed condition. The backend
+// registration is the caller's to fill in (it lives in model-manager's
+// namespace on the installation).
+func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 	var found []finding
-	var children []string
+	r := ServingReadiness{Children: []ReleaseState{}, Controllers: []ControllerState{}}
 	provider := ProviderManual
 	if t.Installation != nil {
 		hr, err := t.Installation.Resource(compose.HelmReleaseGVR).Namespace(t.Namespace).Get(ctx, compose.SliceReleaseName(t.Cluster), metav1.GetOptions{})
 		if err == nil && compose.OwnedBy(hr) {
 			provider = ProviderClusterManager
 			found = append(found, finding{provider, "HelmRelease " + t.Namespace + "/" + hr.GetName()})
-			children = sliceChildrenNotReady(ctx, t.Installation, t.Namespace, hr.GetName())
+			state := NewReleaseState(hr)
+			r.Release = &state
+			r.Children = sliceChildren(ctx, t.Installation, t.Namespace, hr.GetName())
 		}
 	}
+	children := childEvidence(r.Children)
 	if t.Reader == nil {
 		if len(found) == 0 {
-			return Unknown(t.Reason)
+			return Unknown(t.Reason), r
 		}
 		c := verdict(found)
 		c.Evidence = append(c.Evidence, children...)
 		sort.Strings(c.Evidence)
-		return c
+		return c, r
 	}
-	found = append(found, servingControllers(ctx, t.Reader, provider)...)
+	controllers, states := servingControllers(ctx, t.Reader, provider)
+	found = append(found, controllers...)
+	r.Controllers = states
 	if cms, err := list(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingConfig+"=true"); err == nil {
 		for i := range cms.Items {
 			cm := &cms.Items[i]
@@ -318,79 +361,57 @@ func Serving(ctx context.Context, t Target) Component {
 			c.Evidence = append(c.Evidence, api+" (CRDs only, no controller)")
 		}
 		c.Evidence = append(c.Evidence, stranded...)
-		return c
+		return c, r
 	}
+	if gvr, served, err := ConfigsGVR(ctx, t.Reader); err == nil && served {
+		r.Configs = count(ctx, t.Reader, gvr, t.Namespace, "")
+	}
+	r.Presets = count(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingPreset+"=true")
+	r.ModelsGateway = modelsGateway(ctx, t.Reader)
 	c := verdict(found)
 	c.Evidence = append(c.Evidence, apis...)
 	c.Evidence = append(c.Evidence, stranded...)
 	c.Evidence = append(c.Evidence, children...)
 	sort.Strings(c.Evidence)
-	return c
+	return c, r
 }
 
-// sliceChildrenNotReady names the children of the slice release that are not
-// Ready — the component HelmReleases the meta chart renders into the slice's
-// namespace on the installation, labelled by Flux as the release's — with
-// their Ready condition's reason and message, the child's own account of
-// what failed. The meta release reports Ready whether or not a child
-// installed: on gazelle the connectivity child failed its render and the
-// slice served no models Gateway while serving read present
-// (giantswarm/cluster-manager#30). Nothing when every child is Ready.
-func sliceChildrenNotReady(ctx context.Context, installation dynamic.Interface, namespace, release string) []string {
+// sliceChildren reads the children of the slice release — the component
+// HelmReleases the meta chart renders into the slice's namespace on the
+// installation, labelled by Flux as the release's — with their Ready
+// conditions, sorted by name. The meta release reports Ready whether or not
+// a child installed: on gazelle the connectivity child failed its render and
+// the slice served no models Gateway while serving read present
+// (giantswarm/cluster-manager#30); a child whose uninstall failed stays,
+// deleted, until Flux's retry succeeds (giantswarm/cluster-manager#37).
+func sliceChildren(ctx context.Context, installation dynamic.Interface, namespace, release string) []ReleaseState {
+	out := []ReleaseState{}
 	selector := fmt.Sprintf("%s=%s,%s=%s", LabelFluxReleaseName, release, LabelFluxReleaseNamespace, namespace)
 	hrs, err := list(ctx, installation, compose.HelmReleaseGVR, namespace, selector)
 	if err != nil {
-		return nil
+		return out
 	}
-	var out []string
 	for i := range hrs.Items {
-		hr := &hrs.Items[i]
-		ready, found := ReadyCondition(hr)
-		if found && ready.Status == "True" {
-			continue
-		}
-		detail := "no Ready condition yet"
-		if found {
-			detail = "Ready=" + ready.Status
-			if ready.Reason != "" {
-				detail += " [" + ready.Reason + "]"
-			}
-			if message := strings.Join(strings.Fields(ready.Message), " "); message != "" {
-				detail += " " + message
-			}
-		}
-		if deleted := hr.GetDeletionTimestamp(); deleted != nil {
-			// A child whose uninstall failed stays, deleted, until Flux's
-			// retry succeeds (giantswarm/cluster-manager#37).
-			detail = "deleted since " + deleted.UTC().Format(time.RFC3339) + ", " + detail
-		}
-		out = append(out, fmt.Sprintf("HelmRelease %s/%s not Ready (%s)", hr.GetNamespace(), hr.GetName(), detail))
+		out = append(out, NewReleaseState(&hrs.Items[i]))
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
 // Condition is one entry of an object's status.conditions.
 type Condition struct {
+	Type    string
 	Status  string
 	Reason  string
 	Message string
+	// LastTransitionTime is the condition's, as written (RFC3339).
+	LastTransitionTime string
 }
 
 // ReadyCondition reads the Ready condition of an object's status.conditions;
 // found is false when it has none.
 func ReadyCondition(obj *unstructured.Unstructured) (ready Condition, found bool) {
-	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, c := range conds {
-		m, ok := c.(map[string]any)
-		if !ok || m["type"] != "Ready" {
-			continue
-		}
-		ready.Status, _ = m["status"].(string)
-		ready.Reason, _ = m["reason"].(string)
-		ready.Message, _ = m["message"].(string)
-		return ready, true
-	}
-	return Condition{}, false
+	return condition(obj, "Ready")
 }
 
 // strandedEvidence names the LLMInferenceServiceConfigs terminating in the
@@ -517,8 +538,9 @@ func servedAPIs(ctx context.Context, reader dynamic.Interface) []string {
 // children; otherwise a release rendered by the platform's chart is the
 // chart's, a Deployment is its release's (Flux labels every object it
 // installs with the release), and anything else is a hand install.
-func servingControllers(ctx context.Context, reader dynamic.Interface, owner Provider) []finding {
+func servingControllers(ctx context.Context, reader dynamic.Interface, owner Provider) ([]finding, []ControllerState) {
 	var found []finding
+	states := []ControllerState{}
 	releases := map[string]Provider{}
 	if hrs, err := list(ctx, reader, compose.HelmReleaseGVR, metav1.NamespaceAll, ""); err == nil {
 		for i := range hrs.Items {
@@ -547,9 +569,11 @@ func servingControllers(ctx context.Context, reader dynamic.Interface, owner Pro
 			}
 			ready, replicas := NestedInt(d, "status", "readyReplicas"), NestedInt(d, "spec", "replicas")
 			found = append(found, finding{p, fmt.Sprintf("Deployment %s/%s (%d/%d ready)", d.GetNamespace(), d.GetName(), ready, replicas)})
+			states = append(states, ControllerState{Name: d.GetName(), Namespace: d.GetNamespace(), Available: ready, Replicas: replicas})
 		}
 	}
-	return found
+	sort.Slice(states, func(i, j int) bool { return states[i].Name < states[j].Name })
+	return found, states
 }
 
 // isKServeRelease recognises a HelmRelease of a KServe controller chart by

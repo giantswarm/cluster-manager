@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 
+	"golang.org/x/sync/errgroup"
+	"k8s.io/client-go/dynamic"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -29,8 +32,8 @@ type Cluster struct {
 	OwnCluster bool `json:"ownCluster"`
 	// GPUOperator and Serving say whether the component is present and who
 	// provides it.
-	GPUOperator detect.Component `json:"gpuOperator"`
-	Serving     detect.Component `json:"serving"`
+	GPUOperator GPUOperatorComponent `json:"gpuOperator"`
+	Serving     ServingComponent     `json:"serving"`
 	// PoolReleases are the GPU pool releases (HelmReleases of the
 	// gpu-node-pool chart) of the cluster.
 	PoolReleases []PoolRelease `json:"poolReleases"`
@@ -38,6 +41,21 @@ type Cluster struct {
 	// (from its Flux provenance), null when the cluster has none or commit
 	// mode is not available.
 	CommitTarget *CommitTarget `json:"commitTarget"`
+}
+
+// GPUOperatorComponent is the GPU operator's detection with its readiness:
+// the operator release, the ClusterPolicy's state, the operands' pods.
+type GPUOperatorComponent struct {
+	detect.Component
+	Readiness detect.OperatorReadiness `json:"readiness"`
+}
+
+// ServingComponent is the serving layer's detection with its readiness: the
+// slice release and its children, the controllers, the configs, the backend
+// registration, the presets, the models Gateway.
+type ServingComponent struct {
+	detect.Component
+	Readiness detect.ServingReadiness `json:"readiness"`
 }
 
 // PoolRelease is one GPU pool release of a cluster.
@@ -50,6 +68,8 @@ type PoolRelease struct {
 	// Ready mirrors the HelmRelease's Ready condition; null until it reports
 	// one.
 	Ready *bool `json:"ready"`
+	// Deleting: the release carries a deletionTimestamp (a removal under way).
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 // CommitTarget is where commit mode would write a cluster's files.
@@ -96,25 +116,16 @@ func (s *Service) ListClusters(ctx context.Context) (*ClusterList, error) {
 		pools[key] = append(pools[key], poolRelease(hr))
 	}
 
-	out := make([]Cluster, 0, len(clusters.Items))
+	out := make([]Cluster, len(clusters.Items))
+	g, gctx := errgroup.WithContext(ctx)
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		key := c.GetNamespace() + "/" + c.GetName()
-		target := s.target(ctx, dyn, c)
-		out = append(out, Cluster{
-			Name:           c.GetName(),
-			Namespace:      c.GetNamespace(),
-			Organization:   organization(c),
-			ReleaseVersion: c.GetLabels()[LabelReleaseVersion],
-			OwnCluster:     s.ownCluster(c),
-			GPUOperator:    detect.GPUOperator(ctx, target.Target),
-			Serving:        detect.Serving(ctx, target.Target),
-			PoolReleases:   sortedPools(pools[key]),
-			// TODO(giantswarm/giantswarm#37637, commit mode): repository and
-			// path from the Flux provenance of the cluster's owning object.
-			CommitTarget: nil,
+		g.Go(func() error {
+			out[i] = s.cluster(gctx, dyn, c, sortedPools(pools[c.GetNamespace()+"/"+c.GetName()]))
+			return nil
 		})
 	}
+	_ = g.Wait()
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
@@ -124,12 +135,54 @@ func (s *Service) ListClusters(ctx context.Context) (*ClusterList, error) {
 	return &ClusterList{Clusters: out, ClusterAPI: api}, nil
 }
 
+// cluster is one cluster of the answer; the operator and serving detections
+// read the cluster concurrently.
+func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pools []PoolRelease) Cluster {
+	target := s.target(ctx, dyn, c)
+	var operator GPUOperatorComponent
+	var serving ServingComponent
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		operator.Component, operator.Readiness = detect.GPUOperatorState(gctx, target.Target)
+		return nil
+	})
+	g.Go(func() error {
+		serving.Component, serving.Readiness = detect.ServingState(gctx, target.Target)
+		return nil
+	})
+	g.Go(func() error { serving.Readiness.Backend = s.backendState(gctx, dyn, c.GetName()); return nil })
+	_ = g.Wait()
+	return Cluster{
+		Name:           c.GetName(),
+		Namespace:      c.GetNamespace(),
+		Organization:   organization(c),
+		ReleaseVersion: c.GetLabels()[LabelReleaseVersion],
+		OwnCluster:     s.ownCluster(c),
+		GPUOperator:    operator,
+		Serving:        serving,
+		PoolReleases:   pools,
+		// TODO(giantswarm/giantswarm#37637, commit mode): repository and
+		// path from the Flux provenance of the cluster's owning object.
+		CommitTarget: nil,
+	}
+}
+
+// backendState says whether model-manager's kserve backend document is
+// registered for the cluster, and where it is.
+func (s *Service) backendState(ctx context.Context, dyn dynamic.Interface, cluster string) detect.BackendState {
+	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
+	if err != nil || !registered {
+		return detect.BackendState{}
+	}
+	return detect.BackendState{Registered: true, Namespace: s.cfg.ModelManagerNamespace, Name: compose.BackendConfigMapName}
+}
+
 func poolRelease(hr *unstructured.Unstructured) PoolRelease {
 	version := nestedString(hr, "status", "lastAttemptedRevision")
 	if version == "" {
 		version = nestedString(hr, "spec", "chart", "spec", "version")
 	}
-	return PoolRelease{Name: hr.GetName(), Namespace: hr.GetNamespace(), ChartVersion: version, Ready: readyCondition(hr)}
+	return PoolRelease{Name: hr.GetName(), Namespace: hr.GetNamespace(), ChartVersion: version, Ready: readyCondition(hr), Deleting: hr.GetDeletionTimestamp() != nil}
 }
 
 // readyCondition reads the Ready condition of a status.conditions list: true

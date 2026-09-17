@@ -54,7 +54,23 @@ const (
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
 // version skew, a GitOps-owned object, nodes still running.
-type ErrRefused struct{ Reason string }
+type ErrRefused struct {
+	Reason string
+	// Refused is the structured form of the replicas guard's refusal, beside
+	// the text; nil for the other refusals.
+	Refused *Refused
+}
+
+// Refused is delete_node_pool's refusal as the portal renders it without
+// parsing prose: the pool's nodes, the models served on the cluster, the hint.
+type Refused struct {
+	Nodes  []string `json:"nodes"`
+	Models []string `json:"models"`
+	Hint   string   `json:"hint"`
+}
+
+// refusedHint is what to expect after unloading.
+const refusedHint = "Karpenter removes an empty node about 10 minutes after its last pod; a served model has to be unloaded first."
 
 func (e *ErrRefused) Error() string { return e.Reason }
 
@@ -508,38 +524,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			return nil, err
 		}
 	}
-	last, err := lastPool(ctx, dyn, ns, c.GetName(), release)
+	targets, slice, kept, last, err := s.removalTargets(ctx, dyn, c, in.Name)
 	if err != nil {
 		return nil, err
 	}
-	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last}
-	var targets []objectRef
-	var slice *unstructured.Unstructured
-	if last {
-		operator := compose.OperatorReleaseName(c.GetName())
-		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
-		if slice, err = ownedSlice(ctx, dyn, ns, c.GetName()); err != nil {
-			return nil, err
-		}
-		switch {
-		case slice != nil && sharesAnotherSlice(slice):
-			// Another slice shares the release: it stays, serving and its
-			// backend registration with it.
-			out.SliceKept = ns + "/" + slice.GetName()
-			slice = nil
-		default:
-			removals, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
-			if err != nil {
-				return nil, err
-			}
-			targets = append(targets, removals...)
-		}
-	}
-	targets = append(targets,
-		objectRef{compose.OCIRepositoryGVR, ns, release},
-		objectRef{compose.SecretGVR, ns, compose.ValuesSecretName(c.GetName(), in.Name)},
-		objectRef{HelmReleaseGVR, ns, release},
-	)
+	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last, SliceKept: kept}
 	plans, err := planDeletes(ctx, dyn, targets)
 	if err != nil {
 		return nil, err
@@ -556,6 +545,46 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	td.finish()
 	logApplied(ctx, "delete_node_pool", out, start)
 	return out, nil
+}
+
+// removalTargets names what delete_node_pool removes for a pool, in teardown
+// order: with the cluster's last pool the operator release and its source,
+// then the slice's objects — unless another slice shares the release, which
+// then stays (kept names it) — then the pool's own source, values Secret and
+// release, the release last so the re-run finds it. slice is the slice
+// release to tear down in order, nil when none goes. list_node_pools reads
+// the same targets to show a removal's pending objects.
+func (s *Service) removalTargets(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pool string) (targets []objectRef, slice *unstructured.Unstructured, kept string, last bool, err error) {
+	ns, release := c.GetNamespace(), compose.ReleaseName(c.GetName(), pool)
+	if last, err = lastPool(ctx, dyn, ns, c.GetName(), release); err != nil {
+		return nil, nil, "", false, err
+	}
+	if last {
+		operator := compose.OperatorReleaseName(c.GetName())
+		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
+		if slice, err = ownedSlice(ctx, dyn, ns, c.GetName()); err != nil {
+			return nil, nil, "", false, err
+		}
+		switch {
+		case slice != nil && sharesAnotherSlice(slice):
+			// Another slice shares the release: it stays, serving and its
+			// backend registration with it.
+			kept = ns + "/" + slice.GetName()
+			slice = nil
+		default:
+			removals, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
+			if err != nil {
+				return nil, nil, "", false, err
+			}
+			targets = append(targets, removals...)
+		}
+	}
+	targets = append(targets,
+		objectRef{compose.OCIRepositoryGVR, ns, release},
+		objectRef{compose.SecretGVR, ns, compose.ValuesSecretName(c.GetName(), pool)},
+		objectRef{HelmReleaseGVR, ns, release},
+	)
+	return targets, slice, kept, last, nil
 }
 
 // ownedSlice is the cluster's slice release when it exists and is
@@ -649,47 +678,61 @@ func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, c *u
 	if replicas == 0 {
 		return nil
 	}
-	return &ErrRefused{Reason: fmt.Sprintf("node pool %s still runs %d node(s) (%s)%s", pool, replicas, poolNodes(ctx, dyn, mp, ns), servedModelsClause(ctx, s.target(ctx, dyn, c)))}
+	nodes := poolNodes(ctx, dyn, mp, ns)
+	clause, models := servedModelsClause(ctx, s.target(ctx, dyn, c))
+	return &ErrRefused{
+		Reason:  fmt.Sprintf("node pool %s still runs %d node(s) (%s)%s", pool, replicas, joinOrUnknown(nodes), clause),
+		Refused: &Refused{Nodes: nodes, Models: models, Hint: refusedHint},
+	}
 }
 
 // poolNodes names a MachinePool's nodes by provider id, from its
-// infrastructure object; "unknown" when that cannot be read.
-func poolNodes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured, ns string) string {
+// infrastructure object; none when that cannot be read.
+func poolNodes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured, ns string) []string {
 	ref := nestedRef(mp, "spec", "template", "spec", "infrastructureRef")
 	if ref == nil {
-		return "unknown"
+		return []string{}
 	}
 	infra, err := getRef(ctx, dyn, ref, ns)
 	if err != nil {
+		return []string{}
+	}
+	ids := providerIDs(infra)
+	if ids == nil {
+		return []string{}
+	}
+	return ids
+}
+
+// joinOrUnknown lists names for a message; "unknown" when there are none.
+func joinOrUnknown(names []string) string {
+	if len(names) == 0 {
 		return "unknown"
 	}
-	ids, _, _ := unstructured.NestedStringSlice(infra.Object, "spec", "providerIDList")
-	if len(ids) == 0 {
-		ids, _, _ = unstructured.NestedStringSlice(infra.Object, "status", "providerIDList")
-	}
-	if len(ids) == 0 {
-		return "unknown"
-	}
-	return strings.Join(ids, ", ")
+	return strings.Join(names, ", ")
 }
 
 // servedModelsClause is the replicas guard's second half: the models served
 // on the cluster, named for unloading (a GPU pool's nodes carry their
 // predictors); that none is, so something else holds the nodes; or why they
 // cannot be told — each with the fix.
-func servedModelsClause(ctx context.Context, t target) string {
+func servedModelsClause(ctx context.Context, t target) (string, []string) {
 	const rerun = "re-run once the pool is empty, or pass force to delete the pool with its nodes"
 	if t.Reader == nil {
-		return fmt.Sprintf("; whether models are served on %s cannot be told (%s) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, t.Reason, rerun)
+		return fmt.Sprintf("; whether models are served on %s cannot be told (%s) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, t.Reason, rerun), []string{}
 	}
 	models, err := detect.ServedModels(ctx, t.Reader)
 	if err != nil {
-		return fmt.Sprintf("; whether models are served on %s cannot be told (%v) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, err, rerun)
+		return fmt.Sprintf("; whether models are served on %s cannot be told (%v) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, err, rerun), []string{}
+	}
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.String())
 	}
 	if len(models) == 0 {
-		return fmt.Sprintf(" and %s serves no model: nothing of the platform's serving holds them — something else is scheduled there, or Karpenter has not consolidated the empty node yet — %s", t.Cluster, rerun)
+		return fmt.Sprintf(" and %s serves no model: nothing of the platform's serving holds them — something else is scheduled there, or Karpenter has not consolidated the empty node yet — %s", t.Cluster, rerun), names
 	}
-	return fmt.Sprintf(", serving %d model(s) on %s: %s — unload them first (model-manager's unload_model, or the cluster's Serving group) and %s and the models on them", len(models), t.Cluster, joinModels(models), rerun)
+	return fmt.Sprintf(", serving %d model(s) on %s: %s — unload them first (model-manager's unload_model, or the cluster's Serving group) and %s and the models on them", len(models), t.Cluster, joinModels(models), rerun), names
 }
 
 // clusterFacts reads what the pool release needs: the pins from the

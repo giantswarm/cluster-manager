@@ -85,12 +85,12 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListClusters,
-		mcp.WithDescription("List the installation's clusters: name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you (serving is present with a KServe controller on the cluster, never with the KServe CRDs alone, which Helm leaves behind when a serving layer goes: those are absent with the served APIs noted); the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show. On an installation that does not serve the Cluster API (cluster.x-k8s.io) the list is empty and clusterApi says so."),
+		mcp.WithDescription("List the installation's clusters with the GPU operator's and the serving layer's readiness as structured fields (gpuOperator.readiness: the operator release's Ready condition, the ClusterPolicy's state, the device plugin and GPU feature discovery DaemonSets' scheduled and ready pods — 0/0 at scale-to-zero; serving.readiness: the slice release and every child release with its Ready condition, the KServe controllers' available replicas, the LLMInferenceServiceConfigs count, the kserve backend registered with model-manager, the published presets count, the models Gateway's Programmed condition): name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you (serving is present with a KServe controller on the cluster, never with the KServe CRDs alone, which Helm leaves behind when a serving layer goes: those are absent with the served APIs noted); the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (the git repository and path owning the cluster, null when none). Nothing the portal's Clusters pages already show. On an installation that does not serve the Cluster API (cluster.x-k8s.io) the list is empty and clusterApi says so."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listClusters)
 
 	s.AddTool(mcp.NewTool(ToolListNodePools,
-		mcp.WithDescription("List the MachinePools of one cluster with the pool's Kubernetes version and the control plane's as two fields (no verdict is drawn), replicas and ready replicas, the instance types when readable, the accelerator of the owning pool release, and the HelmRelease that owns the pool (null for a pool created by other means)."),
+		mcp.WithDescription("List the pools of one cluster with their lifecycle: phase (creating, ready, scaling, removing, failed) and steps — the pool release Ready, the MachinePool ready, the nodes (NodeClaims launching, ready, terminating) — each pending, inProgress, done or failed with since/finishedAt timestamps; a pool release whose MachinePool is not created yet is listed creating, a pool under delete_node_pool stays listed removing with deleting: true and the teardown's pending objects until its HelmRelease is gone; plus the pool's Kubernetes version and the control plane's as two fields (no verdict is drawn), replicas and ready replicas, the instance types when readable, the accelerator of the owning pool release, and the HelmRelease that owns the pool (null for a pool created by other means)."),
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -288,6 +288,13 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 // errResult is a tool error: the message names the cause so the caller can
 // act on it (a missing cluster, an ambiguous name, a refused read).
 func errResult(err error) *mcp.CallToolResult {
+	var refused *tools.ErrRefused
+	if errors.As(err, &refused) && refused.Refused != nil {
+		// The structured refusal beside the text: a second text content
+		// carrying {"refused": {nodes, models, hint}}.
+		block, _ := json.Marshal(map[string]any{"refused": refused.Refused})
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{mcp.NewTextContent(err.Error()), mcp.NewTextContent(string(block))}}
+	}
 	var notFound *tools.ErrNotFound
 	if errors.As(err, &notFound) {
 		return mcp.NewToolResultError(err.Error() + ": list_clusters names the clusters you may see")
