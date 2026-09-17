@@ -469,10 +469,20 @@ func backendTargetName(t compose.BackendTarget) string {
 // With the cluster's last pool go the operator release cluster-manager
 // created, its slice release unless another slice is on in it, and the
 // kserve backend it registered. The slice goes in order (servingTeardown):
-// its well-known LLMInferenceServiceConfigs are seen gone before the release
-// that runs their controller, so none is left terminating for the next slice
-// to trip over (giantswarm/cluster-manager#28).
+// the llm-d controller's child release, then its well-known
+// LLMInferenceServiceConfigs — removed by cluster-manager once no controller
+// runs to deny their delete —, then the configs' child release, the
+// operator, the backend registration, the slice release, and the pool's own
+// objects last, its HelmRelease the very last: the re-run finds the pool and
+// continues where the teardown stands (giantswarm/cluster-manager#28, #37).
+//
+// The call answers within the aggregator's deadline for a tool call: every
+// object is planned before the first write (every refusal first), the writes
+// go one at a time in that order, and a write there is no budget left for is
+// left pending rather than started (WriteResult.Partial) —
+// giantswarm/cluster-manager#34's pattern.
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
+	start := time.Now()
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
@@ -503,16 +513,12 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, err
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last}
-	targets := []objectRef{
-		{HelmReleaseGVR, ns, release},
-		{compose.OCIRepositoryGVR, ns, release},
-		{compose.SecretGVR, ns, compose.ValuesSecretName(c.GetName(), in.Name)},
-	}
+	var targets []objectRef
+	var slice *unstructured.Unstructured
 	if last {
 		operator := compose.OperatorReleaseName(c.GetName())
 		targets = append(targets, objectRef{HelmReleaseGVR, ns, operator}, objectRef{compose.OCIRepositoryGVR, ns, operator})
-		slice, err := ownedSlice(ctx, dyn, ns, c.GetName())
-		if err != nil {
+		if slice, err = ownedSlice(ctx, dyn, ns, c.GetName()); err != nil {
 			return nil, err
 		}
 		switch {
@@ -520,12 +526,8 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			// Another slice shares the release: it stays, serving and its
 			// backend registration with it.
 			out.SliceKept = ns + "/" + slice.GetName()
+			slice = nil
 		default:
-			if slice != nil {
-				if err := s.servingTeardown(ctx, dyn, s.target(ctx, dyn, c), in.Force, in.DryRun, out); err != nil {
-					return nil, err
-				}
-			}
 			removals, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
 			if err != nil {
 				return nil, err
@@ -533,7 +535,27 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			targets = append(targets, removals...)
 		}
 	}
-	return out, deleteAll(ctx, dyn, targets, in.DryRun, out)
+	targets = append(targets,
+		objectRef{compose.OCIRepositoryGVR, ns, release},
+		objectRef{compose.SecretGVR, ns, compose.ValuesSecretName(c.GetName(), in.Name)},
+		objectRef{HelmReleaseGVR, ns, release},
+	)
+	plans, err := planDeletes(ctx, dyn, targets)
+	if err != nil {
+		return nil, err
+	}
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	if slice != nil {
+		if err := s.servingTeardown(td, s.target(ctx, dyn, c), in.Force); err != nil {
+			return nil, err
+		}
+	}
+	if err := td.deleteAll(plans); err != nil {
+		return nil, err
+	}
+	td.finish()
+	logApplied(ctx, "delete_node_pool", out, start)
+	return out, nil
 }
 
 // ownedSlice is the cluster's slice release when it exists and is

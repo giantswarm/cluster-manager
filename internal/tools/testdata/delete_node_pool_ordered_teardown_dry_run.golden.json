@@ -8,7 +8,7 @@
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
-      "name": "kserve-runtime-configs",
+      "name": "kserve-llmisvc-resources",
       "namespace": "org-acme",
       "action": "would-delete"
     },
@@ -36,14 +36,21 @@
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
-      "name": "wc1-gpu-a10g",
+      "name": "kserve-runtime-configs",
       "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
       "action": "would-delete"
     },
     {
       "apiVersion": "source.toolkit.fluxcd.io/v1",
       "kind": "OCIRepository",
-      "name": "wc1-gpu-a10g",
+      "name": "wc1-agent-platform",
       "namespace": "org-acme",
       "action": "would-delete"
     },
@@ -57,15 +64,15 @@
     {
       "apiVersion": "source.toolkit.fluxcd.io/v1",
       "kind": "OCIRepository",
-      "name": "wc1-agent-platform",
+      "name": "wc1-gpu-a10g",
       "namespace": "org-acme",
       "action": "would-delete"
     },
     {
-      "apiVersion": "v1",
-      "kind": "ConfigMap",
-      "name": "model-backend-kserve",
-      "namespace": "agent-platform",
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "wc1-gpu-a10g",
+      "namespace": "org-acme",
       "action": "would-delete"
     }
   ],
@@ -77,6 +84,6 @@
   },
   "lastPool": true,
   "warnings": [
-    "3 LLMInferenceServiceConfig(s) in org-acme on wc1 would be removed by cluster-manager with serving.kserve.io/llmisvcconfig-finalizer taken off (removed with force): kserve-config-llm-decode-worker-data-parallel, kserve-config-llm-scheduler, kserve-config-llm-template"
+    "3 LLMInferenceServiceConfig(s) in org-acme on wc1 would be removed by cluster-manager with serving.kserve.io/llmisvcconfig-finalizer taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): kserve-config-llm-decode-worker-data-parallel, kserve-config-llm-scheduler, kserve-config-llm-template"
   ]
 }

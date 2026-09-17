@@ -281,11 +281,11 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 		names = append(names, o.Kind+" "+o.Namespace+"/"+o.Name)
 	}
 	assert.Equal(t, []string{
-		"HelmRelease org-acme/wc1-gpu-a10g", "OCIRepository org-acme/wc1-gpu-a10g",
 		"HelmRelease org-acme/wc1-gpu-operator", "OCIRepository org-acme/wc1-gpu-operator",
-		"HelmRelease org-acme/wc1-agent-platform", "OCIRepository org-acme/wc1-agent-platform",
 		"ConfigMap agent-platform/model-backend-kserve",
-	}, names)
+		"OCIRepository org-acme/wc1-agent-platform", "HelmRelease org-acme/wc1-agent-platform",
+		"OCIRepository org-acme/wc1-gpu-a10g", "HelmRelease org-acme/wc1-gpu-a10g",
+	}, names, "the operator, the backend registration, the slice, and the pool last — its release the very last, the re-run's anchor")
 	assertGolden(t, "delete_node_pool_last_pool", dry)
 
 	last, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true})

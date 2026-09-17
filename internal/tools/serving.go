@@ -121,10 +121,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 // DisableModelServing removes the slice release cluster-manager created and
 // the backend it registered. Unless forced it refuses while models are
 // served on the cluster, naming them — or plainly when the cluster cannot
-// be read as the caller. The slice goes in order (servingTeardown): its
-// well-known LLMInferenceServiceConfigs are seen gone before the release
-// that runs their controller (giantswarm/cluster-manager#28).
+// be read as the caller. The slice goes in order (servingTeardown), within
+// the call's budget, the slice release last: the re-run finds it and
+// continues where the teardown stands (giantswarm/cluster-manager#28, #37).
 func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
+	start := time.Now()
 	if err := checkMode(in.Mode); err != nil {
 		return nil, err
 	}
@@ -152,14 +153,24 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 		}
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
-	if err := s.servingTeardown(ctx, dyn, t, in.Force, in.DryRun, out); err != nil {
-		return nil, err
-	}
 	targets, err := s.sliceRemovals(ctx, dyn, ns, c.GetName())
 	if err != nil {
 		return nil, err
 	}
-	return out, deleteAll(ctx, dyn, targets, in.DryRun, out)
+	plans, err := planDeletes(ctx, dyn, targets)
+	if err != nil {
+		return nil, err
+	}
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	if err := s.servingTeardown(td, t, in.Force); err != nil {
+		return nil, err
+	}
+	if err := td.deleteAll(plans); err != nil {
+		return nil, err
+	}
+	td.finish()
+	logApplied(ctx, "disable_model_serving", out, start)
+	return out, nil
 }
 
 // sliceReads is what the slice's part of a write reads: the serving layer
@@ -472,31 +483,16 @@ func joinModels(models []detect.ServedModel) string {
 // sliceRemovals names the slice release's objects and, when registered for
 // the cluster, the backend document.
 func (s *Service) sliceRemovals(ctx context.Context, dyn dynamic.Interface, ns, cluster string) ([]objectRef, error) {
-	name := compose.SliceReleaseName(cluster)
-	targets := []objectRef{{HelmReleaseGVR, ns, name}, {compose.OCIRepositoryGVR, ns, name}}
 	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
 	if err != nil {
 		return nil, err
 	}
+	var targets []objectRef
 	if registered {
 		targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
 	}
-	return targets, nil
-}
-
-// deleteAll removes cluster-manager's objects among targets, recording each
-// in out.
-func deleteAll(ctx context.Context, dyn dynamic.Interface, targets []objectRef, dryRun bool, out *WriteResult) error {
-	for _, target := range targets {
-		act, err := deleteIfOwned(ctx, dyn, target.gvr, target.ns, target.name, dryRun)
-		if err != nil {
-			return err
-		}
-		if act != nil {
-			out.Objects = append(out.Objects, *act)
-		}
-	}
-	return nil
+	name := compose.SliceReleaseName(cluster)
+	return append(targets, objectRef{compose.OCIRepositoryGVR, ns, name}, objectRef{HelmReleaseGVR, ns, name}), nil
 }
 
 // providerDescription names a serving provider for a refusal.
