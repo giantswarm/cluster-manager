@@ -71,6 +71,18 @@ func metaValues(rng string) []byte {
 `, rng))
 }
 
+// releasedWithChartValues is the released meta chart's shape (4.29 on): the
+// connectivity chart is published off the meta chart's tag, no range.
+func releasedWithChartValues(extra string) []byte {
+	return []byte(`components:
+  agent-platform-connectivity:
+    chart: agent-platform-connectivity
+    repository: oci://gsoci.azurecr.io/charts/giantswarm
+    releasedWithChart: true
+    versionRange: ""
+` + extra)
+}
+
 var (
 	qwen8b = []byte("apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ServingPreset\nmetadata:\n  name: qwen3-8b-fp8\nspec:\n  resources:\n    gpus: 1\n    requests: {cpu: \"2\", memory: 10Gi}\n  requirements: {weightsGiB: 9, overheadGiB: 12}\n")
 	big    = []byte("apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ServingPreset\nmetadata:\n  name: nemotron\nspec:\n  requirements: {weightsGiB: 70, overheadGiB: 35}\n")
@@ -99,6 +111,41 @@ func TestReadShippedPresets(t *testing.T) {
 	assert.Equal(t, qwen8b, got.Presets[1].Document)
 	assert.Equal(t, `2 preset(s) shipped by agent-platform-connectivity 4.30.0, the chart the slice's agent-platform 4.29.1 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, got.Source())
 	assert.Equal(t, []string{"chart charts/giantswarm/agent-platform@4.29.1", "tags charts/giantswarm/agent-platform-connectivity", "chart charts/giantswarm/agent-platform-connectivity@4.30.0"}, f.reads)
+}
+
+// TestReadShippedPresetsReleasedWithChart: the released meta chart marks the
+// connectivity chart releasedWithChart with no range — its version is the
+// meta chart's own, exactly, read without a tag list; a newer connectivity
+// release in the registry is not taken. A development build that keeps a
+// range or a filter on the entry is resolved as a range.
+func TestReadShippedPresetsReleasedWithChart(t *testing.T) {
+	f := (&fakeCharts{}).
+		add(SliceChartURL, "4.30.1", map[string][]byte{"values.yaml": releasedWithChartValues("")}).
+		add(SliceChartURL, "4.30.2-dev.1", map[string][]byte{"values.yaml": releasedWithChartValues("    semverFilter: \"-dev\\\\.\"\n    versionRange: \">=4.0.0-0 <5.0.0-0\"\n")}).
+		add(connectivityURL, "4.30.1", map[string][]byte{"files/model-serving/presets/qwen3-8b-fp8.yaml": qwen8b}).
+		add(connectivityURL, "4.31.0", map[string][]byte{"files/model-serving/presets/nemotron.yaml": big}).
+		add(connectivityURL, "4.30.2-dev.1", map[string][]byte{"files/model-serving/presets/nemotron.yaml": big, "files/model-serving/presets/qwen3-8b-fp8.yaml": qwen8b})
+	got, err := ReadShippedPresets(context.Background(), f, "4.30.1")
+	require.NoError(t, err)
+	assert.True(t, got.ReleasedWithChart)
+	assert.Equal(t, "4.30.1", got.Version, "the meta chart's own version, not the newest in the registry")
+	assert.Empty(t, got.Range)
+	require.Len(t, got.Presets, 1)
+	assert.Equal(t, "qwen3-8b-fp8", got.Presets[0].Name)
+	assert.Equal(t, "1 preset(s) shipped by agent-platform-connectivity 4.30.1, released with the slice's agent-platform 4.30.1 chart, at gsoci.azurecr.io — the slice publishes them once it is ready", got.Source())
+	assert.Equal(t, []string{"chart charts/giantswarm/agent-platform@4.30.1", "chart charts/giantswarm/agent-platform-connectivity@4.30.1"}, f.reads, "no tag list: one right version")
+
+	f.reads = nil
+	got, err = ReadShippedPresets(context.Background(), f, "4.30.2-dev.1")
+	require.NoError(t, err)
+	assert.False(t, got.ReleasedWithChart, "a dev build's own range and filter are resolved as a range")
+	assert.Equal(t, "4.30.2-dev.1", got.Version)
+	assert.Len(t, got.Presets, 2)
+	assert.Equal(t, "tags charts/giantswarm/agent-platform-connectivity", f.reads[1])
+
+	_, err = ReadShippedPresets(context.Background(), f.add(SliceChartURL, "4.30.3", map[string][]byte{"values.yaml": releasedWithChartValues("")}), "4.30.3")
+	require.Error(t, err, "the connectivity chart of that exact version is not in the registry")
+	assert.Contains(t, err.Error(), "agent-platform-connectivity 4.30.3: HTTP 404")
 }
 
 // TestReadShippedPresetsErrors: every step that fails names itself; nothing
@@ -132,5 +179,10 @@ func TestReadShippedPresetsErrors(t *testing.T) {
 	f.add(SliceChartURL, "4.0.2", map[string][]byte{"values.yaml": []byte("components:\n  agent-platform-connectivity: {chart: agent-platform-connectivity}\n")})
 	_, err = ReadShippedPresets(ctx, f, "4.0.2")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "names no chart, repository or versionRange")
+	assert.Contains(t, err.Error(), "names no chart or repository")
+
+	f.add(SliceChartURL, "4.0.3", map[string][]byte{"values.yaml": []byte("components:\n  agent-platform-connectivity: {chart: agent-platform-connectivity, repository: oci://gsoci.azurecr.io/charts/giantswarm}\n")})
+	_, err = ReadShippedPresets(ctx, f, "4.0.3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is neither released with the chart nor pinned to a versionRange")
 }

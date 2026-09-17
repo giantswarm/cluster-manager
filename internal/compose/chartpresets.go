@@ -32,18 +32,22 @@ type ChartReader interface {
 // ShippedPresets are the serving presets the slice release *would* publish:
 // the connectivity chart's shipped set, read from the chart the slice's
 // agent-platform release resolves — the meta chart at the slice's pin names
-// the connectivity chart, its repository and the version range Flux resolves
-// on the installation; the range is resolved against the registry's tags the
-// way source-controller does.
+// the connectivity chart and its repository, and either releases it off its
+// own tag (`releasedWithChart`: the connectivity version IS the meta chart's,
+// rendered as the OCIRepository's exact semver) or names a version range
+// Flux resolves on the installation, resolved here against the registry's
+// tags the way source-controller does.
 type ShippedPresets struct {
 	// MetaVersion is the agent-platform chart version the slice pins;
-	// Chart, Version and Range the connectivity chart, the version the range
-	// resolved to, and the range itself; Registry the host both came from.
-	MetaVersion string
-	Chart       string
-	Version     string
-	Range       string
-	Registry    string
+	// Chart and Version the connectivity chart and its version; Range the
+	// range that version came from, empty when the chart is released with
+	// the meta chart (ReleasedWithChart); Registry the host both came from.
+	MetaVersion       string
+	Chart             string
+	Version           string
+	Range             string
+	ReleasedWithChart bool
+	Registry          string
 	// Presets are the preset documents (ServingPreset YAML) by file name
 	// without extension, the chart's file order.
 	Presets []ShippedPreset
@@ -57,13 +61,18 @@ type ShippedPreset struct {
 
 // Source says where the presets were read, for the answer.
 func (p *ShippedPresets) Source() string {
+	if p.ReleasedWithChart {
+		return fmt.Sprintf("%d preset(s) shipped by %s %s, released with the slice's %s %s chart, at %s — the slice publishes them once it is ready", len(p.Presets), p.Chart, p.Version, SliceChart, p.MetaVersion, p.Registry)
+	}
 	return fmt.Sprintf("%d preset(s) shipped by %s %s, the chart the slice's %s %s release resolves for %q at %s — the slice publishes them once it is ready", len(p.Presets), p.Chart, p.Version, SliceChart, p.MetaVersion, p.Range, p.Registry)
 }
 
 // ReadShippedPresets reads the presets the slice at metaVersion would
 // publish (ShippedPresets): the meta chart at that version from the slice's
 // chart repository, its connectivity component entry, the connectivity
-// chart's tags resolved through the entry's range and filter, the connectivity
+// chart's version — the meta chart's own when the entry is released with it
+// (and names no range or filter of its own), else the connectivity chart's
+// tags resolved through the entry's range and filter —, the connectivity
 // chart at that version, and its preset files. Every step that fails is an
 // error naming it; nothing is guessed from another version.
 func ReadShippedPresets(ctx context.Context, r ChartReader, metaVersion string) (*ShippedPresets, error) {
@@ -83,19 +92,24 @@ func ReadShippedPresets(ctx context.Context, r ChartReader, metaVersion string) 
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: components.%s: %w", SliceChart, metaVersion, ConnectivityComponent, err)
 	}
-	tags, err := r.Tags(ctx, childRef)
+	out := &ShippedPresets{MetaVersion: metaVersion, Chart: entry.Chart, Range: entry.VersionRange, Registry: childRef.Host}
+	if entry.ownVersion() {
+		// Released off the meta chart's tag: one right version, the meta
+		// chart's own (the template's rule; a range there fails its render).
+		out.Version, out.ReleasedWithChart, out.Range = metaVersion, true, ""
+	} else {
+		tags, err := r.Tags(ctx, childRef)
+		if err != nil {
+			return nil, err
+		}
+		if out.Version, err = registry.Resolve(tags, entry.VersionRange, entry.SemverFilter); err != nil {
+			return nil, fmt.Errorf("%s: %w", childRef, err)
+		}
+	}
+	child, err := r.Chart(ctx, childRef, out.Version)
 	if err != nil {
 		return nil, err
 	}
-	version, err := registry.Resolve(tags, entry.VersionRange, entry.SemverFilter)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", childRef, err)
-	}
-	child, err := r.Chart(ctx, childRef, version)
-	if err != nil {
-		return nil, err
-	}
-	out := &ShippedPresets{MetaVersion: metaVersion, Chart: entry.Chart, Version: version, Range: entry.VersionRange, Registry: childRef.Host}
 	for _, name := range child.Glob(presetsDir) {
 		if path.Ext(name) != ".yaml" {
 			continue
@@ -107,12 +121,24 @@ func ReadShippedPresets(ctx context.Context, r ChartReader, metaVersion string) 
 }
 
 // componentEntry is the meta chart's components.<name> entry as far as the
-// child's source goes.
+// child's source goes: the chart and its repository; releasedWithChart, the
+// mark of a chart published off the meta chart's own tag (its version is the
+// meta chart's, the template renders an exact semver); else versionRange and
+// semverFilter, what the template renders into the OCIRepository. A
+// development build keeps its knobs on a released-with entry: a range or a
+// filter there selects a dev channel and is resolved as a range.
 type componentEntry struct {
-	Chart        string `json:"chart"`
-	Repository   string `json:"repository"`
-	VersionRange string `json:"versionRange"`
-	SemverFilter string `json:"semverFilter"`
+	Chart             string `json:"chart"`
+	Repository        string `json:"repository"`
+	ReleasedWithChart bool   `json:"releasedWithChart"`
+	VersionRange      string `json:"versionRange"`
+	SemverFilter      string `json:"semverFilter"`
+}
+
+// ownVersion reports whether the entry's version is the meta chart's own:
+// released with it and no range or filter of its own.
+func (e componentEntry) ownVersion() bool {
+	return e.ReleasedWithChart && e.VersionRange == "" && e.SemverFilter == ""
 }
 
 // connectivityEntry reads components.agent-platform-connectivity from the
@@ -132,8 +158,10 @@ func connectivityEntry(meta *registry.Chart) (componentEntry, error) {
 	switch {
 	case !ok:
 		return componentEntry{}, fmt.Errorf("values.yaml names no components.%s: the chart does not pin the connectivity chart", ConnectivityComponent)
-	case entry.Chart == "" || entry.Repository == "" || entry.VersionRange == "":
-		return componentEntry{}, fmt.Errorf("components.%s names no chart, repository or versionRange (%+v)", ConnectivityComponent, entry)
+	case entry.Chart == "" || entry.Repository == "":
+		return componentEntry{}, fmt.Errorf("components.%s names no chart or repository (%+v)", ConnectivityComponent, entry)
+	case !entry.ReleasedWithChart && entry.VersionRange == "":
+		return componentEntry{}, fmt.Errorf("components.%s is neither released with the chart nor pinned to a versionRange (%+v): no version to read the presets from", ConnectivityComponent, entry)
 	}
 	return entry, nil
 }
