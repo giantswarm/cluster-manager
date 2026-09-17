@@ -14,7 +14,7 @@ status:
   nodeInfo:
     osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
 ---
-apiVersion: serving.kserve.io/v1alpha1
+apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-decode-worker-data-parallel
@@ -30,7 +30,7 @@ metadata:
 spec:
   router: {}
 ---
-apiVersion: serving.kserve.io/v1alpha1
+apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-scheduler
@@ -46,7 +46,7 @@ metadata:
 spec:
   router: {}
 ---
-apiVersion: serving.kserve.io/v1alpha1
+apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-template
@@ -61,3 +61,37 @@ metadata:
     - serving.kserve.io/llmisvcconfig-finalizer
 spec:
   router: {}
+---
+# The configs' CRD as the slice's kserve-llmisvc-crd child installs it: two
+# versions, v1alpha2 the storage version, converted through the llmisvc
+# controller's webhook service — gone with the controller's release, so only
+# the storage version stays reachable (giantswarm/cluster-manager#39).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: llminferenceserviceconfigs.serving.kserve.io
+spec:
+  group: serving.kserve.io
+  names:
+    kind: LLMInferenceServiceConfig
+    plural: llminferenceserviceconfigs
+  scope: Namespaced
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: llmisvc-webhook-server-service
+          namespace: org-acme
+          path: /convert
+      conversionReviewVersions: [v1]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: false
+    - name: v1alpha2
+      served: true
+      storage: true
+status:
+  storedVersions:
+    - v1alpha2

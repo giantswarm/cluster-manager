@@ -13,21 +13,21 @@
       "action": "would-delete"
     },
     {
-      "apiVersion": "serving.kserve.io/v1alpha1",
+      "apiVersion": "serving.kserve.io/v1alpha2",
       "kind": "LLMInferenceServiceConfig",
       "name": "kserve-config-llm-decode-worker-data-parallel",
       "namespace": "org-acme",
       "action": "would-delete"
     },
     {
-      "apiVersion": "serving.kserve.io/v1alpha1",
+      "apiVersion": "serving.kserve.io/v1alpha2",
       "kind": "LLMInferenceServiceConfig",
       "name": "kserve-config-llm-scheduler",
       "namespace": "org-acme",
       "action": "would-delete"
     },
     {
-      "apiVersion": "serving.kserve.io/v1alpha1",
+      "apiVersion": "serving.kserve.io/v1alpha2",
       "kind": "LLMInferenceServiceConfig",
       "name": "kserve-config-llm-template",
       "namespace": "org-acme",
