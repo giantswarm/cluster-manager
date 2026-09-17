@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
+	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/giantswarm/mcp-oauth v1.4.2
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/mark3labs/mcp-go v1.1.0
@@ -18,7 +19,6 @@ require (
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/Masterminds/semver/v3 v3.3.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
