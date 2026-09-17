@@ -145,8 +145,8 @@ func (l *lab) unreachable(apiServer string) *lab {
 }
 
 // service builds the tools over the lab; the model-manager and serving
-// namespaces default to the chart's.
-func (l *lab) service(cfg Config) *Service {
+// namespaces default to the chart's. Options (WithChartReader) apply on top.
+func (l *lab) service(cfg Config, opts ...Option) *Service {
 	if cfg.ModelManagerNamespace == "" {
 		cfg.ModelManagerNamespace = "agent-platform"
 	}
@@ -169,6 +169,7 @@ func (l *lab) service(cfg Config) *Service {
 			return dyn, nil
 		},
 		cfg,
+		opts...,
 	)
 }
 

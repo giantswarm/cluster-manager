@@ -136,11 +136,13 @@ type WriteResult struct {
 	LastPool  bool   `json:"lastPool,omitempty"`
 	SliceKept string `json:"sliceKept,omitempty"`
 	// Sizes are the pool's instance sizes as composed (create): the node as
-	// AWS lists it and what it leaves a predictor after the kubelet's
-	// reservations and the fleet's daemonsets. PresetFit places the serving
-	// presets published on the cluster against them; Warnings name the
-	// presets the accelerator could serve but no size of the pool hosts
-	// (giantswarm/agent-platform#502).
+	// AWS lists it, what it leaves a predictor after the kubelet's
+	// reservations and the fleet's daemonsets, and its on-demand price per
+	// hour in the cluster's region (giantswarm/cluster-manager#44). PresetFit
+	// places the serving presets against them — the ones published on the
+	// cluster, else the ones the slice would publish, read from its chart;
+	// Warnings name the presets the accelerator could serve but no size of
+	// the pool hosts (giantswarm/agent-platform#502).
 	Sizes     []compose.InstanceShape `json:"sizes,omitempty"`
 	PresetFit *PresetFit              `json:"presetFit,omitempty"`
 	Warnings  []string                `json:"warnings,omitempty"`
@@ -262,7 +264,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
-		Sizes:   shapes, PresetFit: r.fit, Warnings: r.warnings,
+		Sizes:   compose.Priced(shapes, r.region), PresetFit: r.fit, Warnings: r.warnings,
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
@@ -304,6 +306,8 @@ type poolReads struct {
 	backend  *unstructured.Unstructured
 	fit      *PresetFit
 	warnings []string
+	// region is the cluster's AWS region, for the sizes' prices.
+	region compose.Region
 }
 
 // readPool reads the pool's inputs concurrently: the cluster's facts, its
@@ -348,8 +352,23 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 		r.fit, r.warnings = s.presetFit(gctx, t, in.Pool.Name, shapes)
 		return nil
 	})
+	g.Go(func() error {
+		defer timed(gctx, "region")()
+		r.region = awsRegion(gctx, dyn, c)
+		return nil
+	})
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+	// Nothing published on the target and a slice about to be composed: the
+	// presets that slice would publish, from the chart it pins — the version
+	// is the platform's, known only now (giantswarm/cluster-manager#44).
+	if r.fit != nil && r.fit.unpublished && composesSlice(r.slice.serving) {
+		defer timed(ctx, "preset fit from the chart")()
+		version, err := compose.SliceChartVersion(compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, Platform: r.slice.platform})
+		if err == nil {
+			r.fit, r.warnings = s.presetFitFromChart(ctx, r.fit, version, in.Pool.Name, shapes)
+		}
 	}
 	return r, nil
 }

@@ -108,13 +108,32 @@ type Service struct {
 	clients ClientsFor
 	targets TargetClientsFor
 	cfg     Config
+	// charts reads the platform's charts from their registry, for the
+	// serving presets a slice would publish before it exists (nil: the
+	// presets are judged from the cluster's ConfigMaps alone).
+	charts compose.ChartReader
+}
+
+// Option configures a Service beyond its Config.
+type Option func(*Service)
+
+// WithChartReader lets create_node_pool judge the serving presets the slice
+// would publish while none is on the cluster yet: read from the connectivity
+// chart the slice's agent-platform release resolves in the registry
+// (compose.ReadShippedPresets).
+func WithChartReader(r compose.ChartReader) Option {
+	return func(s *Service) { s.charts = r }
 }
 
 // New builds the tools over the per-call clients of the installation and,
 // for detection on workload clusters, of their apiservers (nil: workload
 // clusters are not read, their detection reports unknown).
-func New(clients ClientsFor, targets TargetClientsFor, cfg Config) *Service {
-	return &Service{clients: clients, targets: targets, cfg: cfg}
+func New(clients ClientsFor, targets TargetClientsFor, cfg Config, opts ...Option) *Service {
+	s := &Service{clients: clients, targets: targets, cfg: cfg}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ErrNotFound is returned when a named cluster does not exist.

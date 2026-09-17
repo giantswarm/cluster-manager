@@ -269,14 +269,18 @@
       "gpus": 1,
       "gpuMemoryGiB": 24,
       "usableVcpu": 3,
-      "usableMemoryGiB": 11.9
+      "usableMemoryGiB": 11.9,
+      "priceNote": "no on-demand price: AWS lists no on-demand g6.xlarge in EU (Ireland) (eu-west-1) — the size is not offered there"
     }
   ],
   "presetFit": {
+    "origin": "published",
     "source": "3 preset ConfigMap(s) in agent-platform on wc2",
     "presets": [
       {
         "preset": "acme-l4-wide",
+        "displayName": "Acme's wide L4 recipe",
+        "model": "acme/wide-9b",
         "cpu": "4",
         "memory": "16Gi",
         "gpus": 1,
@@ -285,6 +289,8 @@
       },
       {
         "preset": "qwen3-14b",
+        "displayName": "Qwen3 14B",
+        "model": "Qwen/Qwen3-14B",
         "cpu": "4",
         "memory": "48Gi",
         "gpus": 1,
@@ -293,6 +299,8 @@
       },
       {
         "preset": "qwen3-4b-instruct",
+        "displayName": "Qwen3 4B Instruct",
+        "model": "Qwen/Qwen3-4B-Instruct-2507",
         "cpu": "2",
         "memory": "10Gi",
         "gpus": 1,

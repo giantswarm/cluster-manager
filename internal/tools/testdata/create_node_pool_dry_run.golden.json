@@ -527,7 +527,10 @@
       "gpus": 1,
       "gpuMemoryGiB": 24,
       "usableVcpu": 3,
-      "usableMemoryGiB": 11.9
+      "usableMemoryGiB": 11.9,
+      "pricePerHourUSD": 1.0064,
+      "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+      "priceAsOf": "2026-09-17"
     },
     {
       "instanceType": "g6.2xlarge",
@@ -537,7 +540,10 @@
       "gpus": 1,
       "gpuMemoryGiB": 24,
       "usableVcpu": 7,
-      "usableMemoryGiB": 27.1
+      "usableMemoryGiB": 27.1,
+      "pricePerHourUSD": 1.22249,
+      "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+      "priceAsOf": "2026-09-17"
     },
     {
       "instanceType": "g6.4xlarge",
@@ -547,7 +553,10 @@
       "gpus": 1,
       "gpuMemoryGiB": 24,
       "usableVcpu": 15,
-      "usableMemoryGiB": 57.5
+      "usableMemoryGiB": 57.5,
+      "pricePerHourUSD": 1.65466,
+      "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+      "priceAsOf": "2026-09-17"
     }
   ],
   "presetFit": {

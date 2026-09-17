@@ -15,6 +15,20 @@ spec:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
     name: gazelle
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: AWSCluster
+    name: gazelle
+---
+# The installation's own cluster runs in Frankfurt: its pool sizes carry the
+# table's price.
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSCluster
+metadata:
+  name: gazelle
+  namespace: org-giantswarm
+spec:
+  region: eu-central-1
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -39,6 +53,18 @@ spec:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
     name: wc1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: AWSCluster
+    name: wc1
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSCluster
+metadata:
+  name: wc1
+  namespace: org-acme
+spec:
+  region: eu-central-1
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -61,6 +87,20 @@ spec:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
     name: wc2-missing
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: AWSCluster
+    name: wc2
+---
+# wc2 runs in Ireland, where AWS offers no g6: its L4 sizes carry no price and
+# say so.
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSCluster
+metadata:
+  name: wc2
+  namespace: org-acme
+spec:
+  region: eu-west-1
 ---
 apiVersion: release.giantswarm.io/v1alpha1
 kind: Release

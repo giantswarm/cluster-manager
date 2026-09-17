@@ -35,28 +35,21 @@
       "kind": "OCIRepository",
       "name": "wc1-agent-platform",
       "namespace": "org-acme",
-      "action": "unchanged"
+      "action": "would-create"
     },
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
       "name": "wc1-agent-platform",
       "namespace": "org-acme",
-      "action": "would-update",
-      "changes": [
-        "spec.values.modelServing.gpuPool.nodeSelector.giantswarm.io/machine-pool",
-        "spec.values.modelServing.serving.nodeSelector.giantswarm.io/machine-pool"
-      ]
+      "action": "would-create"
     },
     {
       "apiVersion": "v1",
       "kind": "ConfigMap",
       "name": "model-backend-kserve",
       "namespace": "agent-platform",
-      "action": "would-update",
-      "changes": [
-        "data.backend.yaml"
-      ]
+      "action": "would-create"
     },
     {
       "apiVersion": "source.toolkit.fluxcd.io/v1",
@@ -509,11 +502,7 @@
   },
   "operatorRow": "flatcar",
   "serving": {
-    "status": "present",
-    "provider": "cluster-manager",
-    "evidence": [
-      "HelmRelease org-acme/wc1-agent-platform"
-    ]
+    "status": "absent"
   },
   "slice": {
     "name": "wc1-agent-platform",
@@ -571,6 +560,39 @@
     }
   ],
   "presetFit": {
-    "note": "no serving preset is published on wc1 yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each"
+    "origin": "chart",
+    "source": "3 preset(s) shipped by agent-platform-connectivity 4.28.0, the chart the slice's agent-platform 4.27.2 release resolves for \"\u003e=4.0.0 \u003c5.0.0\" at gsoci.azurecr.io — the slice publishes them once it is ready",
+    "presets": [
+      {
+        "preset": "qwen3-14b",
+        "displayName": "Qwen3 14B",
+        "model": "Qwen/Qwen3-14B",
+        "cpu": "4",
+        "memory": "48Gi",
+        "gpus": 1,
+        "gpuMemoryGiB": 58,
+        "reason": "needs 58 GiB of GPU memory across 1 GPU(s); a g6 GPU has 24 GiB"
+      },
+      {
+        "preset": "qwen3-8b-fp8",
+        "displayName": "Qwen3 8B FP8",
+        "model": "Qwen/Qwen3-8B-FP8",
+        "cpu": "2",
+        "memory": "10Gi",
+        "gpus": 1,
+        "gpuMemoryGiB": 21,
+        "size": "xlarge"
+      },
+      {
+        "preset": "wide-l4",
+        "displayName": "Wide L4 recipe",
+        "model": "acme/wide-9b",
+        "cpu": "4",
+        "memory": "16Gi",
+        "gpus": 1,
+        "gpuMemoryGiB": 20,
+        "size": "2xlarge"
+      }
+    ]
   }
 }

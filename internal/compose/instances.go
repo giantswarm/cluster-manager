@@ -95,6 +95,14 @@ type InstanceShape struct {
 	// daemonsets have theirs — an estimate of the fleet's shape.
 	UsableVCPU      float64 `json:"usableVcpu"`
 	UsableMemoryGiB float64 `json:"usableMemoryGiB"`
+	// PricePerHourUSD is the node's on-demand Linux list price in the
+	// cluster's region (Priced), with PriceSource naming the list and
+	// PriceAsOf the day it was read; absent with PriceNote saying why when
+	// the region is not known, not in the table, or does not offer the size.
+	PricePerHourUSD *float64 `json:"pricePerHourUSD,omitempty"`
+	PriceSource     string   `json:"priceSource,omitempty"`
+	PriceAsOf       string   `json:"priceAsOf,omitempty"`
+	PriceNote       string   `json:"priceNote,omitempty"`
 }
 
 func newShape(family string, n nominal) InstanceShape {

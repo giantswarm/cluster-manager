@@ -13,6 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/giantswarm/cluster-manager/internal/compose"
 )
 
 // Flux labels helm-controller puts on every object a HelmRelease applies.
@@ -57,8 +59,13 @@ type NodePool struct {
 	// node.kubernetes.io/instance-type requirement. Empty when unreadable.
 	InstanceTypes []string `json:"instanceTypes"`
 	// Accelerator is the accelerator of the owning pool release's values,
-	// empty when the pool has no release or the release names none.
-	Accelerator string `json:"accelerator,omitempty"`
+	// empty when the pool has no release or the release names none. Sizes
+	// are the release's sizes (the chart's default when it names none) as
+	// create_node_pool answers them — the node as AWS lists it, what it
+	// leaves a predictor, its on-demand price per hour in the cluster's
+	// region (giantswarm/cluster-manager#44); empty without a release.
+	Accelerator string                  `json:"accelerator,omitempty"`
+	Sizes       []compose.InstanceShape `json:"sizes,omitempty"`
 	// OwnerRelease is the HelmRelease that applied the pool (Flux's labels),
 	// null for a pool created by other means.
 	OwnerRelease *ReleaseRef `json:"ownerRelease"`
@@ -99,9 +106,11 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 		pools     *unstructured.UnstructuredList
 		releases  map[string]*unstructured.Unstructured
 		t         target
+		region    compose.Region
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { cpVersion = controlPlaneVersion(gctx, dyn, c); return nil })
+	g.Go(func() error { region = awsRegion(gctx, dyn, c); return nil })
 	g.Go(func() (err error) {
 		pools, err = dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(gctx, metav1.ListOptions{
 			LabelSelector: LabelClusterName + "=" + c.GetName(),
@@ -137,7 +146,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 	g, gctx = errgroup.WithContext(ctx)
 	for name, e := range entries {
 		g.Go(func() error {
-			np := s.nodePool(gctx, dyn, c, t, e.mp, e.release, name, cpVersion)
+			np := s.nodePool(gctx, dyn, c, t, e.mp, e.release, name, cpVersion, region)
 			mu.Lock()
 			out.NodePools = append(out.NodePools, np)
 			mu.Unlock()
@@ -151,7 +160,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 
 // nodePool is one pool of the answer: the MachinePool's facts where it
 // exists, the release's otherwise, and the lifecycle derived from both.
-func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, name, cpVersion string) NodePool {
+func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, name, cpVersion string, region compose.Region) NodePool {
 	r := s.readPoolState(ctx, dyn, c, t, mp, release, name)
 	np := NodePool{Name: name, Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, InstanceTypes: []string{}}
 	if mp != nil {
@@ -164,7 +173,13 @@ func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstru
 		np.OwnerRelease = &ReleaseRef{Name: r.release.GetName(), Namespace: r.release.GetNamespace()}
 	}
 	if r.release != nil {
-		np.Accelerator, _ = poolValues(r.release)
+		var sizes []string
+		np.Accelerator, sizes = poolValues(r.release)
+		if shapes, err := compose.Shapes(np.Accelerator, sizes); err == nil {
+			np.Sizes = compose.Priced(shapes, region)
+		} else {
+			slog.Debug("pool release names sizes outside the curated shapes", "cluster", c.GetName(), "pool", name, "error", err)
+		}
 	}
 	np.Phase, np.Steps, np.Deleting, np.Pending = lifecycle(r)
 	return np

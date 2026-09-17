@@ -255,16 +255,18 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 	out, err := svc.CreateNodePool(ctx, narrow)
 	require.NoError(t, err)
 	require.Len(t, out.Sizes, 1)
-	assert.Equal(t, compose.InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, UsableVCPU: 3, UsableMemoryGiB: 11.9}, out.Sizes[0])
+	assert.Equal(t, compose.InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, UsableVCPU: 3, UsableMemoryGiB: 11.9,
+		PriceNote: "no on-demand price: AWS lists no on-demand g6.xlarge in EU (Ireland) (eu-west-1) — the size is not offered there"}, out.Sizes[0], "wc2 runs in Ireland, where AWS offers no g6: no price, and why")
 	require.NotNil(t, out.PresetFit)
+	assert.Equal(t, PresetOriginPublished, out.PresetFit.Origin)
 	assert.Equal(t, "3 preset ConfigMap(s) in agent-platform on wc2", out.PresetFit.Source)
 	assert.Empty(t, out.PresetFit.Note)
 	require.Len(t, out.PresetFit.Presets, 3)
-	assert.Equal(t, PresetSizeFit{Preset: "acme-l4-wide", CPU: "4", Memory: "16Gi", GPUs: 1, GPUMemoryGiB: 21,
+	assert.Equal(t, PresetSizeFit{Preset: "acme-l4-wide", DisplayName: "Acme's wide L4 recipe", Model: "acme/wide-9b", CPU: "4", Memory: "16Gi", GPUs: 1, GPUMemoryGiB: 21,
 		Reason: "requests 4 vCPU / 16 GiB; xlarge leaves a predictor 3 vCPU / 11.9 GiB after the node's kubelet reservations and daemonsets — 2xlarge (8 vCPU / 32 GiB) would host it"}, out.PresetFit.Presets[0])
-	assert.Equal(t, PresetSizeFit{Preset: "qwen3-14b", CPU: "4", Memory: "48Gi", GPUs: 1, GPUMemoryGiB: 58,
+	assert.Equal(t, PresetSizeFit{Preset: "qwen3-14b", DisplayName: "Qwen3 14B", Model: "Qwen/Qwen3-14B", CPU: "4", Memory: "48Gi", GPUs: 1, GPUMemoryGiB: 58,
 		Reason: "needs 58 GiB of GPU memory across 1 GPU(s); a g6 GPU has 24 GiB"}, out.PresetFit.Presets[1])
-	assert.Equal(t, PresetSizeFit{Preset: "qwen3-4b-instruct", CPU: "2", Memory: "10Gi", GPUs: 1, GPUMemoryGiB: 20, Size: "xlarge"}, out.PresetFit.Presets[2])
+	assert.Equal(t, PresetSizeFit{Preset: "qwen3-4b-instruct", DisplayName: "Qwen3 4B Instruct", Model: "Qwen/Qwen3-4B-Instruct-2507", CPU: "2", Memory: "10Gi", GPUs: 1, GPUMemoryGiB: 20, Size: "xlarge"}, out.PresetFit.Presets[2])
 	require.Len(t, out.Warnings, 1, "the 128 GB preset is no warning: no L4 serves it")
 	assert.Equal(t, "serving preset acme-l4-wide fits no size of pool gpu-l4b: requests 4 vCPU / 16 GiB; xlarge leaves a predictor 3 vCPU / 11.9 GiB after the node's kubelet reservations and daemonsets — 2xlarge (8 vCPU / 32 GiB) would host it — a predictor composed from it would sit Pending while Karpenter refuses every size (giantswarm/agent-platform#502); add the size to sizes or serve a smaller preset", out.Warnings[0])
 	assertGolden(t, "create_node_pool_preset_fit_warning", out)
@@ -277,8 +279,13 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 
 	none, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
-	assert.Len(t, none.Sizes, 3)
-	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each", none.PresetFit.Note)
+	require.Len(t, none.Sizes, 3)
+	require.NotNil(t, none.Sizes[0].PricePerHourUSD, "wc1 runs in Frankfurt")
+	assert.InDelta(t, 1.0064, *none.Sizes[0].PricePerHourUSD, 1e-9)
+	assert.Equal(t, "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)", none.Sizes[0].PriceSource)
+	assert.Equal(t, compose.PriceAsOf, none.Sizes[0].PriceAsOf)
+	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each", none.PresetFit.Note, "this server reads no charts: the note stands")
+	assert.Empty(t, none.PresetFit.Origin)
 	assert.Empty(t, none.PresetFit.Presets)
 	assert.Empty(t, none.Warnings)
 
@@ -287,6 +294,58 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 	_, err = svc.CreateNodePool(ctx, bad)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `size "3xlarge": not a size of the g6 family (nvidia-l4); the sizes are xlarge, 2xlarge, 4xlarge, 8xlarge, 12xlarge, 16xlarge, 24xlarge, 48xlarge`)
+}
+
+// TestCreateNodePoolPresetFitFromChart (giantswarm/cluster-manager#44): wc1
+// publishes no preset and the call would compose the slice, so the presets
+// that slice would publish are judged — read from the connectivity chart the
+// slice's agent-platform release (4.27.2, the fixture's platform) resolves
+// for its range, 4.28.0 in the fake registry, not the meta chart's own
+// version. The 8B preset fits an xlarge; the 14B none (no warning: no L4
+// serves it); the wide recipe only a 2xlarge — a warning on an xlarge-only
+// pool. wc2's published ConfigMaps keep precedence over the chart, and a
+// registry that cannot be read is a note.
+func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
+	lab := newLab(t, "installation.yaml")
+	svc := lab.service(Config{Installation: "gazelle"}, WithChartReader(shippedPresetCharts()))
+	ctx := context.Background()
+
+	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	require.NotNil(t, out.PresetFit)
+	assert.Equal(t, PresetOriginChart, out.PresetFit.Origin)
+	assert.Equal(t, `3 preset(s) shipped by agent-platform-connectivity 4.28.0, the chart the slice's agent-platform 4.27.2 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, out.PresetFit.Source)
+	assert.Empty(t, out.PresetFit.Note)
+	require.Len(t, out.PresetFit.Presets, 3)
+	assert.Equal(t, PresetSizeFit{Preset: "qwen3-14b", DisplayName: "Qwen3 14B", Model: "Qwen/Qwen3-14B", CPU: "4", Memory: "48Gi", GPUs: 1, GPUMemoryGiB: 58,
+		Reason: "needs 58 GiB of GPU memory across 1 GPU(s); a g6 GPU has 24 GiB"}, out.PresetFit.Presets[0])
+	assert.Equal(t, PresetSizeFit{Preset: "qwen3-8b-fp8", DisplayName: "Qwen3 8B FP8", Model: "Qwen/Qwen3-8B-FP8", CPU: "2", Memory: "10Gi", GPUs: 1, GPUMemoryGiB: 21, Size: "xlarge"}, out.PresetFit.Presets[1])
+	assert.Equal(t, PresetSizeFit{Preset: "wide-l4", DisplayName: "Wide L4 recipe", Model: "acme/wide-9b", CPU: "4", Memory: "16Gi", GPUs: 1, GPUMemoryGiB: 20, Size: "2xlarge"}, out.PresetFit.Presets[2])
+	assert.Empty(t, out.Warnings, "every hostable preset has a size in the default pool")
+	require.NotNil(t, out.Sizes[0].PricePerHourUSD)
+	assert.InDelta(t, 1.0064, *out.Sizes[0].PricePerHourUSD, 1e-9, "g6.xlarge in Frankfurt, beside the fit")
+	assertGolden(t, "create_node_pool_preset_fit_from_chart", out)
+
+	narrow := l4("wc1", "gpu-l4", true)
+	narrow.Pool.Sizes = []string{"xlarge"}
+	out, err = svc.CreateNodePool(ctx, narrow)
+	require.NoError(t, err)
+	assert.Equal(t, "xlarge", out.PresetFit.Presets[1].Size)
+	assert.Empty(t, out.PresetFit.Presets[2].Size)
+	require.Len(t, out.Warnings, 1)
+	assert.Contains(t, out.Warnings[0], "serving preset wide-l4 fits no size of pool gpu-l4: requests 4 vCPU / 16 GiB")
+
+	published, err := svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	assert.Equal(t, PresetOriginPublished, published.PresetFit.Origin, "the cluster's own presets take precedence over the chart's")
+	assert.Equal(t, "3 preset ConfigMap(s) in agent-platform on wc2", published.PresetFit.Source)
+
+	unreadable := lab.service(Config{Installation: "gazelle"}, WithChartReader(&fakeCharts{}))
+	out, err = unreadable.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.27.2: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
+	assert.Empty(t, out.PresetFit.Presets)
+	assert.Empty(t, out.PresetFit.Origin)
 }
 
 // TestCreateNodePoolBackendDocumentFollowsTheSizes (giantswarm/cluster-manager#26):
