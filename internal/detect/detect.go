@@ -205,7 +205,12 @@ func GPUOperatorState(ctx context.Context, t Target) (Component, OperatorReadine
 			r.ClusterPolicy = &ClusterPolicyState{Name: policy.GetName(), State: state}
 		}
 	}
-	r.Operands = operands(ctx, t.Reader)
+	var err error
+	if r.Operands, err = operands(ctx, t.Reader); err != nil {
+		r.OperandsError = "DaemonSets of " + t.Cluster + " not readable: " + err.Error()
+	} else if len(r.Operands) == 0 && r.ClusterPolicy != nil {
+		r.OperandsMessage = OperandsAbsent
+	}
 	nodes, err := Nodes(ctx, t.Reader)
 	if err != nil && len(found) == 0 {
 		return Unknown("nodes of " + t.Cluster + " not readable: " + err.Error()), r

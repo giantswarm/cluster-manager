@@ -66,9 +66,19 @@ type OperatorReadiness struct {
 	// be read.
 	ClusterPolicy *ClusterPolicyState `json:"clusterPolicy"`
 	// Operands are the device plugin and GPU feature discovery DaemonSets
-	// with their scheduled and ready pods; empty when none runs or the
-	// cluster cannot be read.
+	// with their scheduled and ready pods; empty while the operator has
+	// created none (OperandsMessage says so) or when the cluster cannot be
+	// read (OperandsError says so).
 	Operands []OperandState `json:"operands"`
+	// OperandsError is the read failure when the DaemonSets could not be
+	// listed: Operands is then empty for that reason, not for want of GPU
+	// nodes.
+	OperandsError string `json:"operandsError,omitempty"`
+	// OperandsMessage says why Operands is empty when the read succeeded
+	// and a ClusterPolicy exists: the operator creates its operand
+	// DaemonSets once a GPU node joins, so a pool at scale-to-zero has none
+	// (OperandsAbsent).
+	OperandsMessage string `json:"operandsMessage,omitempty"`
 	// releaseProvider ranks Release while the releases are collected.
 	releaseProvider Provider
 }
@@ -127,11 +137,15 @@ type Count struct {
 }
 
 // BackendState is the kserve backend document cluster-manager registers with
-// model-manager, when it is registered for the cluster.
+// model-manager, when it is registered for the cluster. Registered is
+// tri-state: true or false when the document was read, omitted with Error
+// set when it could not be read — never a bare false for a failed read.
 type BackendState struct {
-	Registered bool   `json:"registered"`
+	Registered *bool  `json:"registered,omitempty"`
 	Namespace  string `json:"namespace,omitempty"`
 	Name       string `json:"name,omitempty"`
+	// Error is the read failure; whether the document exists is unknown.
+	Error string `json:"error,omitempty"`
 }
 
 // GatewayState is a Gateway's readiness: its Programmed condition.
@@ -185,12 +199,19 @@ func childEvidence(children []ReleaseState) []string {
 	return out
 }
 
-// operands lists the operator's operand DaemonSets on the target.
-func operands(ctx context.Context, reader dynamic.Interface) []OperandState {
+// OperandsAbsent is OperatorReadiness.OperandsMessage while the operator has
+// created no operand DaemonSet: gpu-operator skips them until a GPU node
+// joins ("No GPU node in the cluster, do not create DaemonSets"), so a pool
+// at scale-to-zero has none while its ClusterPolicy reads ready.
+const OperandsAbsent = "no operand DaemonSet: the GPU operator creates the device plugin and GPU feature discovery DaemonSets once a GPU node joins (none at scale-to-zero)"
+
+// operands lists the operator's operand DaemonSets on the target; the list
+// is empty, never nil, with the error when the target cannot list them.
+func operands(ctx context.Context, reader dynamic.Interface) ([]OperandState, error) {
 	out := []OperandState{}
 	dss, err := list(ctx, reader, DaemonSetGVR, metav1.NamespaceAll, labelApp+" in ("+strings.Join(operandApps, ",")+")")
 	if err != nil {
-		return out
+		return out, err
 	}
 	for i := range dss.Items {
 		ds := &dss.Items[i]
@@ -198,7 +219,7 @@ func operands(ctx context.Context, reader dynamic.Interface) []OperandState {
 			Desired: NestedInt(ds, "status", "desiredNumberScheduled"), Ready: NestedInt(ds, "status", "numberReady")})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	return out, nil
 }
 
 // count counts the objects of a resource; nil when the target cannot list

@@ -17,15 +17,20 @@ import (
 // wc1Cluster is wc1 as list_clusters reports it over the lab.
 func wc1Cluster(t *testing.T, l *lab) Cluster {
 	t.Helper()
+	return clusterNamed(t, l, "wc1")
+}
+
+// clusterNamed lists the lab's clusters and returns the one named.
+func clusterNamed(t *testing.T, l *lab, name string) Cluster {
+	t.Helper()
 	answer, err := l.service(Config{Installation: "gazelle"}).ListClusters(context.Background())
 	require.NoError(t, err)
-	clusters := answer.Clusters
-	for _, c := range clusters {
-		if c.Name == "wc1" {
+	for _, c := range answer.Clusters {
+		if c.Name == name {
 			return c
 		}
 	}
-	t.Fatal("wc1 not listed")
+	t.Fatalf("%s not listed", name)
 	return Cluster{}
 }
 
@@ -63,6 +68,8 @@ func TestDetectGPUOperator(t *testing.T) {
 		assert.Equal(t, &detect.ClusterPolicyState{Name: "cluster-policy", State: "notReady"}, got.ClusterPolicy)
 		assert.Nil(t, got.Release, "a hand install left no release")
 		assert.Empty(t, got.Operands)
+		assert.Equal(t, detect.OperandsAbsent, got.OperandsMessage, "the block says why it is empty: no GPU node yet")
+		assert.Empty(t, got.OperandsError)
 	})
 
 	t.Run("unreachable", func(t *testing.T) {
