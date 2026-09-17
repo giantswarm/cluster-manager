@@ -98,12 +98,36 @@ func (td *teardown) record(act ObjectAction) {
 func (td *teardown) delete(res dynamic.ResourceInterface, act ObjectAction) error {
 	act.Action = actionDelete
 	if td.fits() && !td.dryRun {
-		defer timed(td.ctx, "delete", "kind", act.Kind, "name", act.Namespace+"/"+act.Name)()
+		defer timed(td.ctx, "delete", "kind", act.Kind, "name", act.String())()
 		if err := res.Delete(td.ctx, act.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete %s %s/%s: %w", act.Kind, act.Namespace, act.Name, err)
+			return fmt.Errorf("delete %s %s: %w", act.Kind, act.String(), err)
 		}
 	}
 	td.record(act)
+	return nil
+}
+
+// deleteNodeClaims removes the pool's idle nodes through their NodeClaims on
+// the cluster, as the caller, before anything else: Karpenter drains each
+// node and terminates its instance within the pool's terminationGracePeriod,
+// so the pool release's removal finds no node and nobody waits for the
+// empty-node consolidation (giantswarm/cluster-manager#49). A delete the
+// caller is not allowed is a refusal with the ways out; nothing else has
+// been written by then.
+func (td *teardown) deleteNodeClaims(reader dynamic.Interface, idle []*poolNode) error {
+	if len(idle) == 0 {
+		return nil
+	}
+	res := reader.Resource(detect.NodeClaimGVR)
+	for _, n := range idle {
+		err := td.delete(res, ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: n.claim.GetName()})
+		if apierrors.IsForbidden(err) {
+			return &ErrRefused{Reason: fmt.Sprintf("%v: removing the pool's idle node %s needs the delete of its NodeClaim as you — ask for it, wait for Karpenter to consolidate the empty node, or pass force to remove the pool regardless (its release's removal takes the nodes down)", err, n.name())}
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

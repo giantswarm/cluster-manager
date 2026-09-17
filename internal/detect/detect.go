@@ -92,7 +92,9 @@ type Target struct {
 
 // Resources the detection reads on the target.
 var (
-	NodesGVR            = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	NodesGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	// PodsGVR is the pods, read per node for what holds a GPU pool's node.
+	PodsGVR             = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	DeploymentGVR       = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	AppGVR              = schema.GroupVersionResource{Group: "application.giantswarm.io", Version: "v1alpha1", Resource: "apps"}
 	ClusterPolicyGVR    = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}

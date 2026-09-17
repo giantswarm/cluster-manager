@@ -71,6 +71,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	ConfigMapGVR:               "ConfigMapList",
 	AppGVR:                     "AppList",
 	detect.NodesGVR:            "NodeList",
+	detect.PodsGVR:             "PodList",
 	detect.DeploymentGVR:       "DeploymentList",
 	detect.ClusterPolicyGVR:    "ClusterPolicyList",
 	detect.InferenceServiceGVR: "InferenceServiceList",

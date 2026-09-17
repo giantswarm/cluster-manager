@@ -7,8 +7,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
@@ -175,46 +179,129 @@ func TestCreateNodePoolRefusals(t *testing.T) {
 // models served on the cluster (a Pending one too), or that none is, or why
 // that cannot be told —, forced removes the release, its source and nothing
 // else; a foreign release is never touched.
+// TestDeleteNodePool (giantswarm/cluster-manager#49): the nodes guard reads
+// the pool's nodes on the cluster. A node with a predictor on it is refused,
+// the node and the models named, the idle one beside; with the cluster not
+// readable the MachinePool's provider IDs decide and the refusal says so;
+// with force the pool goes regardless, its nodes with its release. Idle
+// nodes go with the pool in one call: their NodeClaims are deleted first
+// and listed in objects, the dry run lists them too.
 func TestDeleteNodePool(t *testing.T) {
 	lab := newLab(t, "installation.yaml")
 	svc := lab.service(Config{Installation: "gazelle"})
 	ctx := context.Background()
-
-	_, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
-	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 2 node(s) (")
-	assertRefused(t, err, "i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002) and wc1 serves no model: nothing of the platform's serving holds them")
-	assert.Equal(t, &Refused{Nodes: []string{"aws:///eu-west-1a/i-0a1b2c3d4e5f60001", "aws:///eu-west-1b/i-0a1b2c3d4e5f60002"}, Models: []string{}, Hint: refusedHint}, refusedBlock(t, err),
-		"the structured refusal beside the text (giantswarm/cluster-manager#41)")
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply}
 
 	lab.target(t, wc1APIServer, "wc1-serving.yaml")
-	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
-	assertRefused(t, err, "i-0a1b2c3d4e5f60002), serving 2 model(s) on wc1: InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them")
-	assert.Equal(t, []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"}, refusedBlock(t, err).Models)
+	_, err := svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 1 busy node(s) on wc1: node wc1-gpu-a10g-node-1 runs model-serving/llama-3-8b-kserve-6649fb66c8-dllt7 (1 GPU), serving 2 model(s) on wc1: InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them; 1 idle node(s) (wc1-gpu-a10g-node-2) go with the pool once the busy ones are free")
+	assert.Equal(t, &Refused{
+		Nodes:    []string{"wc1-gpu-a10g-node-1"},
+		Idle:     []string{"wc1-gpu-a10g-node-2"},
+		Models:   []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
+		Hint:     refusedHint,
+		ReadFrom: readFromCluster,
+	}, refusedBlock(t, err), "the structured refusal beside the text (giantswarm/cluster-manager#41): the DaemonSet's, the finished and the preemptible pod hold nothing")
 
 	lab.unreachable(wc1APIServer)
-	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
-	assertRefused(t, err, "; whether models are served on wc1 cannot be told (cluster wc1 not readable as you through "+wc1APIServer+": connection refused) — check the cluster's Serving group")
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 2 node(s) as its MachinePool lists them (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002) — cluster wc1 not readable as you through "+wc1APIServer+": connection refused, so the MachinePool's provider IDs decide, a list that lags a terminated instance by minutes; whether models are served on wc1 cannot be told (cluster wc1 not readable as you through "+wc1APIServer+": connection refused) — check the cluster's Serving group")
+	assert.Equal(t, &Refused{Nodes: []string{"aws:///eu-west-1a/i-0a1b2c3d4e5f60001", "aws:///eu-west-1b/i-0a1b2c3d4e5f60002"}, Models: []string{}, Hint: refusedHintMachinePool, ReadFrom: readFromMachinePool}, refusedBlock(t, err))
+
+	lab.target(t, wc1APIServer, "wc1-serving.yaml")
+	forced, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no node: the release's removal takes them down")
+
 	lab.target(t, wc1APIServer, "wc1.yaml", servingAPIs...)
-
-	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
+	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, DryRun: true})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"would-delete", "would-delete"}, actions(dry))
+	assert.Equal(t, []string{"would-delete NodeClaim /wc1-gpu-a10g-k7m2p", "would-delete NodeClaim /wc1-gpu-a10g-q9x4z", "would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(dry), "the idle nodes' NodeClaims first")
 	assertGolden(t, "delete_node_pool_dry_run", dry)
+	assert.Len(t, poolClaims(t, lab, "wc1-gpu-a10g"), 2, "a dry run touches nothing")
 
-	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true})
+	out, err := svc.DeleteNodePool(ctx, del)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"delete", "delete"}, actions(out))
+	assert.Equal(t, []string{"delete", "delete", "delete", "delete"}, actions(out))
+	assert.Empty(t, poolClaims(t, lab, "wc1-gpu-a10g"), "the NodeClaims are gone: Karpenter drains the nodes and terminates the instances")
 	_, err = lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
 	assert.Error(t, err, "gone")
 	_, err = lab.installation.Resource(compose.OCIRepositoryGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
 	assert.Error(t, err, "gone")
 
-	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	_, err = svc.DeleteNodePool(ctx, del)
 	var notFound *ErrNotFound
 	assert.True(t, errors.As(err, &notFound), "a second delete finds nothing: %v", err)
 
 	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc2", Name: "gpu-l4", Mode: ModeApply, Force: true})
 	assertRefused(t, err, "was not created by cluster-manager")
+}
+
+// TestDeleteNodePoolIgnoresTheMachinePoolsLingeringProviderIDs
+// (giantswarm/cluster-manager#49): the cluster shows no NodeClaim and no Node
+// of the pool while its MachinePool still lists two provider IDs — the list
+// follows a terminated instance minutes later. The live reads decide: the
+// pool goes without force and without a NodeClaim to remove.
+func TestDeleteNodePoolIgnoresTheMachinePoolsLingeringProviderIDs(t *testing.T) {
+	lab := newLab(t, "installation.yaml").target(t, wc1APIServer, "wc1-nodeclaims.yaml", servingAPIs...)
+	svc := lab.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	mp, err := lab.installation.Resource(MachinePoolGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), nestedInt(mp, "spec", "replicas"), "the MachinePool still counts the gone instances")
+
+	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"delete OCIRepository org-acme/wc1-gpu-a10g", "delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(out))
+}
+
+// TestDeleteNodePoolRefusesWhatItCannotJudge: a NodeClaim still launching (no
+// node registered: a predictor asked for it), pods on a node not readable as
+// the caller, and a NodeClaim the caller may not delete are each a refusal
+// with the way out — never a node torn from under a person.
+func TestDeleteNodePoolRefusesWhatItCannotJudge(t *testing.T) {
+	ctx := context.Background()
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply}
+
+	lab := newLab(t, "installation.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
+	launching := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1", "kind": "NodeClaim",
+		"metadata": map[string]any{"name": "wc1-gpu-a10g-n3w0n", "labels": map[string]any{detect.LabelKarpenterNodePool: "wc1-gpu-a10g"}},
+		"status":   map[string]any{"providerID": "aws:///eu-west-1a/i-0a1b2c3d4e5f60003"},
+	}}
+	_, err := lab.targets[wc1APIServer].Resource(detect.NodeClaimGVR).Create(ctx, launching, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 1 busy node(s) on wc1: NodeClaim wc1-gpu-a10g-n3w0n is launching, no node registered yet — a predictor asked for it and wc1 serves no model: nothing of the platform's serving holds them — scale what is named away and re-run once the pool is empty, or pass force to delete the pool with its nodes; 2 idle node(s) (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2) go with the pool once the busy ones are free")
+	assert.Equal(t, []string{"wc1-gpu-a10g-n3w0n"}, refusedBlock(t, err).Nodes)
+
+	lab = newLab(t, "installation.yaml")
+	svc = lab.service(Config{Installation: "gazelle"})
+	fakeTarget(t, lab, wc1APIServer).PrependReactor("list", detect.PodsGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("User \"alice\" cannot list resource \"pods\" in API group \"\" at the cluster scope"))
+	})
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 2 busy node(s) on wc1: whether node wc1-gpu-a10g-node-1 is idle cannot be told (list the pods on node wc1-gpu-a10g-node-1: pods is forbidden: User \"alice\" cannot list resource \"pods\" in API group \"\" at the cluster scope); whether node wc1-gpu-a10g-node-2 is idle cannot be told (")
+	assert.Equal(t, readFromCluster, refusedBlock(t, err).ReadFrom)
+
+	lab = newLab(t, "installation.yaml")
+	svc = lab.service(Config{Installation: "gazelle"})
+	fakeTarget(t, lab, wc1APIServer).PrependReactor("delete", detect.NodeClaimGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(detect.NodeClaimGVR.GroupResource(), "wc1-gpu-a10g-k7m2p", errors.New("User \"alice\" cannot delete resource \"nodeclaims\" in API group \"karpenter.sh\" at the cluster scope"))
+	})
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "delete NodeClaim wc1-gpu-a10g-k7m2p: nodeclaims.karpenter.sh \"wc1-gpu-a10g-k7m2p\" is forbidden: User \"alice\" cannot delete resource \"nodeclaims\" in API group \"karpenter.sh\" at the cluster scope: removing the pool's idle node wc1-gpu-a10g-node-1 needs the delete of its NodeClaim as you — ask for it, wait for Karpenter to consolidate the empty node, or pass force to remove the pool regardless (its release's removal takes the nodes down)")
+	_, err = lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	require.NoError(t, err, "nothing else was written: the NodeClaims go first")
+}
+
+// poolClaims lists the NodeClaims of a pool on wc1.
+func poolClaims(t *testing.T, l *lab, pool string) []unstructured.Unstructured {
+	t.Helper()
+	claims, err := l.targets[wc1APIServer].Resource(detect.NodeClaimGVR).List(context.Background(), metav1.ListOptions{LabelSelector: detect.LabelKarpenterNodePool + "=" + pool})
+	require.NoError(t, err)
+	return claims.Items
 }
 
 func actions(out *WriteResult) []string {

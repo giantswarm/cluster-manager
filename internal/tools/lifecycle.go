@@ -76,9 +76,10 @@ type poolState struct {
 	// infra is the pool's infrastructure object (KarpenterMachinePool or
 	// AWSMachinePool), nil when unreadable.
 	infra *unstructured.Unstructured
-	// claims are the pool's NodeClaims on the cluster; nil when the cluster
-	// or the API is not readable.
-	claims []unstructured.Unstructured
+	// live is the pool's nodes as the cluster shows them — NodeClaims, Nodes
+	// and what holds each; nil when the cluster, or neither of the two APIs,
+	// is readable.
+	live *poolLive
 	// pending are the teardown's targets still present, in teardown order.
 	pending []ObjectAction
 	// sourceGone: the pool release exists but its OCIRepository does not —
@@ -113,9 +114,8 @@ func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *u
 	}
 	if t.Reader != nil {
 		g.Go(func() error {
-			claims, err := t.Reader.Resource(detect.NodeClaimGVR).List(gctx, metav1.ListOptions{LabelSelector: detect.LabelKarpenterNodePool + "=" + pool})
-			if err == nil {
-				r.claims = claims.Items
+			if live := readPoolLive(gctx, t.Reader, pool); live.readable() {
+				r.live = live
 			}
 			return nil
 		})
@@ -193,7 +193,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	if r.mp != nil && r.mp.GetDeletionTimestamp() != nil {
 		removing = true
 	}
-	steps = append(steps, nodesStep(r.mp, r.infra, r.claims, steps[len(steps)-1].State == StepDone))
+	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone))
 
 	phase := PhaseReady
 	for _, st := range steps {
@@ -267,29 +267,33 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 
 // nodesStep counts the pool's nodes: the NodeClaims launching (no Ready
 // condition True), ready, and terminating (deleted), else the MachinePool's
-// replicas against its readyReplicas where NodeClaims cannot be read. Done
+// replicas against its readyReplicas where the cluster cannot be read. Done
 // when every node is counted — 0 at scale-to-zero; pending while the pool
-// itself is not ready.
-func nodesStep(mp, infra *unstructured.Unstructured, claims []unstructured.Unstructured, poolReady bool) Step {
+// itself is not ready. A ready node that holds nothing is named idle, since
+// its last pod left: delete_node_pool removes it with the pool. A Karpenter
+// pool's MachinePool that still lists instances the cluster no longer has
+// is said so — its list lags by minutes (giantswarm/cluster-manager#49).
+func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady bool) Step {
 	st := Step{Name: StepNodes, State: StepPending}
 	if mp == nil {
 		return st
 	}
 	var launching, ready, terminating int
 	var since string
-	for i := range claims {
-		claim := &claims[i]
-		cond, found := detect.ReadyCondition(claim)
-		switch {
-		case claim.GetDeletionTimestamp() != nil:
-			terminating++
-			since = latest(since, detect.Timestamp(claim.GetDeletionTimestamp().Time))
-		case found && cond.Status == "True":
-			ready++
-			since = latest(since, cond.LastTransitionTime)
-		default:
-			launching++
-			since = latest(since, detect.Timestamp(claim.GetCreationTimestamp().Time))
+	if live != nil {
+		for _, claim := range live.claims() {
+			cond, found := detect.ReadyCondition(claim)
+			switch {
+			case claim.GetDeletionTimestamp() != nil:
+				terminating++
+				since = latest(since, detect.Timestamp(claim.GetDeletionTimestamp().Time))
+			case found && cond.Status == "True":
+				ready++
+				since = latest(since, cond.LastTransitionTime)
+			default:
+				launching++
+				since = latest(since, detect.Timestamp(claim.GetCreationTimestamp().Time))
+			}
 		}
 	}
 	replicas, readyReplicas := nestedInt(mp, "spec", "replicas"), nestedInt(mp, "status", "readyReplicas")
@@ -304,6 +308,9 @@ func nodesStep(mp, infra *unstructured.Unstructured, claims []unstructured.Unstr
 	case launching > 0 || terminating > 0:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, terminating)
+	case live != nil && len(live.nodes) == 0 && replicas > 0 && karpenterPool(infra):
+		st.State, st.FinishedAt = StepDone, since
+		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
 	case replicas != readyReplicas:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d of %d node(s) ready", readyReplicas, replicas)
@@ -318,8 +325,20 @@ func nodesStep(mp, infra *unstructured.Unstructured, claims []unstructured.Unstr
 		if ids := providerIDs(infra); len(ids) > 0 {
 			st.Message += " (" + strings.Join(ids, ", ") + ")"
 		}
+		if live != nil {
+			if idle := live.idle(); len(idle) > 0 {
+				st.Message += fmt.Sprintf(", %d idle since %s (%s): delete_node_pool removes an idle node with the pool", len(idle), earliestIdle(idle), strings.Join(nodeNames(idle), ", "))
+			}
+		}
 	}
 	return st
+}
+
+// karpenterPool reports whether a pool's infrastructure is a
+// KarpenterMachinePool — the one kind whose nodes come and go with the
+// NodeClaims the cluster shows.
+func karpenterPool(infra *unstructured.Unstructured) bool {
+	return infra != nil && infra.GetKind() == "KarpenterMachinePool"
 }
 
 // providerIDs names a pool's nodes by provider id, from its infrastructure

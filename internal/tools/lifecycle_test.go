@@ -69,7 +69,8 @@ func TestListNodePoolsLifecycle(t *testing.T) {
 	assert.Equal(t, []string{actionPending}, actionsOf(half.Pending))
 
 	assert.Equal(t, PhaseReady, byName["wc1-gpu-a10g"].Phase)
-	assert.Equal(t, "2 node(s) ready (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002)", byName["wc1-gpu-a10g"].Steps[2].Message)
+	assert.Equal(t, "0 nodes on the cluster: the MachinePool still lists 2 gone (aws:///eu-west-1a/i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002), its list follows within minutes", byName["wc1-gpu-a10g"].Steps[2].Message,
+		"the cluster shows no node of the pool: its MachinePool's provider IDs lag (giantswarm/cluster-manager#49)")
 	assert.Equal(t, PhaseScaling, byName["wc1-def00"].Phase, "2 of 3 nodes ready, no release step for a pool without one")
 	assert.Equal(t, []string{StepMachinePool, StepNodes}, names(byName["wc1-def00"].Steps))
 

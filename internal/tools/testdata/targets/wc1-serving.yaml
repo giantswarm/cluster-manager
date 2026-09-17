@@ -43,3 +43,141 @@ spec:
   predictor:
     model:
       storageUri: hf://mistralai/Mistral-7B-Instruct-v0.3
+---
+# The GPU pool's two nodes, registered from Karpenter's NodeClaims. The
+# first carries llama-3-8b's predictor: busy. The second carries only what
+# holds nothing — the device plugin (a DaemonSet's, on every node of the pool
+# by design), the operator's finished CUDA validation, and the pool's prewarm
+# placeholder (preemptible by design, a negative priority): idle.
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-gpu-a10g-node-1
+  creationTimestamp: "2026-09-16T10:00:00Z"
+  labels:
+    giantswarm.io/machine-pool: wc1-gpu-a10g
+spec:
+  providerID: aws:///eu-west-1a/i-0a1b2c3d4e5f60001
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-gpu-a10g-node-2
+  creationTimestamp: "2026-09-16T10:00:00Z"
+  labels:
+    giantswarm.io/machine-pool: wc1-gpu-a10g
+spec:
+  providerID: aws:///eu-west-1b/i-0a1b2c3d4e5f60002
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  name: wc1-gpu-a10g-k7m2p
+  creationTimestamp: "2026-09-16T09:58:00Z"
+  labels:
+    karpenter.sh/nodepool: wc1-gpu-a10g
+spec:
+  nodeClassRef:
+    name: wc1-gpu-a10g
+status:
+  nodeName: wc1-gpu-a10g-node-1
+  providerID: aws:///eu-west-1a/i-0a1b2c3d4e5f60001
+  lastPodEventTime: "2026-09-16T12:30:00Z"
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-16T10:02:00Z"
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  name: wc1-gpu-a10g-q9x4z
+  creationTimestamp: "2026-09-16T09:58:00Z"
+  labels:
+    karpenter.sh/nodepool: wc1-gpu-a10g
+spec:
+  nodeClassRef:
+    name: wc1-gpu-a10g
+status:
+  nodeName: wc1-gpu-a10g-node-2
+  providerID: aws:///eu-west-1b/i-0a1b2c3d4e5f60002
+  lastPodEventTime: "2026-09-16T12:45:00Z"
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-16T10:02:00Z"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llama-3-8b-kserve-6649fb66c8-dllt7
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/name: llama-3-8b
+    app.kubernetes.io/part-of: llminferenceservice
+spec:
+  nodeName: wc1-gpu-a10g-node-1
+  containers:
+    - name: main
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+status:
+  phase: Running
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvidia-device-plugin-daemonset-x1y2z
+  namespace: gpu-operator
+  ownerReferences:
+    - apiVersion: apps/v1
+      kind: DaemonSet
+      name: nvidia-device-plugin-daemonset
+      uid: 6f1c2b3a-0000-4000-8000-000000000001
+spec:
+  nodeName: wc1-gpu-a10g-node-2
+  containers:
+    - name: nvidia-device-plugin
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+status:
+  phase: Running
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvidia-cuda-validator-8k3jf
+  namespace: gpu-operator
+spec:
+  nodeName: wc1-gpu-a10g-node-2
+  containers:
+    - name: cuda-validation
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+status:
+  phase: Succeeded
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wc1-gpu-a10g-prewarm-7hd2k
+  namespace: org-acme
+spec:
+  nodeName: wc1-gpu-a10g-node-2
+  priority: -1000
+  containers:
+    - name: sleep
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+status:
+  phase: Running

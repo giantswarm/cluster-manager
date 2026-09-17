@@ -53,24 +53,44 @@ const (
 )
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
-// version skew, a GitOps-owned object, nodes still running.
+// version skew, a GitOps-owned object, nodes still busy.
 type ErrRefused struct {
 	Reason string
-	// Refused is the structured form of the replicas guard's refusal, beside
+	// Refused is the structured form of the nodes guard's refusal, beside
 	// the text; nil for the other refusals.
 	Refused *Refused
 }
 
 // Refused is delete_node_pool's refusal as the portal renders it without
-// parsing prose: the pool's nodes, the models served on the cluster, the hint.
+// parsing prose: the pool's busy nodes, its idle ones, the models served on
+// the cluster, the hint, and what the guard read.
 type Refused struct {
-	Nodes  []string `json:"nodes"`
+	// Nodes are the pool's busy nodes by name — by provider id when read
+	// from the MachinePool.
+	Nodes []string `json:"nodes"`
+	// Idle are the pool's idle nodes: they go with the pool once the busy
+	// ones are free.
+	Idle   []string `json:"idle,omitempty"`
 	Models []string `json:"models"`
 	Hint   string   `json:"hint"`
+	// ReadFrom is what the guard judged from: `cluster` (the pool's
+	// NodeClaims and Nodes with the pods on them, read as the caller) or
+	// `machinePool` (the MachinePool's provider IDs, when the cluster cannot
+	// be read as the caller).
+	ReadFrom string `json:"readFrom"`
 }
 
-// refusedHint is what to expect after unloading.
-const refusedHint = "Karpenter removes an empty node about 10 minutes after its last pod; a served model has to be unloaded first."
+// What the nodes guard read from (Refused.ReadFrom).
+const (
+	readFromCluster     = "cluster"
+	readFromMachinePool = "machinePool"
+)
+
+// The hints of a refusal: what to expect after unloading.
+const (
+	refusedHint            = "Unload the served model(s) and re-run: delete_node_pool removes the pool's idle nodes itself and completes the teardown in one call."
+	refusedHintMachinePool = "Karpenter removes an empty node about 10 minutes after its last pod and the MachinePool's list follows minutes later; a served model has to be unloaded first. With the cluster readable as you, delete_node_pool removes idle nodes itself."
+)
 
 func (e *ErrRefused) Error() string { return e.Reason }
 
@@ -176,6 +196,15 @@ type ObjectAction struct {
 	// Changes are the spec paths an update changes — the dry-run's drift
 	// check on a re-run.
 	Changes []string `json:"changes,omitempty"`
+}
+
+// String names the object: `namespace/name`, the name alone for a
+// cluster-scoped one.
+func (a ObjectAction) String() string {
+	if a.Namespace == "" {
+		return a.Name
+	}
+	return a.Namespace + "/" + a.Name
 }
 
 // CreateNodePool composes the pool release for the cluster's current Release
@@ -498,9 +527,11 @@ func backendTargetName(t compose.BackendTarget) string {
 	return t.Cluster + " (" + t.APIServer + ")"
 }
 
-// DeleteNodePool removes what create_node_pool created. It refuses while the
-// pool's MachinePool has replicas unless forced — the refusal names the nodes
-// and the models served on the cluster.
+// DeleteNodePool removes what create_node_pool created. It refuses while a
+// node of the pool is busy unless forced — the refusal names the nodes, what
+// holds them and the models served on the cluster (nodesGuard) — and removes
+// the pool's idle nodes itself, through their NodeClaims on the cluster,
+// before anything else (giantswarm/cluster-manager#49).
 // With the cluster's last pool go the operator release cluster-manager
 // created, its slice release unless another slice is on in it, and the
 // kserve backend it registered. The slice goes in order (servingTeardown):
@@ -538,8 +569,10 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if !compose.OwnedBy(hr) {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s was not created by cluster-manager (%s): delete_node_pool removes only what create_node_pool created — %s", ns, release, ownerDescription(hr), removalHint(hr))}
 	}
+	t := s.target(ctx, dyn, c)
+	var idle []*poolNode
 	if !in.Force {
-		if err := s.replicasGuard(ctx, dyn, c, release); err != nil {
+		if idle, err = s.nodesGuard(ctx, dyn, c, release, t); err != nil {
 			return nil, err
 		}
 	}
@@ -553,8 +586,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, err
 	}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	if err := td.deleteNodeClaims(t.Reader, idle); err != nil {
+		return nil, err
+	}
 	if slice != nil {
-		if err := s.servingTeardown(td, s.target(ctx, dyn, c), in.Force); err != nil {
+		if err := s.servingTeardown(td, t, in.Force); err != nil {
 			return nil, err
 		}
 	}
@@ -679,40 +715,81 @@ func checkMode(mode string) error {
 	}
 }
 
-// replicasGuard refuses while the pool's MachinePool has replicas: on a
-// Karpenter pool nodes exist exactly while something is scheduled on them.
-// The refusal names the nodes and the models served on the cluster — what
-// keeps a GPU pool's nodes busy, read from the cluster's serving objects
-// directly so a predictor still Pending counts too — with the fix.
-func (s *Service) replicasGuard(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pool string) error {
+// nodesGuard refuses while a node of the pool is busy — a pod with a GPU or
+// a KServe predictor's runs on it, or its NodeClaim is still launching — and
+// answers the pool's idle nodes, whose NodeClaims the teardown removes first.
+// The nodes are read on the cluster as the caller (readPoolLive): Karpenter's
+// NodeClaims of the pool, the Nodes registered from them, the pods on each.
+// The MachinePool's provider IDs decide only when neither can be read — the
+// list lags a terminated instance by minutes, and kept a delete refused for
+// eight minutes after the node was gone (giantswarm/cluster-manager#49). The
+// refusal names the busy nodes with what holds them and the models served on
+// the cluster — read from the serving objects directly, so a predictor still
+// Pending counts too — with the fix, and says what it read from.
+func (s *Service) nodesGuard(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pool string, t target) ([]*poolNode, error) {
 	ns := c.GetNamespace()
 	mp, err := dyn.Resource(MachinePoolGVR).Namespace(ns).Get(ctx, pool, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return fmt.Errorf("get MachinePool %s/%s: %w", ns, pool, err)
+		return nil, fmt.Errorf("get MachinePool %s/%s: %w", ns, pool, err)
 	}
+	if t.Reader == nil {
+		return nil, machinePoolGuard(ctx, dyn, mp, t, t.Reason)
+	}
+	live := readPoolLive(ctx, t.Reader, pool)
+	if !live.readable() {
+		return nil, machinePoolGuard(ctx, dyn, mp, t, fmt.Sprintf("the pool's NodeClaims and Nodes on %s cannot be listed as you (%v; %v)", t.Cluster, live.claimsErr, live.nodesErr))
+	}
+	var busy []*poolNode
+	var reasons []string
+	for _, n := range live.nodes {
+		if reason := live.holds(n); reason != "" {
+			busy = append(busy, n)
+			reasons = append(reasons, reason)
+		}
+	}
+	idle := live.idle()
+	if len(busy) == 0 {
+		return idle, nil
+	}
+	clause, models := servedModelsClause(ctx, t, true)
+	reason := fmt.Sprintf("node pool %s still runs %d busy node(s) on %s: %s%s", pool, len(busy), t.Cluster, strings.Join(reasons, "; "), clause)
+	if len(idle) > 0 {
+		reason += fmt.Sprintf("; %d idle node(s) (%s) go with the pool once the busy ones are free", len(idle), strings.Join(nodeNames(idle), ", "))
+	}
+	return nil, &ErrRefused{
+		Reason:  reason,
+		Refused: &Refused{Nodes: nodeNames(busy), Idle: nodeNames(idle), Models: models, Hint: refusedHint, ReadFrom: readFromCluster},
+	}
+}
+
+// machinePoolGuard is the nodes guard when the cluster's nodes cannot be
+// read as the caller (why says so): the MachinePool's replicas and provider
+// IDs decide — a list that lags the instances by minutes — and the refusal
+// says they did.
+func machinePoolGuard(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured, t target, why string) error {
 	replicas := nestedInt(mp, "spec", "replicas")
 	if replicas == 0 {
 		return nil
 	}
-	nodes := poolNodes(ctx, dyn, mp, ns)
-	clause, models := servedModelsClause(ctx, s.target(ctx, dyn, c))
+	ids := machinePoolNodes(ctx, dyn, mp)
+	clause, models := servedModelsClause(ctx, t, false)
 	return &ErrRefused{
-		Reason:  fmt.Sprintf("node pool %s still runs %d node(s) (%s)%s", pool, replicas, joinOrUnknown(nodes), clause),
-		Refused: &Refused{Nodes: nodes, Models: models, Hint: refusedHint},
+		Reason:  fmt.Sprintf("node pool %s still runs %d node(s) as its MachinePool lists them (%s) — %s, so the MachinePool's provider IDs decide, a list that lags a terminated instance by minutes%s", mp.GetName(), replicas, joinOrUnknown(ids), why, clause),
+		Refused: &Refused{Nodes: ids, Models: models, Hint: refusedHintMachinePool, ReadFrom: readFromMachinePool},
 	}
 }
 
-// poolNodes names a MachinePool's nodes by provider id, from its
+// machinePoolNodes names a MachinePool's nodes by provider id, from its
 // infrastructure object; none when that cannot be read.
-func poolNodes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured, ns string) []string {
+func machinePoolNodes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured) []string {
 	ref := nestedRef(mp, "spec", "template", "spec", "infrastructureRef")
 	if ref == nil {
 		return []string{}
 	}
-	infra, err := getRef(ctx, dyn, ref, ns)
+	infra, err := getRef(ctx, dyn, ref, mp.GetNamespace())
 	if err != nil {
 		return []string{}
 	}
@@ -731,11 +808,12 @@ func joinOrUnknown(names []string) string {
 	return strings.Join(names, ", ")
 }
 
-// servedModelsClause is the replicas guard's second half: the models served
-// on the cluster, named for unloading (a GPU pool's nodes carry their
-// predictors); that none is, so something else holds the nodes; or why they
-// cannot be told — each with the fix.
-func servedModelsClause(ctx context.Context, t target) (string, []string) {
+// servedModelsClause is the nodes guard's second half: the models served on
+// the cluster, named for unloading (a GPU pool's nodes carry their
+// predictors); that none is, so something else holds the nodes — named
+// before when the nodes were read live, else unknown —; or why they cannot
+// be told — each with the fix.
+func servedModelsClause(ctx context.Context, t target, live bool) (string, []string) {
 	const rerun = "re-run once the pool is empty, or pass force to delete the pool with its nodes"
 	if t.Reader == nil {
 		return fmt.Sprintf("; whether models are served on %s cannot be told (%s) — check the cluster's Serving group, scale the workloads away and %s", t.Cluster, t.Reason, rerun), []string{}
@@ -748,7 +826,10 @@ func servedModelsClause(ctx context.Context, t target) (string, []string) {
 	for _, m := range models {
 		names = append(names, m.String())
 	}
-	if len(models) == 0 {
+	switch {
+	case len(models) == 0 && live:
+		return fmt.Sprintf(" and %s serves no model: nothing of the platform's serving holds them — scale what is named away and %s", t.Cluster, rerun), names
+	case len(models) == 0:
 		return fmt.Sprintf(" and %s serves no model: nothing of the platform's serving holds them — something else is scheduled there, or Karpenter has not consolidated the empty node yet — %s", t.Cluster, rerun), names
 	}
 	return fmt.Sprintf(", serving %d model(s) on %s: %s — unload them first (model-manager's unload_model, or the cluster's Serving group) and %s and the models on them", len(models), t.Cluster, joinModels(models), rerun), names
