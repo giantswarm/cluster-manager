@@ -140,8 +140,8 @@ func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstru
 	})
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(OperatorChartURL, "semver", OperatorChartRange)})
 	values := map[string]any{
-		"driver":  map[string]any{"enabled": row.Driver},
-		"toolkit": map[string]any{"enabled": row.Toolkit},
+		"driver":  map[string]any{valueEnabled: row.Driver},
+		"toolkit": map[string]any{valueEnabled: row.Toolkit},
 	}
 	if affinity := PoolAffinity(c, pools); affinity != nil {
 		values[NFDValuesKey] = map[string]any{"worker": map[string]any{"affinity": affinity}}

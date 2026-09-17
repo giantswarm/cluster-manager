@@ -80,6 +80,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.DaemonSetGVR:        "DaemonSetList",
 	detect.NodeClaimGVR:        "NodeClaimList",
 	detect.GatewayGVR:          "GatewayList",
+	JobGVR:                     "JobList",
 }
 
 // configsStorageGVR is the LLMInferenceServiceConfigs API in the storage

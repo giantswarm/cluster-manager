@@ -292,14 +292,14 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 	steps := []error{
 		set(SliceDomain(c, s), "global", "domain"),
 		set(identity, "global", "identity"),
-		set(!s.OwnCluster, "components", "agentgateway", "enabled"),
+		set(!s.OwnCluster, "components", "agentgateway", valueEnabled),
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
 	}
 	if jwks.InCluster() {
 		steps = append(steps,
 			set(jwks.Host, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "host"),
 			set(jwks.Port, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "port"),
-			set(true, "gateway", "jwksEgress", "enabled"),
+			set(true, "gateway", "jwksEgress", valueEnabled),
 			set(jwks.Namespace, "gateway", "jwksEgress", "namespace"),
 			set(jwks.Port, "gateway", "jwksEgress", "port"),
 		)
@@ -339,7 +339,7 @@ func OtherSliceOn(values map[string]any) bool {
 	}
 	for name, v := range components {
 		component, _ := v.(map[string]any)
-		if enabled, _ := component["enabled"].(bool); enabled && !serving[name] {
+		if enabled, _ := component[valueEnabled].(bool); enabled && !serving[name] {
 			return true
 		}
 	}

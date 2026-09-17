@@ -35,7 +35,7 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	assert.Equal(t, "1.31.4", out.KubernetesVersion, "from the Release CR")
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
 	assert.Equal(t, "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
-	assert.Equal(t, "0.3.1", out.ChartVersion)
+	assert.Equal(t, compose.DefaultPoolChartVersion, out.ChartVersion)
 	require.Len(t, out.Objects, 8, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the slice's OCIRepository and HelmRelease; the backend ConfigMap")
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
 	for _, o := range out.Objects {
@@ -48,6 +48,48 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	assert.Equal(t, []any{"registry.acme.example.io", "docker.io"}, mirrors["docker.io"], "endpoints without credentials")
 	assert.Equal(t, "<redacted>", out.Manifests[1]["stringData"].(map[string]any)["values.yaml"], "the Secret's content is not echoed")
 	assertGolden(t, "create_node_pool_dry_run", out)
+}
+
+// TestCreateNodePoolPrewarm (giantswarm/cluster-manager#48): the
+// installation's own pool takes prewarm — the dry run's pool release carries
+// pool.prewarm.enabled: true and nothing else of the block (the hold and the
+// image stay the chart's) — while a workload cluster's pool is refused,
+// naming the constraint, before anything is composed.
+func TestCreateNodePoolPrewarm(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "prewarm.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	in := l4("gazelle", "gpu-l40s", true)
+	in.Pool.Accelerator, in.Pool.Prewarm = "nvidia-l40s", true
+	out, err := svc.CreateNodePool(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, compose.DefaultPoolChartVersion, out.ChartVersion, "the pin carries the option")
+	var release map[string]any
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "gazelle-gpu-l40s" {
+			release = m
+		}
+	}
+	require.NotNil(t, release, "the pool release is among the manifests")
+	prewarm, _, _ := unstructured.NestedMap(release, "spec", "values", "pool", "prewarm")
+	assert.Equal(t, map[string]any{"enabled": true}, prewarm)
+
+	in.Pool.Prewarm = false
+	out, err = svc.CreateNodePool(context.Background(), in)
+	require.NoError(t, err)
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "gazelle-gpu-l40s" {
+			_, found, _ := unstructured.NestedMap(m, "spec", "values", "pool", "prewarm")
+			assert.False(t, found, "without the argument the values carry no prewarm block")
+		}
+	}
+
+	wc := l4("wc1", "gpu-l4", true)
+	wc.Pool.Prewarm = true
+	_, err = svc.CreateNodePool(context.Background(), wc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wc1 is a workload cluster")
+	assert.Contains(t, err.Error(), "re-run without prewarm")
 }
 
 // TestCreateNodePoolAppLayoutNoTeleport reads the snapshot from an App CR's

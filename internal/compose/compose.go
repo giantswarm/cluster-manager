@@ -15,6 +15,8 @@ import (
 const (
 	// PoolChart is the chart of a GPU pool release.
 	PoolChart = "gpu-node-pool"
+	// valueEnabled is the switch every chart's component values carry.
+	valueEnabled = "enabled"
 
 	// LabelChartName marks a HelmRelease with the chart it installs; a
 	// HelmRelease whose source is an OCIRepository (`spec.chartRef`) names
