@@ -363,12 +363,16 @@ func pollInterval(timeout time.Duration) time.Duration {
 // purgeConfigs removes the configs from the target, concurrently: deleted,
 // then their llmisvc finalizer taken off — a terminating object goes the
 // moment its last finalizer does, and a controller cannot put one back on an
-// object that is gone. The first error is returned.
+// object that is gone. Every request goes through the version the config was
+// listed in — the CRD's storage version (detect.ConfigsGVR), which needs no
+// conversion: the CRD's conversion webhook is the llmisvc controller's, gone
+// with its release a step before (giantswarm/cluster-manager#39). The first
+// error is returned.
 func purgeConfigs(ctx context.Context, reader dynamic.Interface, configs []unstructured.Unstructured) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for i := range configs {
 		c := &configs[i]
-		g.Go(func() error { return purgeConfig(gctx, reader, c.GetNamespace(), c.GetName()) })
+		g.Go(func() error { return purgeConfig(gctx, reader, c) })
 	}
 	return g.Wait()
 }
@@ -376,8 +380,9 @@ func purgeConfigs(ctx context.Context, reader dynamic.Interface, configs []unstr
 // purgeConfig deletes one config and takes its llmisvc finalizer off,
 // retrying the update on a conflict with the controller; gone already is
 // fine.
-func purgeConfig(ctx context.Context, reader dynamic.Interface, ns, name string) error {
-	res := reader.Resource(detect.LLMISVCConfigGVR).Namespace(ns)
+func purgeConfig(ctx context.Context, reader dynamic.Interface, c *unstructured.Unstructured) error {
+	ns, name := c.GetNamespace(), c.GetName()
+	res := reader.Resource(detect.LLMISVCConfigResource.WithVersion(c.GroupVersionKind().Version)).Namespace(ns)
 	if err := res.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete LLMInferenceServiceConfig %s/%s: %w", ns, name, err)
 	}

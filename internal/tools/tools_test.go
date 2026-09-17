@@ -75,12 +75,18 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.ClusterPolicyGVR:    "ClusterPolicyList",
 	detect.InferenceServiceGVR: "InferenceServiceList",
 	detect.LLMISVCGVR:          "LLMInferenceServiceList",
-	detect.LLMISVCConfigGVR:    "LLMInferenceServiceConfigList",
+	configsStorageGVR:          "LLMInferenceServiceConfigList",
 }
+
+// configsStorageGVR is the LLMInferenceServiceConfigs API in the storage
+// version of the fixtures' CRD (targets/wc1-configs.yaml, wc1-stranded.yaml):
+// the version the fake keeps the configs under, as the apiserver keeps them
+// in etcd, and the one every request of cluster-manager goes through.
+var configsStorageGVR = detect.LLMISVCConfigResource.WithVersion("v1alpha2")
 
 // servingAPIs are the APIs a cluster without the serving layer does not
 // serve.
-var servingAPIs = []schema.GroupVersionResource{detect.InferenceServiceGVR, detect.LLMISVCGVR, detect.LLMISVCConfigGVR}
+var servingAPIs = []schema.GroupVersionResource{detect.InferenceServiceGVR, detect.LLMISVCGVR, configsStorageGVR}
 
 // newFake is a fake dynamic client over a fixture; the APIs named absent
 // answer every list with not found, as an apiserver without them does.

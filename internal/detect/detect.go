@@ -99,10 +99,18 @@ var (
 	ClusterPolicyGVR    = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}
 	InferenceServiceGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1beta1", Resource: "inferenceservices"}
 	LLMISVCGVR          = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceservices"}
-	// LLMISVCConfigGVR is the well-known LLMInferenceServiceConfigs an
+	// CRDGVR is the CustomResourceDefinitions, read for the storage version
+	// of an API whose conversion webhook may be gone (ConfigsGVR).
+	CRDGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	// LLMISVCConfigResource is the well-known LLMInferenceServiceConfigs an
 	// LLMInferenceService composes from (the kserve-runtime-configs chart
-	// installs ten into the slice's release namespace).
-	LLMISVCConfigGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceserviceconfigs"}
+	// installs ten into the slice's release namespace). Deliberately without
+	// a version: the configs are read and removed through the CRD's storage
+	// version of the moment (ConfigsGVR), the one version that needs no
+	// conversion — the CRD converts through the llmisvc controller's
+	// webhook, gone with the controller's release while the teardown removes
+	// the configs (giantswarm/cluster-manager#39).
+	LLMISVCConfigResource = schema.GroupResource{Group: "serving.kserve.io", Resource: "llminferenceserviceconfigs"}
 )
 
 // Labels the detection reads.
@@ -403,15 +411,50 @@ func strandedEvidence(ctx context.Context, reader dynamic.Interface, namespace s
 		len(terminating), namespace, LLMISVCConfigFinalizer, strings.Join(Names(terminating), ", "))}
 }
 
-// Configs lists the LLMInferenceServiceConfigs of a namespace on the target,
-// sorted by name; an API the target does not serve has none.
+// ConfigsGVR is the LLMInferenceServiceConfigs API of the target in its
+// CRD's storage version, read now: the one version a request needs no
+// conversion for, so the configs can be listed and removed once the CRD's
+// conversion webhook — the llmisvc controller's — is gone. On gazelle
+// (2026-09-17 08:29Z) every delete through v1alpha1 of a config stored as
+// v1alpha2 failed with `conversion webhook … service
+// "llmisvc-webhook-server-service" not found` once the controller's release
+// was deleted, while the same through v1alpha2 succeeded
+// (giantswarm/cluster-manager#39). served is false where the CRD is not
+// there; a CRD that cannot be read is an error, never a guessed version.
+func ConfigsGVR(ctx context.Context, reader dynamic.Interface) (gvr schema.GroupVersionResource, served bool, err error) {
+	crd, err := reader.Resource(CRDGVR).Get(ctx, LLMISVCConfigResource.String(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return schema.GroupVersionResource{}, false, nil
+		}
+		return schema.GroupVersionResource{}, false, fmt.Errorf("read CRD %s: %w", LLMISVCConfigResource, err)
+	}
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	for _, v := range versions {
+		version, _ := v.(map[string]any)
+		if storage, _ := version["storage"].(bool); storage {
+			name, _ := version["name"].(string)
+			return LLMISVCConfigResource.WithVersion(name), true, nil
+		}
+	}
+	return schema.GroupVersionResource{}, false, fmt.Errorf("CRD %s names no storage version", LLMISVCConfigResource)
+}
+
+// Configs lists the LLMInferenceServiceConfigs of a namespace on the target
+// through the CRD's storage version (ConfigsGVR), sorted by name; an API the
+// target does not serve has none. Each carries the version it was read in,
+// the one to remove it through.
 func Configs(ctx context.Context, reader dynamic.Interface, namespace string) ([]unstructured.Unstructured, error) {
-	items, err := reader.Resource(LLMISVCConfigGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	gvr, served, err := ConfigsGVR(ctx, reader)
+	if err != nil || !served {
+		return nil, err
+	}
+	items, err := reader.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("list %s in %s: %w", LLMISVCConfigGVR.GroupResource(), namespace, err)
+		return nil, fmt.Errorf("list %s in %s: %w", gvr.GroupResource(), namespace, err)
 	}
 	sort.Slice(items.Items, func(i, j int) bool { return items.Items[i].GetName() < items.Items[j].GetName() })
 	return items.Items, nil

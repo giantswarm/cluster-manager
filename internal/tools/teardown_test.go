@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -33,7 +34,7 @@ const webhookDenial = `admission webhook "llminferenceserviceconfig.kserve-webho
 func (l *lab) finalizing(t *testing.T, apiServer string) *lab {
 	t.Helper()
 	dyn := fakeTarget(t, l, apiServer)
-	gvr, tracker := detect.LLMISVCConfigGVR, dyn.Tracker()
+	gvr, tracker := configsStorageGVR, dyn.Tracker()
 	dyn.PrependReactor("delete", gvr.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
 		del, _ := a.(k8stesting.DeleteAction)
 		obj, err := tracker.Get(gvr, del.GetNamespace(), del.GetName())
@@ -83,7 +84,7 @@ func (l *lab) controllerRuns(t *testing.T, apiServer string) *lab {
 	dyn := fakeTarget(t, l, apiServer)
 	_, err := dyn.Resource(detect.DeploymentGVR).Namespace("org-acme").Create(context.Background(), dep, metav1.CreateOptions{})
 	require.NoError(t, err)
-	gvr, tracker := detect.LLMISVCConfigGVR, dyn.Tracker()
+	gvr, tracker := configsStorageGVR, dyn.Tracker()
 	dyn.PrependReactor("delete", gvr.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if _, err := tracker.Get(detect.DeploymentGVR, "org-acme", detect.LLMISVCController); err != nil {
 			return false, nil, nil
@@ -259,6 +260,84 @@ func TestDeleteLastPoolTearsDownInOrder(t *testing.T) {
 	require.Len(t, out.Warnings, 1)
 	assert.Contains(t, out.Warnings[0], "3 LLMInferenceServiceConfig(s) in org-acme on wc1 removed by cluster-manager with serving.kserve.io/llmisvcconfig-finalizer taken off (the llmisvc controller's webhook denies every delete while it runs, and nothing clears the finalizer once it is gone): kserve-config-llm-decode-worker-data-parallel, kserve-config-llm-scheduler, kserve-config-llm-template")
 	assertGone(t, l, llmisvcResourcesRelease, runtimeConfigsRelease, "wc1-agent-platform", "wc1-gpu-a10g")
+}
+
+// conversionFailure is the apiserver's answer to a request for a
+// LLMInferenceServiceConfig through a version other than the storage one
+// once the CRD's conversion webhook service is gone (gazelle, 2026-09-17
+// 08:29Z).
+const conversionFailure = `conversion webhook for serving.kserve.io/v1alpha2, Kind=LLMInferenceServiceConfig failed: Post "https://llmisvc-webhook-server-service.org-acme.svc:443/convert?timeout=30s": service "llmisvc-webhook-server-service" not found`
+
+// conversionWebhookGoesWithTheController makes the fake at wc1 convert the
+// way the apiserver does: a request for a LLMInferenceServiceConfig through
+// a version other than the CRD's storage version needs the conversion
+// webhook, the llmisvc controller's — once the controller Deployment is gone
+// it fails with conversionFailure; the storage version needs no conversion
+// and is served throughout.
+func conversionWebhookGoesWithTheController(t *testing.T, l *lab) {
+	t.Helper()
+	dyn := fakeTarget(t, l, wc1APIServer)
+	dyn.PrependReactor("*", configsStorageGVR.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetResource().Version == configsStorageGVR.Version {
+			return false, nil, nil
+		}
+		if _, err := dyn.Tracker().Get(detect.DeploymentGVR, "org-acme", detect.LLMISVCController); err == nil {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewInternalError(errors.New(conversionFailure))
+	})
+}
+
+// moreConfigs adds n well-known configs to wc1 beside the fixture's three, as
+// the fake keeps them: in the storage version, finalizer on.
+func moreConfigs(t *testing.T, l *lab, n int) {
+	t.Helper()
+	res := l.targets[wc1APIServer].Resource(configsStorageGVR).Namespace("org-acme")
+	for i := range n {
+		c := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": configsStorageGVR.GroupVersion().String(), "kind": "LLMInferenceServiceConfig",
+			"metadata": map[string]any{"name": fmt.Sprintf("kserve-config-llm-extra-%d", i), "namespace": "org-acme", "finalizers": []any{detect.LLMISVCConfigFinalizer}},
+		}}
+		_, err := res.Create(context.Background(), c, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+}
+
+// TestDeleteLastPoolPurgesTheConfigsThroughTheStorageVersion: with the
+// controller's release gone the CRD's conversion webhook is gone too, and a
+// purge through a hard-coded v1alpha1 fails on every config (gazelle,
+// 2026-09-17 08:29Z: two partial calls, written=0 on the re-run). The purge
+// goes through the storage version the CRD names — v1alpha2 — and ten
+// configs are gone on the first call (giantswarm/cluster-manager#39).
+func TestDeleteLastPoolPurgesTheConfigsThroughTheStorageVersion(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	l.controllerRuns(t, wc1APIServer)
+	fluxUninstallsController(t, l, 1)
+	moreConfigs(t, l, 7)
+	conversionWebhookGoesWithTheController(t, l)
+	emptyPool(t, l)
+	ctx := context.Background()
+	require.Len(t, remainingConfigs(t, l), 10)
+
+	out := deleteLastPool(t, svc, ctx, false, false)
+	assert.False(t, out.Partial)
+	assert.Empty(t, remainingConfigs(t, l), "all ten gone on the first call")
+	var purged []string
+	for _, o := range out.Objects {
+		if o.Kind == "LLMInferenceServiceConfig" {
+			assert.Equal(t, "serving.kserve.io/v1alpha2", o.APIVersion, "removed through the storage version")
+			purged = append(purged, o.Name)
+		}
+	}
+	assert.Len(t, purged, 10)
+	assertGone(t, l, llmisvcResourcesRelease, runtimeConfigsRelease, "wc1-agent-platform", "wc1-gpu-a10g")
+
+	// The fake bites: the same delete through v1alpha1 is what the apiserver
+	// refused on gazelle.
+	err := l.targets[wc1APIServer].Resource(detect.LLMISVCConfigResource.WithVersion("v1alpha1")).Namespace("org-acme").Delete(ctx, "kserve-config-llm-template", metav1.DeleteOptions{})
+	require.Error(t, err)
+	assert.True(t, apierrors.IsInternalError(err))
+	assert.Contains(t, err.Error(), `service "llmisvc-webhook-server-service" not found`)
 }
 
 // TestDeleteLastPoolWithForceTakesTheSameOrder: force skips the guards, not
