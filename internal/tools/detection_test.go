@@ -50,11 +50,20 @@ func TestDetectGPUOperator(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
 			l := newLab(t, "installation.yaml").target(t, wc1APIServer, tc.fixture, servingAPIs...)
-			got := wc1Cluster(t, l).GPUOperator
+			got := wc1Cluster(t, l).GPUOperator.Component
 			tc.want.Evidence = tc.evidence
 			assert.Equal(t, tc.want, got)
 		})
 	}
+
+	// The ClusterPolicy's state is visible without parsing evidence
+	// (giantswarm/cluster-manager#41).
+	t.Run("a notReady ClusterPolicy", func(t *testing.T) {
+		got := wc1Cluster(t, newLab(t, "installation.yaml").target(t, wc1APIServer, "clusterpolicy.yaml", servingAPIs...)).GPUOperator.Readiness
+		assert.Equal(t, &detect.ClusterPolicyState{Name: "cluster-policy", State: "notReady"}, got.ClusterPolicy)
+		assert.Nil(t, got.Release, "a hand install left no release")
+		assert.Empty(t, got.Operands)
+	})
 
 	t.Run("unreachable", func(t *testing.T) {
 		got := wc1Cluster(t, newLab(t, "installation.yaml").unreachable(wc1APIServer)).GPUOperator
@@ -66,7 +75,7 @@ func TestDetectGPUOperator(t *testing.T) {
 		l := newLab(t, "installation.yaml")
 		_, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(context.Background(), l4("wc1", "gpu-l4", false))
 		require.NoError(t, err)
-		got := wc1Cluster(t, l).GPUOperator
+		got := wc1Cluster(t, l).GPUOperator.Component
 		assert.Equal(t, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderClusterManager, Evidence: []string{"HelmRelease org-acme/wc1-gpu-operator"}}, got,
 			"the release in org-acme targets wc1 through its kubeconfig; the installation side sees it even when the cluster does not")
 	})
@@ -98,7 +107,7 @@ func TestDetectServing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
 			l := newLab(t, "installation.yaml").target(t, wc1APIServer, tc.fixture, tc.absent...)
-			got := wc1Cluster(t, l).Serving
+			got := wc1Cluster(t, l).Serving.Component
 			tc.want.Evidence = tc.evidence
 			assert.Equal(t, tc.want, got)
 		})
@@ -121,7 +130,7 @@ func TestDetectServing(t *testing.T) {
 		_, err := svc.EnableModelServing(context.Background(), serving("wc1", false))
 		require.NoError(t, err)
 		l.target(t, wc1APIServer, "chart-kserve.yaml")
-		got := wc1Cluster(t, l).Serving
+		got := wc1Cluster(t, l).Serving.Component
 		assert.Equal(t, detect.ProviderClusterManager, got.Provider, "the controllers on the cluster are the slice release's children, whatever their chart label says")
 		assert.Contains(t, got.Evidence, "HelmRelease org-acme/wc1-agent-platform")
 		assert.Contains(t, got.Evidence, "Deployment agent-platform/kserve-controller-manager (1/1 ready)")
@@ -148,7 +157,7 @@ func TestDetectServing(t *testing.T) {
 		} {
 			t.Run(name, func(t *testing.T) {
 				target()
-				got := wc1Cluster(t, l).Serving
+				got := wc1Cluster(t, l).Serving.Component
 				assert.Equal(t, detect.StatusPresent, got.Status)
 				assert.Equal(t, detect.ProviderClusterManager, got.Provider)
 				assert.Contains(t, got.Evidence, failed, "the failed child, with the chart's own account")
@@ -157,6 +166,21 @@ func TestDetectServing(t *testing.T) {
 					assert.NotContains(t, e, "kserve-resources not Ready", "a Ready child is not named")
 					assert.NotContains(t, e, "wc2-agent-platform-connectivity", "another release's child is not the slice's")
 				}
+				// The same, structured (giantswarm/cluster-manager#41): every
+				// child with its Ready condition, nothing to parse.
+				readiness := wc1Cluster(t, l).Serving.Readiness
+				require.NotNil(t, readiness.Release)
+				children := map[string]detect.ReleaseState{}
+				for _, c := range readiness.Children {
+					children[c.Name] = c
+				}
+				assert.NotContains(t, children, "wc2-agent-platform-connectivity")
+				require.Contains(t, children, "agent-platform-connectivity")
+				assert.False(t, *children["agent-platform-connectivity"].Ready)
+				assert.Equal(t, "InstallFailed", children["agent-platform-connectivity"].Reason)
+				assert.Contains(t, children["agent-platform-connectivity"].Message, "gateway.jwksEgress.enabled is false")
+				require.Contains(t, children, "kserve-llmisvc-resources")
+				assert.Nil(t, children["kserve-llmisvc-resources"].Ready, "no Ready condition yet")
 			})
 		}
 	})

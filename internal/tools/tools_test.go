@@ -76,6 +76,9 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.InferenceServiceGVR: "InferenceServiceList",
 	detect.LLMISVCGVR:          "LLMInferenceServiceList",
 	configsStorageGVR:          "LLMInferenceServiceConfigList",
+	detect.DaemonSetGVR:        "DaemonSetList",
+	detect.NodeClaimGVR:        "NodeClaimList",
+	detect.GatewayGVR:          "GatewayList",
 }
 
 // configsStorageGVR is the LLMInferenceServiceConfigs API in the storage
@@ -221,8 +224,8 @@ func TestListClusters(t *testing.T) {
 	assert.Equal(t, "0.2.0", byName["wc2"].PoolReleases[0].ChartVersion, "version from the chart spec when nothing was attempted")
 	assert.Nil(t, byName["wc2"].PoolReleases[0].Ready, "no Ready condition yet")
 	assert.Nil(t, byName["wc1"].CommitTarget, "commit mode is not available in this stage")
-	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, byName["wc1"].GPUOperator, "Flatcar nodes, no operator")
-	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, byName["wc1"].Serving, "the serving APIs are not served")
+	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, byName["wc1"].GPUOperator.Component, "Flatcar nodes, no operator")
+	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, byName["wc1"].Serving.Component, "the serving APIs are not served")
 	assert.Equal(t, detect.StatusAbsent, byName["wc2"].GPUOperator.Status, "a pre-installed driver label is not an operator")
 	assert.Equal(t, detect.ProviderChart, byName["wc2"].Serving.Provider, "the platform's discovery ConfigMap")
 	assert.Equal(t, []string{"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)

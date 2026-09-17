@@ -183,10 +183,13 @@ func TestDeleteNodePool(t *testing.T) {
 	_, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
 	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 2 node(s) (")
 	assertRefused(t, err, "i-0a1b2c3d4e5f60001, aws:///eu-west-1b/i-0a1b2c3d4e5f60002) and wc1 serves no model: nothing of the platform's serving holds them")
+	assert.Equal(t, &Refused{Nodes: []string{"aws:///eu-west-1a/i-0a1b2c3d4e5f60001", "aws:///eu-west-1b/i-0a1b2c3d4e5f60002"}, Models: []string{}, Hint: refusedHint}, refusedBlock(t, err),
+		"the structured refusal beside the text (giantswarm/cluster-manager#41)")
 
 	lab.target(t, wc1APIServer, "wc1-serving.yaml")
 	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
 	assertRefused(t, err, "i-0a1b2c3d4e5f60002), serving 2 model(s) on wc1: InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them")
+	assert.Equal(t, []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"}, refusedBlock(t, err).Models)
 
 	lab.unreachable(wc1APIServer)
 	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
@@ -220,6 +223,13 @@ func actions(out *WriteResult) []string {
 		acts = append(acts, o.Action)
 	}
 	return acts
+}
+
+func refusedBlock(t *testing.T, err error) *Refused {
+	t.Helper()
+	var refused *ErrRefused
+	require.True(t, errors.As(err, &refused), "expected a refusal, got %v", err)
+	return refused.Refused
 }
 
 func assertRefused(t *testing.T, err error, contains string) {

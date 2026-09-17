@@ -1,0 +1,30 @@
+# wc1 as its apiserver shows it with Karpenter's NodeClaims: the wc1-gpu-term
+# pool's one node terminating (its predictor unloaded, Karpenter consolidating).
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  name: wc1-gpu-term-x7k2p
+  creationTimestamp: "2026-09-17T07:10:00Z"
+  deletionTimestamp: "2026-09-17T09:40:00Z"
+  finalizers: [karpenter.sh/termination]
+  labels:
+    karpenter.sh/nodepool: wc1-gpu-term
+spec:
+  nodeClassRef:
+    name: wc1-gpu-term
+status:
+  providerID: aws:///eu-west-1a/i-0a1b2c3d4e5f60007
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-17T07:12:30Z"

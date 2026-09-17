@@ -1,0 +1,313 @@
+# Pools of wc1 in every phase list_node_pools tells apart, added to
+# installation.yaml (giantswarm/cluster-manager#41). Five pool releases plus
+# wc1-gpu-a10g: none is the cluster's last, so a removal's targets are the
+# pool's own objects.
+#
+# wc1-gpu-new: right after create_node_pool — the release reconciling, no
+# MachinePool yet.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-new
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T09:00:00Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-new
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-new
+  values:
+    pool:
+      accelerator: nvidia-l4
+status:
+  conditions:
+    - type: Ready
+      status: "Unknown"
+      reason: Progressing
+      message: Running 'install' action with timeout of 5m0s
+      lastTransitionTime: "2026-09-17T09:00:05Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: wc1-gpu-new
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+# wc1-gpu-zero: ready at scale-to-zero — release Ready, MachinePool Ready, 0/0.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-zero
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T08:00:00Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-zero
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-zero
+  values:
+    pool:
+      accelerator: nvidia-l4
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-09-17T08:00:40Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: wc1-gpu-zero
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-gpu-zero
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T08:00:41Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    helm.toolkit.fluxcd.io/name: wc1-gpu-zero
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  clusterName: wc1
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc1-gpu-zero
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-17T08:02:10Z"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KarpenterMachinePool
+metadata:
+  name: wc1-gpu-zero
+  namespace: org-acme
+spec:
+  nodePool:
+    template:
+      spec:
+        requirements:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["g6.xlarge", "g6.2xlarge"]
+# wc1-gpu-term: one node, its NodeClaim terminating (targets/wc1-nodeclaims.yaml).
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-term
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T07:00:00Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-term
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-term
+  values:
+    pool:
+      accelerator: nvidia-l4
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-09-17T07:00:40Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: wc1-gpu-term
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-gpu-term
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T07:00:41Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    helm.toolkit.fluxcd.io/name: wc1-gpu-term
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  clusterName: wc1
+  replicas: 1
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc1-gpu-term
+status:
+  replicas: 1
+  readyReplicas: 1
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-17T07:02:10Z"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KarpenterMachinePool
+metadata:
+  name: wc1-gpu-term
+  namespace: org-acme
+spec:
+  providerIDList:
+    - aws:///eu-west-1a/i-0a1b2c3d4e5f60007
+  nodePool:
+    template:
+      spec:
+        requirements:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["g6.xlarge"]
+# wc1-gpu-gone: an accepted delete_node_pool reached the release — it and the
+# MachinePool are deleted, the source is gone; the pool stays listed removing.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-gone
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T06:00:00Z"
+  deletionTimestamp: "2026-09-17T09:30:00Z"
+  finalizers: [finalizers.fluxcd.io]
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-gone
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-gone
+  values:
+    pool:
+      accelerator: nvidia-l4
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-09-17T06:00:40Z"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-gpu-gone
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T06:00:41Z"
+  deletionTimestamp: "2026-09-17T09:30:02Z"
+  finalizers: [machinepool.cluster.x-k8s.io]
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    helm.toolkit.fluxcd.io/name: wc1-gpu-gone
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  clusterName: wc1
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc1-gpu-gone
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-17T06:02:10Z"
+# wc1-gpu-half: a delete_node_pool answered partial before the release — the
+# source is gone, the release stands untouched; the re-run finishes.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-gpu-half
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T05:00:00Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+    giantswarm.io/node-pool: gpu-half
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-gpu-half
+  values:
+    pool:
+      accelerator: nvidia-l4
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-09-17T05:00:40Z"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wc1-gpu-half
+  namespace: org-acme
+  creationTimestamp: "2026-09-17T05:00:41Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: wc1
+    helm.toolkit.fluxcd.io/name: wc1-gpu-half
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  clusterName: wc1
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: wc1-gpu-half
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-17T05:02:10Z"

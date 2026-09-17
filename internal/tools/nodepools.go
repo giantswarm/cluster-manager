@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -59,6 +62,16 @@ type NodePool struct {
 	// OwnerRelease is the HelmRelease that applied the pool (Flux's labels),
 	// null for a pool created by other means.
 	OwnerRelease *ReleaseRef `json:"ownerRelease"`
+	// Phase is where the pool stands: creating, ready, scaling, removing or
+	// failed; Steps are the steps behind it — the pool release Ready, the
+	// MachinePool ready, the nodes — each with its state and timestamps.
+	Phase Phase  `json:"phase"`
+	Steps []Step `json:"steps"`
+	// Deleting: a delete_node_pool is under way; Pending are the teardown's
+	// objects still present, terminating where deleted — the pool stays
+	// listed, removing, until its HelmRelease is gone.
+	Deleting bool           `json:"deleting,omitempty"`
+	Pending  []ObjectAction `json:"pending,omitempty"`
 }
 
 // ReleaseRef names a HelmRelease.
@@ -67,47 +80,94 @@ type ReleaseRef struct {
 	Namespace string `json:"namespace"`
 }
 
-// ListNodePools lists the MachinePools of one cluster; namespace may be empty
-// when the cluster's name is unique on the installation.
+// ListNodePools lists the pools of one cluster — its MachinePools, and the
+// pool releases whose MachinePool is not there (right after create_node_pool,
+// or while helm-controller uninstalls it) — with their lifecycle; namespace
+// may be empty when the cluster's name is unique on the installation. Every
+// read is concurrent: the call stays inside the aggregator's deadline
+// (giantswarm/cluster-manager#34's pattern).
 func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) (*NodePools, error) {
+	defer timed(ctx, "list node pools", "cluster", cluster)()
 	k := s.clients(ctx)
 	c, err := s.getCluster(ctx, k, cluster, namespace)
 	if err != nil {
 		return nil, err
 	}
 	dyn := k.Dynamic
-	cpVersion := controlPlaneVersion(ctx, dyn, c)
-
-	pools, err := dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(ctx, metav1.ListOptions{
-		LabelSelector: LabelClusterName + "=" + c.GetName(),
+	var (
+		cpVersion string
+		pools     *unstructured.UnstructuredList
+		releases  map[string]*unstructured.Unstructured
+		t         target
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { cpVersion = controlPlaneVersion(gctx, dyn, c); return nil })
+	g.Go(func() (err error) {
+		pools, err = dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(gctx, metav1.ListOptions{
+			LabelSelector: LabelClusterName + "=" + c.GetName(),
+		})
+		if err != nil {
+			return fmt.Errorf("list machinepools of %s/%s: %w", c.GetNamespace(), c.GetName(), err)
+		}
+		return nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("list machinepools of %s/%s: %w", c.GetNamespace(), c.GetName(), err)
+	g.Go(func() (err error) { releases, err = poolReleases(gctx, dyn, c.GetNamespace(), c.GetName()); return err })
+	g.Go(func() error { t = s.target(gctx, dyn, c); return nil })
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
-	out := &NodePools{Cluster: c.GetName(), Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, NodePools: []NodePool{}}
-	accelerators := map[ReleaseRef]string{}
+
+	type entry struct{ mp, release *unstructured.Unstructured }
+	entries := map[string]entry{}
 	for i := range pools.Items {
 		mp := &pools.Items[i]
-		np := NodePool{
-			Name:                mp.GetName(),
-			Namespace:           mp.GetNamespace(),
-			Version:             nestedString(mp, "spec", "template", "spec", "version"),
-			ControlPlaneVersion: cpVersion,
-			Replicas:            nestedInt(mp, "spec", "replicas"),
-			ReadyReplicas:       nestedInt(mp, "status", "readyReplicas"),
-			InstanceTypes:       instanceTypes(ctx, dyn, mp),
+		e := entry{mp: mp, release: releases[mp.GetName()]}
+		if owner := ownerRelease(mp); owner != nil && releases[owner.Name] != nil {
+			e.release = releases[owner.Name]
 		}
-		if owner := ownerRelease(mp); owner != nil {
-			np.OwnerRelease = owner
-			if _, seen := accelerators[*owner]; !seen {
-				accelerators[*owner] = releaseAccelerator(ctx, dyn, *owner)
-			}
-			np.Accelerator = accelerators[*owner]
-		}
-		out.NodePools = append(out.NodePools, np)
+		entries[mp.GetName()] = e
 	}
+	for name, hr := range releases {
+		if _, listed := entries[name]; !listed {
+			entries[name] = entry{release: hr}
+		}
+	}
+	out := &NodePools{Cluster: c.GetName(), Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, NodePools: make([]NodePool, 0, len(entries))}
+	var mu sync.Mutex
+	g, gctx = errgroup.WithContext(ctx)
+	for name, e := range entries {
+		g.Go(func() error {
+			np := s.nodePool(gctx, dyn, c, t, e.mp, e.release, name, cpVersion)
+			mu.Lock()
+			out.NodePools = append(out.NodePools, np)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
 	sort.Slice(out.NodePools, func(i, j int) bool { return out.NodePools[i].Name < out.NodePools[j].Name })
 	return out, nil
+}
+
+// nodePool is one pool of the answer: the MachinePool's facts where it
+// exists, the release's otherwise, and the lifecycle derived from both.
+func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, name, cpVersion string) NodePool {
+	r := s.readPoolState(ctx, dyn, c, t, mp, release, name)
+	np := NodePool{Name: name, Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, InstanceTypes: []string{}}
+	if mp != nil {
+		np.Version = nestedString(mp, "spec", "template", "spec", "version")
+		np.Replicas = nestedInt(mp, "spec", "replicas")
+		np.ReadyReplicas = nestedInt(mp, "status", "readyReplicas")
+		np.InstanceTypes = instanceTypes(r.infra)
+		np.OwnerRelease = ownerRelease(mp)
+	} else if r.release != nil {
+		np.OwnerRelease = &ReleaseRef{Name: r.release.GetName(), Namespace: r.release.GetNamespace()}
+	}
+	if r.release != nil {
+		np.Accelerator, _ = poolValues(r.release)
+	}
+	np.Phase, np.Steps, np.Deleting, np.Pending = lifecycle(r)
+	return np
 }
 
 // controlPlaneVersion is the control plane object's spec.version, else the
@@ -174,30 +234,11 @@ func ownerRelease(mp *unstructured.Unstructured) *ReleaseRef {
 	return &ReleaseRef{Name: name, Namespace: ns}
 }
 
-// releaseAccelerator is the accelerator of a pool release — the chart's
-// pool.accelerator value, as compose.Pool writes it — "" when the release
-// is unreadable or names none.
-func releaseAccelerator(ctx context.Context, dyn dynamic.Interface, ref ReleaseRef) string {
-	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-	if err != nil {
-		slog.Debug("owner release not readable", "release", ref.Namespace+"/"+ref.Name, "error", err)
-		return ""
-	}
-	accelerator, _ := poolValues(hr)
-	return accelerator
-}
-
 // instanceTypes reads the pool's infrastructure object: a launch template's
 // instanceType (AWSMachinePool), else every node.kubernetes.io/instance-type
 // requirement it carries (KarpenterMachinePool). Empty when unreadable.
-func instanceTypes(ctx context.Context, dyn dynamic.Interface, mp *unstructured.Unstructured) []string {
-	ref := nestedRef(mp, "spec", "template", "spec", "infrastructureRef")
-	if ref == nil {
-		return []string{}
-	}
-	infra, err := getRef(ctx, dyn, ref, mp.GetNamespace())
-	if err != nil {
-		slog.Debug("infrastructure of the pool not readable", "pool", mp.GetName(), "error", err)
+func instanceTypes(infra *unstructured.Unstructured) []string {
+	if infra == nil {
 		return []string{}
 	}
 	if t := nestedString(infra, "spec", "awsLaunchTemplate", "instanceType"); t != "" {

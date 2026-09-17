@@ -6,6 +6,8 @@ metadata:
   name: cluster-policy
   annotations:
     meta.helm.sh/release-name: gpu-operator
+status:
+  state: notReady
 ---
 apiVersion: v1
 kind: Node
