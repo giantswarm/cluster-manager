@@ -49,6 +49,20 @@ const (
 	// validations — see operandValues.
 	ValidatorWorkloadEnv = "WITH_WORKLOAD"
 
+	// TaintGPU is the pool's own taint on its nodes (the gpu-node-pool
+	// chart's NodePool `taints`), the one the operator chart's operands
+	// tolerate by default.
+	TaintGPU = "nvidia.com/gpu"
+	// TaintUninitialized and TaintEBSAgentNotReady are the two of Karpenter's
+	// start-up taints on a fresh pool node (the NodePool's `startupTaints`)
+	// that DaemonSets remove once they run there: a taint remover, the EBS
+	// CSI node plugin. The operands tolerate them — see startupTolerations.
+	TaintUninitialized    = "node.cluster.x-k8s.io/uninitialized"
+	TaintEBSAgentNotReady = "ebs.csi.aws.com/agent-not-ready"
+	// tolerationExists is the toleration operator matching a taint of the
+	// key whatever its value.
+	tolerationExists = "Exists"
+
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
 	// operator not to deploy the driver.
@@ -158,11 +172,12 @@ func OperatorReleaseName(cluster string) string { return cluster + OperatorRelea
 // installation's own cluster included, whose Secret points at the same API
 // server (see Delivery in compose.go) — configured from the table's row,
 // running on a pool node only the operands a single-GPU serving pool uses
-// (see operandValues; opts is the installation's say), with Node Feature
-// Discovery's worker pinned to the cluster's GPU pools (pools: the pool
-// names within the cluster; see PoolAffinity) and polling every
-// NFDWorkerSleepInterval. The objects carry the fleet's labels and, in apply
-// mode, an ownerReference to the Cluster.
+// (see operandValues; opts is the installation's say), the worker and the
+// operands tolerating the node's start-up taints (see startupTolerations),
+// with Node Feature Discovery's worker pinned to the cluster's GPU pools
+// (pools: the pool names within the cluster; see PoolAffinity) and polling
+// every NFDWorkerSleepInterval. The objects carry the fleet's labels and, in
+// apply mode, an ownerReference to the Cluster.
 func Operator(c Cluster, row OperatorRow, pools []string, opts OperatorOptions) []*unstructured.Unstructured {
 	name := OperatorReleaseName(c.Name)
 	meta := objectMeta(c, map[string]any{
@@ -171,13 +186,17 @@ func Operator(c Cluster, row OperatorRow, pools []string, opts OperatorOptions) 
 		LabelCluster:   c.Name,
 	})
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(OperatorChartURL, "semver", OperatorChartRange)})
-	worker := map[string]any{"config": map[string]any{"core": map[string]any{"sleepInterval": NFDWorkerSleepInterval}}}
+	worker := map[string]any{
+		"config":      map[string]any{"core": map[string]any{"sleepInterval": NFDWorkerSleepInterval}},
+		"tolerations": startupTolerations(controlPlaneToleration(), gpuToleration()),
+	}
 	if affinity := PoolAffinity(c, pools); affinity != nil {
 		worker["affinity"] = affinity
 	}
 	values := operandValues(opts)
 	values["driver"] = map[string]any{valueEnabled: row.Driver}
 	values["toolkit"] = map[string]any{valueEnabled: row.Toolkit}
+	values["daemonsets"] = map[string]any{"tolerations": startupTolerations(gpuToleration())}
 	values[NFDValuesKey] = map[string]any{"worker": worker}
 	spec := helmReleaseSpec(OperatorChart, true, map[string]any{OperatorValuesKey: values})
 	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}
@@ -227,6 +246,53 @@ func operandValues(opts OperatorOptions) map[string]any {
 		"migManager":   map[string]any{valueEnabled: false},
 		"dcgmExporter": map[string]any{valueEnabled: opts.DCGMExporter},
 	}
+}
+
+// startupTolerations are the tolerations of a DaemonSet the operator release
+// runs on a pool node: the chart's defaults for it (given — Helm replaces a
+// list, so they are restated) and the two of Karpenter's start-up taints
+// that DaemonSets remove, TaintUninitialized (a taint remover) and
+// TaintEBSAgentNotReady (the EBS CSI node plugin), each once it has pulled
+// its image and run on the fresh node. With the defaults alone the Node
+// Feature Discovery worker's pod is created only once the last of the two is
+// gone — on an installation 12 s after node Ready on one node shape and 49 s
+// on two others, a constant of the taint window, not of load —, then NFD
+// labels the node, the operator creates the validator, device plugin and GPU
+// feature discovery, their init chains run, and `nvidia.com/gpu` is
+// allocatable 73–108 s after Ready. Tolerating the two, the worker and the
+// operands are created as soon as the kubelet registers and the CNI is up,
+// and pull their images before the serving runtime's pre-pull (8.8 GB, from
+// Ready + 6 s) saturates the node's pull path
+// (giantswarm/cluster-manager#73). `Exists` without an effect matches the
+// taint whatever its value and effect: the NodePool's startupTaints carry
+// `value: "true"`, the kubelet's own registration none. Not tolerated:
+// `node.cilium.io/agent-not-ready` — the four operands use the pod network
+// (the chart's `hostNetwork: false`), so their sandbox needs the CNI anyway
+// and tolerating it would only put them into the kubelet's sandbox
+// back-off; `karpenter.sh/unregistered` — Karpenter removes it itself at
+// registration.
+func startupTolerations(defaults ...map[string]any) []any {
+	out := make([]any, 0, len(defaults)+2)
+	for _, d := range defaults {
+		out = append(out, d)
+	}
+	for _, key := range []string{TaintUninitialized, TaintEBSAgentNotReady} {
+		out = append(out, map[string]any{"key": key, "operator": tolerationExists})
+	}
+	return out
+}
+
+// gpuToleration is the operator chart's default toleration of the pool's
+// TaintGPU (`daemonsets.tolerations` and the NFD worker's alike).
+func gpuToleration() map[string]any {
+	return map[string]any{"key": TaintGPU, "operator": tolerationExists, "effect": "NoSchedule"}
+}
+
+// controlPlaneToleration is the operator chart's other default toleration of
+// the NFD worker, for a control-plane node; the pool affinity never places
+// the worker there, the default stands restated.
+func controlPlaneToleration() map[string]any {
+	return map[string]any{"key": "node-role.kubernetes.io/control-plane", "operator": "Equal", "value": "", "effect": "NoSchedule"}
 }
 
 // PoolAffinity is the node affinity that keeps a DaemonSet on the nodes of
