@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/Masterminds/semver/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,7 +21,18 @@ const (
 	// the newest released chart. The pool release pins the chart exactly — a
 	// bootstrap change rolls GPU nodes under a served model, so bumps are
 	// explicit (bumblebee-plans#46 D3).
-	DefaultPoolChartVersion = "0.5.0"
+	DefaultPoolChartVersion = "0.6.0"
+	// SysextPoolChartVersion is the first chart whose default bootstrap
+	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
+	// nvidia-drivers system extension instead of building it at first boot
+	// (`pool.nvidiaDriver.source: flatcar-sysext`, giantswarm/gpu-node-pool#19).
+	// cluster-manager writes no nvidiaDriver block: the chart's default is
+	// the extension.
+	SysextPoolChartVersion = "0.6.0"
+	// MinSysextFlatcarVersion is the first Flatcar release shipping the
+	// extension; an older image would fail its boot looking for it, and the
+	// chart refuses it at render.
+	MinSysextFlatcarVersion = "4344.0.0"
 	// ReleaseInterval is the reconciliation interval of the source and the
 	// release.
 	ReleaseInterval = "10m"
@@ -49,6 +61,10 @@ var DefaultPoolSizes = []string{"xlarge", "2xlarge", "4xlarge"}
 // PoolNamePattern is the pool name's shape: five to twenty characters, since
 // `<cluster>-<pool>` becomes the NodePool, EC2NodeClass and S3 key names.
 var PoolNamePattern = regexp.MustCompile(`^[a-z0-9][-a-z0-9]{3,18}[a-z0-9]$`)
+
+// machineImageFlatcar finds the Flatcar version in a machine image name of
+// the fleet's shape, `flatcar-<channel>-<flatcar>-kube-<k8s>-tooling-<tooling>-gs`.
+var machineImageFlatcar = regexp.MustCompile(`^flatcar-[a-z]+-(\d+\.\d+\.\d+)-`)
 
 // Cluster is what the pool release needs to know about the cluster it joins:
 // its identity, its current release's pins, and the credential-free snapshot
@@ -164,6 +180,35 @@ func (p PoolSpec) validatePrewarm(c Cluster) error {
 	return fmt.Errorf("prewarm: the placeholder Job runs in the release namespace on the installation (%s), where only the installation's own pool's nodes join; %s is a workload cluster, whose pool's first node launches with the first predictor — re-run without prewarm", c.ManagementCluster, c.Name)
 }
 
+// validateFlatcar holds the chart's constraint on the machine image: from
+// SysextPoolChartVersion a pool node takes its NVIDIA driver from Flatcar's
+// prebuilt nvidia-drivers system extension, which the OS downloads for its
+// own version at first boot — an image older than MinSysextFlatcarVersion
+// has none to download and fails the boot, and the chart refuses it at
+// render. Refused first, naming the version and the way out (a newer
+// cluster release; the chart's image-build source is not offered), rather
+// than left to the render to fail a release already written. An image whose
+// name carries no Flatcar version is refused the same way. A pin to an
+// older chart builds the driver at boot and is not judged.
+func validateFlatcar(c Cluster, chartVersion string) error {
+	chart, err := semver.NewVersion(chartVersion)
+	if err != nil {
+		return fmt.Errorf("chart version %q: not a version: %w", chartVersion, err)
+	}
+	if chart.LessThan(semver.MustParse(SysextPoolChartVersion)) {
+		return nil
+	}
+	m := machineImageFlatcar.FindStringSubmatch(c.MachineImage)
+	if m == nil {
+		return fmt.Errorf("machine image %q of cluster %s names no Flatcar version (`flatcar-<channel>-<version>-…`): a pool node of gpu-node-pool %s takes its NVIDIA driver from the Flatcar release's prebuilt nvidia-drivers system extension, picked by that version", c.MachineImage, c.Name, chartVersion)
+	}
+	flatcar := semver.MustParse(m[1])
+	if !flatcar.LessThan(semver.MustParse(MinSysextFlatcarVersion)) {
+		return nil
+	}
+	return fmt.Errorf("the release of cluster %s pins Flatcar %s, and a pool node of gpu-node-pool %s takes its NVIDIA driver from Flatcar's prebuilt nvidia-drivers system extension, first shipped with Flatcar %s — an older image has no extension to download and fails its boot: the pool needs a cluster release with Flatcar %s or newer; upgrade the cluster, then re-run", c.Name, m[1], chartVersion, MinSysextFlatcarVersion, MinSysextFlatcarVersion)
+}
+
 // ReleaseName is the name of the pool's HelmRelease and OCIRepository, the
 // same `<cluster>-<pool>` the chart gives the MachinePool.
 func ReleaseName(cluster, pool string) string { return cluster + "-" + pool }
@@ -187,11 +232,14 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	if err := p.validatePrewarm(c); err != nil {
 		return nil, err
 	}
-	name := ReleaseName(c.Name, p.Name)
 	version := p.ChartVersion
 	if version == "" {
 		version = DefaultPoolChartVersion
 	}
+	if err := validateFlatcar(c, version); err != nil {
+		return nil, err
+	}
+	name := ReleaseName(c.Name, p.Name)
 	meta := objectMeta(c, map[string]any{
 		LabelChartName: PoolChart,
 		LabelManagedBy: ManagedBy,

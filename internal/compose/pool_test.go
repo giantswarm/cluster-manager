@@ -16,14 +16,16 @@ import (
 var update = flag.Bool("update", false, "rewrite the golden files from the current output")
 
 // wc1 is the fixture cluster the goldens are rendered for: release aws-31.0.0
-// (kubernetes 1.31.4, flatcar 4081.2.1, os-tooling 1.26.1), one registry
+// (kubernetes 1.31.4, flatcar 4459.2.1 — a release shipping the nvidia-drivers
+// system extension the pool's bootstrap takes the driver from —, os-tooling
+// 1.26.1), one registry
 // mirror without credentials, no proxy, teleport on, the fleet's tenant
 // ServiceAccount in its org namespace.
 func wc1() Cluster {
 	return Cluster{
 		Name: "wc1", Namespace: "org-acme", Organization: "acme", UID: "6f1c0c1e-8a4a-4c1e-9c3a-000000000001",
 		TenantServiceAccount: DefaultTenantServiceAccount,
-		KubernetesVersion:    "1.31.4", MachineImage: "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs",
+		KubernetesVersion:    "1.31.4", MachineImage: "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
 		BaseDomain: "acme.example.io", ManagementCluster: "gazelle",
 		RegistryMirrors: map[string][]string{"gsoci.azurecr.io": {"gsoci.azurecr.io"}},
 		CiliumIPAMMode:  "kubernetes", Teleport: true,
@@ -113,6 +115,48 @@ func TestPoolRefusesPrewarmOnAWorkloadCluster(t *testing.T) {
 	assert.Contains(t, err.Error(), "re-run without prewarm")
 	_, err = Pool(own(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 1, Prewarm: true})
 	assert.NoError(t, err, "the installation's own pool takes prewarm")
+}
+
+// TestPoolRefusesAFlatcarWithoutTheDriverExtension (giantswarm/cluster-manager#66):
+// from gpu-node-pool 0.6.0 a pool node takes its NVIDIA driver from
+// Flatcar's prebuilt nvidia-drivers system extension, shipped with Flatcar
+// 4344.0.0 and newer; the chart refuses an older image at render, the
+// composer first — naming the cluster's version, the extension's first
+// release and the way out. An image without a Flatcar version in its name
+// is refused too. A pin to an older chart builds the driver at boot and is
+// not judged.
+func TestPoolRefusesAFlatcarWithoutTheDriverExtension(t *testing.T) {
+	old := wc1()
+	old.MachineImage = "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs"
+	spec := PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 1}
+
+	_, err := Pool(old, spec)
+	require.Error(t, err)
+	for _, want := range []string{"pins Flatcar 4081.2.1", "gpu-node-pool " + DefaultPoolChartVersion, "first shipped with Flatcar 4344.0.0", "needs a cluster release with Flatcar 4344.0.0 or newer"} {
+		assert.Contains(t, err.Error(), want)
+	}
+
+	pinnedOld := spec
+	pinnedOld.ChartVersion = "0.5.0"
+	_, err = Pool(old, pinnedOld)
+	assert.NoError(t, err, "a chart before the extension builds the driver at boot on any Flatcar")
+
+	first := wc1()
+	first.MachineImage = "flatcar-stable-4344.0.0-kube-1.31.4-tooling-1.26.1-gs"
+	_, err = Pool(first, spec)
+	assert.NoError(t, err, "the extension's first release passes")
+
+	unnamed := wc1()
+	unnamed.MachineImage = "ami-0123456789abcdef0"
+	_, err = Pool(unnamed, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "names no Flatcar version")
+
+	garbage := spec
+	garbage.ChartVersion = "latest"
+	_, err = Pool(wc1(), garbage)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `chart version "latest": not a version`)
 }
 
 // TestPoolWithoutTenantServiceAccount: an installation without the tenancy

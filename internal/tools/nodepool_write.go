@@ -281,7 +281,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	in.Pool.Zones = pin.zones
 	objs, err := compose.Pool(facts, in.Pool)
 	if err != nil {
-		return nil, err
+		return nil, &ErrRefused{Reason: err.Error()}
 	}
 	operator, row, operatorObjs, err := s.operatorRelease(r.operator, target, facts, r.pools)
 	if err != nil {
