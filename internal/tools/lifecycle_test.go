@@ -60,7 +60,8 @@ func TestListNodePoolsLifecycle(t *testing.T) {
 	term := byName["wc1-gpu-term"]
 	assert.Equal(t, PhaseScaling, term.Phase)
 	assert.Equal(t, []string{StepDone, StepDone, StepInProgress}, states(term.Steps))
-	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating", term.Steps[2].Message)
+	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-7-7.eu-west-1.compute.internal terminating since 2026-09-17T09:40:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", term.Steps[2].Message,
+		"the terminating node named by its Node, with the NodeClaim's deletion time (giantswarm/cluster-manager#57)")
 	assert.Equal(t, "2026-09-17T09:40:00Z", term.Steps[2].Since, "since the NodeClaim's deletion")
 
 	gone := byName["wc1-gpu-gone"]
@@ -290,4 +291,40 @@ func TestListNodePoolsNamesIdleNodesOfGPUPoolsOnly(t *testing.T) {
 	gpu := byName["wc1-gpu-a10g"]
 	assert.Contains(t, gpu.Steps[2].Message, "2 idle since 2026-09-16T12:30:00Z (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2)")
 	assert.Equal(t, int32(2), podLists.Load(), "the GPU pool's two nodes are read, the general pool's node is not")
+}
+
+// TestNodesStepNamesTerminatingNodes (giantswarm/cluster-manager#57): a node
+// whose NodeClaim is deleted is named — by its Node, else by the claim while
+// none is registered — with the claim's deletion time and what goes on
+// meanwhile, after the counts; a launching claim is counted beside; the step
+// is in progress since the latest event among the claims.
+func TestNodesStepNamesTerminatingNodes(t *testing.T) {
+	mp := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cluster.x-k8s.io/v1beta1", "kind": "MachinePool",
+		"metadata": map[string]any{"name": "mc-gpu-l40s", "namespace": "org-acme", "creationTimestamp": "2026-09-18T03:22:00Z"},
+		"spec":     map[string]any{"replicas": int64(2)},
+		"status":   map[string]any{"replicas": int64(2), "readyReplicas": int64(2), "conditions": []any{condition("Ready", "True", "", "", "2026-09-18T03:22:14Z")}},
+	}}
+	registered := fakeClaim("mc-gpu-l40s-rwwqj", "2026-09-18T03:22:23Z", condition("Ready", "True", "", "", "2026-09-18T03:25:36Z"))
+	registered.Object["metadata"].(map[string]any)["deletionTimestamp"] = "2026-09-18T03:36:08Z"
+	node := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Node",
+		"metadata": map[string]any{"name": "ip-10-0-147-35.eu-central-1.compute.internal"},
+	}}
+	unregistered := fakeClaim("mc-gpu-l40s-x7k2p", "2026-09-18T03:30:00Z")
+	unregistered.Object["metadata"].(map[string]any)["deletionTimestamp"] = "2026-09-18T03:31:00Z"
+	launching := fakeClaim("mc-gpu-l40s-n3wb1", "2026-09-18T03:37:00Z")
+
+	live := &poolLive{nodes: []*poolNode{{claim: registered, node: node}, {claim: unregistered}, {claim: launching}}}
+	st := nodesStep(mp, nil, live, true, true)
+	assert.Equal(t, StepInProgress, st.State)
+	assert.Equal(t, "2026-09-18T03:37:00Z", st.Since, "since the latest event among the claims: the launching one's creation")
+	assert.Equal(t, "1 NodeClaim(s) launching, 0 ready, 2 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z, mc-gpu-l40s-x7k2p terminating since 2026-09-18T03:31:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message,
+		"the registered node by its Node's name, the unregistered by its claim's, each since its deletion")
+
+	only := &poolLive{nodes: []*poolNode{{claim: registered, node: node}}}
+	st = nodesStep(mp, nil, only, true, true)
+	assert.Equal(t, StepInProgress, st.State)
+	assert.Equal(t, "2026-09-18T03:36:08Z", st.Since, "since the NodeClaim's deletion")
+	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message)
 }

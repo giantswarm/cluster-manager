@@ -453,24 +453,25 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	if mp == nil {
 		return st
 	}
-	var launching, ready, terminating int
+	var launching, ready int
+	var terminating []*poolNode
 	var since string
 	if live != nil {
-		for _, claim := range live.claims() {
-			if live.refused(claim) {
+		for _, n := range live.nodes {
+			if n.claim == nil || live.refused(n.claim) {
 				continue
 			}
-			cond, found := detect.ReadyCondition(claim)
+			cond, found := detect.ReadyCondition(n.claim)
 			switch {
-			case claim.GetDeletionTimestamp() != nil:
-				terminating++
-				since = latest(since, detect.Timestamp(claim.GetDeletionTimestamp().Time))
+			case n.terminating():
+				terminating = append(terminating, n)
+				since = latest(since, n.deletedAt())
 			case found && cond.Status == "True":
 				ready++
 				since = latest(since, cond.LastTransitionTime)
 			default:
 				launching++
-				since = latest(since, detect.Timestamp(claim.GetCreationTimestamp().Time))
+				since = latest(since, detect.Timestamp(n.claim.GetCreationTimestamp().Time))
 			}
 		}
 	}
@@ -486,10 +487,13 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	case live != nil && len(live.failures) > 0:
 		st.State = StepInProgress
 		st.Since = live.failures[len(live.failures)-1].at
-		st.Message = launchFailureMessage(live.failures, launching, ready, terminating)
-	case launching > 0 || terminating > 0:
+		st.Message = launchFailureMessage(live.failures, launching, ready, len(terminating))
+	case launching > 0 || len(terminating) > 0:
 		st.State = StepInProgress
-		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, terminating)
+		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, len(terminating))
+		if len(terminating) > 0 {
+			st.Message += " — " + terminatingNodes(terminating)
+		}
 	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0:
 		st.State, st.FinishedAt = StepDone, since
 		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
@@ -514,6 +518,20 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 		}
 	}
 	return st
+}
+
+// terminatingNodes names the nodes whose NodeClaim is deleted, each since
+// when, and what goes on meanwhile: Karpenter drains the node and terminates
+// its instance, and the claim — with it the MachinePool of a pool being
+// removed — is gone once EC2 confirms the termination, minutes later. The
+// person watching a pool go sees what is still going, not a bare count
+// (giantswarm/cluster-manager#57).
+func terminatingNodes(nodes []*poolNode) string {
+	parts := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		parts = append(parts, fmt.Sprintf("%s terminating since %s", n.name(), n.deletedAt()))
+	}
+	return strings.Join(parts, ", ") + " (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)"
 }
 
 // gpuPoolRelease reports whether hr is a GPU pool release of

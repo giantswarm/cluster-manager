@@ -87,6 +87,10 @@ func TestPoolGoldens(t *testing.T) {
 				noJobWait, _, _ := unstructured.NestedBool(release.Object, "spec", action, "disableWaitForJobs")
 				assert.True(t, noJobWait, "%s does not wait for the chart's Jobs: the prewarm placeholder holds a node for minutes (giantswarm/cluster-manager#55)", action)
 			}
+			noUninstallWait, _, _ := unstructured.NestedBool(release.Object, "spec", "uninstall", "disableWait")
+			assert.True(t, noUninstallWait, "uninstall does not wait for the MachinePool to go: the instance's termination outlasts Helm's timeout (giantswarm/cluster-manager#57)")
+			_, hasTimeout, _ := unstructured.NestedString(release.Object, "spec", "uninstall", "timeout")
+			assert.False(t, hasTimeout, "uninstall.timeout stays helm-controller's default")
 		})
 	}
 }

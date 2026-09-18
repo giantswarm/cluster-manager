@@ -94,6 +94,9 @@
         "interval": "10m",
         "releaseName": "wc2-gpu-l4b",
         "serviceAccountName": "automation",
+        "uninstall": {
+          "disableWait": true
+        },
         "upgrade": {
           "disableWaitForJobs": true,
           "remediation": {
