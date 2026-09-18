@@ -121,6 +121,7 @@
           "name": "wc1-gpu-l4"
         },
         "install": {
+          "disableWaitForJobs": true,
           "remediation": {
             "retries": 3
           }
@@ -129,6 +130,7 @@
         "releaseName": "wc1-gpu-l4",
         "serviceAccountName": "automation",
         "upgrade": {
+          "disableWaitForJobs": true,
           "remediation": {
             "retries": 3
           }

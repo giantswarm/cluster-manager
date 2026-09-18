@@ -91,11 +91,35 @@ type poolLive struct {
 	// be listed; nil when they were (an API the cluster does not serve
 	// counts as none of that kind).
 	claimsErr, nodesErr error
+	// failures are the nodes Karpenter could not launch — the NodeClaims
+	// carrying its refusal and the refusal events of claims it deleted at
+	// once —, oldest first (giantswarm/cluster-manager#55).
+	failures []launchFailure
 }
 
 // readable: at least one of the two lists was read. With neither, the
 // MachinePool's provider IDs are all there is to judge from.
 func (l *poolLive) readable() bool { return l.claimsErr == nil || l.nodesErr == nil }
+
+// refusal is Karpenter's last refusal to launch a node of the pool in a
+// line; "" while it launches them (or the cluster is not readable).
+func (l *poolLive) refusal() string {
+	if l == nil || len(l.failures) == 0 {
+		return ""
+	}
+	return l.failures[len(l.failures)-1].summary()
+}
+
+// refused says whether a NodeClaim carries Karpenter's refusal: counted
+// among the failures, not the launching or terminating claims.
+func (l *poolLive) refused(claim *unstructured.Unstructured) bool {
+	for _, f := range l.failures {
+		if f.claim == claim.GetName() {
+			return true
+		}
+	}
+	return false
+}
 
 // claims are the pool's NodeClaims — launching, ready or terminating.
 func (l *poolLive) claims() []*unstructured.Unstructured {
@@ -144,14 +168,17 @@ func (l *poolLive) holds(n *poolNode) string {
 
 // readPoolLive lists the pool's NodeClaims and Nodes concurrently, pairs
 // them (the claim's status.nodeName, else its providerID against the Node's
-// spec.providerID), and — withHolders — reads the pods on every registered
-// node. What holds a node is a GPU pool's notion (a GPU workload or a
-// predictor); on any other pool the nodes carry the cluster's workloads and
-// are never idle in that sense, so their pods are not read.
+// spec.providerID), reads Karpenter's refusals to launch a node of the pool
+// (the claims' conditions and the Warning events on NodeClaims, which
+// outlive a claim Karpenter deleted for want of capacity), and —
+// withHolders — reads the pods on every registered node. What holds a node
+// is a GPU pool's notion (a GPU workload or a predictor); on any other pool
+// the nodes carry the cluster's workloads and are never idle in that sense,
+// so their pods are not read.
 func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, withHolders bool) *poolLive {
 	defer timed(ctx, "read pool nodes", "pool", pool)()
 	l := &poolLive{}
-	var claims, nodes *unstructured.UnstructuredList
+	var claims, nodes, events *unstructured.UnstructuredList
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		claims, l.claimsErr = listOrNone(gctx, reader, detect.NodeClaimGVR, detect.LabelKarpenterNodePool+"="+pool)
@@ -161,7 +188,16 @@ func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, wi
 		nodes, l.nodesErr = listOrNone(gctx, reader, detect.NodesGVR, compose.LabelMachinePool+"="+pool)
 		return nil
 	})
+	g.Go(func() error {
+		// Best effort: a refusal not readable as the caller leaves the
+		// claims to speak; the pool is listed either way.
+		events, _ = reader.Resource(detect.EventsGVR).Namespace(metav1.NamespaceDefault).List(gctx, metav1.ListOptions{FieldSelector: nodeClaimWarnings})
+		return nil
+	})
 	_ = g.Wait()
+	if claims != nil {
+		l.failures = launchFailures(pool, refs(claims.Items), eventsOf(events))
+	}
 	byNode, byProvider := map[string]*poolNode{}, map[string]*poolNode{}
 	if nodes != nil {
 		for i := range nodes.Items {
@@ -204,6 +240,27 @@ func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, wi
 	}
 	_ = g.Wait()
 	return l
+}
+
+// nodeClaimWarnings selects the Warning events on NodeClaims — Karpenter's
+// refusals among them (launchRefusalEvents).
+const nodeClaimWarnings = "involvedObject.kind=" + kindNodeClaim + ",type=" + eventTypeWarning
+
+// refs is the list's items by pointer.
+func refs(items []unstructured.Unstructured) []*unstructured.Unstructured {
+	out := make([]*unstructured.Unstructured, 0, len(items))
+	for i := range items {
+		out = append(out, &items[i])
+	}
+	return out
+}
+
+// eventsOf is a list's items, none for a list that could not be read.
+func eventsOf(list *unstructured.UnstructuredList) []unstructured.Unstructured {
+	if list == nil {
+		return nil
+	}
+	return list.Items
 }
 
 // listOrNone lists a cluster-scoped resource by label; an API the cluster

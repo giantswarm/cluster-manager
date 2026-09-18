@@ -155,6 +155,32 @@ func TestListNodePoolsPrewarmPendingUntilInstalled(t *testing.T) {
 	assertGolden(t, "list_node_pools_prewarm_install_failed", pools)
 }
 
+// TestListNodePoolsPrewarmCannotLaunch (giantswarm/cluster-manager#55): the
+// installation's own pool created with prewarm whose first node Karpenter
+// cannot launch — no capacity for the pool's one size in the zone it tried,
+// each claim deleted within seconds, the refusal left as a Warning event on
+// the claim — shows the refusal in the nodes step, in Karpenter's words and
+// in progress since the last one instead of done with zero nodes, and the
+// prewarm step says the placeholder waits for a node Karpenter could not
+// launch. The general pool's consolidation notes and the claims' termination
+// warnings beside the refusals are not read as one. The golden is the
+// answer's contract for the portal's row while capacity is short.
+func TestListNodePoolsPrewarmCannotLaunch(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "prewarm-cannot-launch.yaml")
+	pools, err := l.service(Config{Installation: "gazelle"}).ListNodePools(context.Background(), "gazelle", "")
+	require.NoError(t, err)
+	require.Len(t, pools.NodePools, 1)
+	pool := pools.NodePools[0]
+	assert.Equal(t, PhaseScaling, pool.Phase, "Karpenter keeps trying: the nodes step is in progress, never done with none")
+	assert.Equal(t, []string{StepRelease, StepMachinePool, StepNodes, StepPrewarm}, names(pool.Steps))
+	assert.Equal(t, []string{StepDone, StepDone, StepInProgress, StepInProgress}, states(pool.Steps))
+	assert.Equal(t, "2026-09-18T02:26:37Z", pool.Steps[2].Since, "since Karpenter's last refusal")
+	assert.Equal(t, `2 NodeClaims could not launch, the last (gazelle-gpu-l40s-zgbdh) at 2026-09-18T02:26:37Z — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, pool.Steps[2].Message)
+	assert.Equal(t, "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (the nodes step carries Karpenter's message)", pool.Steps[3].Message)
+	assertGolden(t, "list_node_pools_prewarm_cannot_launch", pools)
+}
+
 // TestPrewarmStep words every state of the placeholder from its Job and pod.
 func TestPrewarmStep(t *testing.T) {
 	job := func(status map[string]any) *unstructured.Unstructured {
@@ -187,33 +213,43 @@ func TestPrewarmStep(t *testing.T) {
 		// creates the Job with the install, so before it an absent Job is
 		// pending, not finished (giantswarm/cluster-manager#53).
 		releaseDone bool
-		want        string
-		message     string
-		since       string
-		finished    string
+		// refusal is Karpenter's last refusal to launch a node of the pool
+		// in a line, as the nodes step reads it; "" while it launches them
+		// (giantswarm/cluster-manager#55).
+		refusal  string
+		want     string
+		message  string
+		since    string
+		finished string
 	}{
-		{"absent while the release installs", prewarmState{}, false, StepPending, "the pool release is not Ready yet: the placeholder Job org-acme/mc-gpu-l4-prewarm is created with the release's install (the release step says where it stands)", "", ""},
-		{"absent after the release installed", prewarmState{}, true, StepDone, "no placeholder Job org-acme/mc-gpu-l4-prewarm: removed ten minutes after it ended, or prewarm was set on an existing pool (the Job is created with the release's install only)", "", ""},
-		{"created, no pod", prewarmState{job: job(map[string]any{"active": int64(0)})}, true, StepInProgress, "placeholder Job org-acme/mc-gpu-l4-prewarm created, its pod not yet", "2026-09-18T06:00:08Z", ""},
-		{"pending", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Pending", nil, map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}})}}, true,
+		{"absent while the release installs", prewarmState{}, false, "", StepPending, "the pool release is not Ready yet: the placeholder Job org-acme/mc-gpu-l4-prewarm is created with the release's install (the release step says where it stands)", "", ""},
+		{"absent after the release installed", prewarmState{}, true, "", StepDone, "no placeholder Job org-acme/mc-gpu-l4-prewarm: removed ten minutes after it ended, or prewarm was set on an existing pool (the Job is created with the release's install only)", "", ""},
+		{"created, no pod", prewarmState{job: job(map[string]any{"active": int64(0)})}, true, "", StepInProgress, "placeholder Job org-acme/mc-gpu-l4-prewarm created, its pod not yet", "2026-09-18T06:00:08Z", ""},
+		{"pending", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Pending", nil, map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}})}}, true, "",
 			StepInProgress, "pending: the placeholder waits for the pool's first node, launched by Karpenter for its GPU (0/6 nodes are available: 6 Insufficient nvidia.com/gpu.)", "2026-09-18T06:00:09Z", ""},
-		{"holding", holding(), true,
+		{"holding", holding(), true, "",
 			StepInProgress, "holding node ip-10-0-1-23.eu-central-1.compute.internal until the first workload preempts the placeholder or its hold ends", "2026-09-18T06:04:41Z", ""},
-		{"holding while the release reconciles again", holding(), false,
+		{"holding while the release reconciles again", holding(), false, "",
 			StepInProgress, "holding node ip-10-0-1-23.eu-central-1.compute.internal until the first workload preempts the placeholder or its hold ends", "2026-09-18T06:04:41Z", ""},
-		{"being preempted", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", map[string]any{"deletionTimestamp": "2026-09-18T06:09:00Z"}, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}}, true,
+		{"being preempted", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", map[string]any{"deletionTimestamp": "2026-09-18T06:09:00Z"}, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}}, true, "",
 			StepInProgress, "preempted: the placeholder's pod is terminating, the first workload takes its node ip-10-0-1-23.eu-central-1.compute.internal", "2026-09-18T06:09:00Z", ""},
-		{"preempted", prewarmState{job: job(failed("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:09:02Z"))}, true,
+		{"preempted", prewarmState{job: job(failed("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:09:02Z"))}, true, "",
 			StepDone, "preempted: the first workload took the placeholder's node before its hold ended (BackoffLimitExceeded Job has reached the specified backoff limit)", "2026-09-18T06:00:08Z", "2026-09-18T06:09:02Z"},
-		{"finished", prewarmState{job: job(map[string]any{"completionTime": "2026-09-18T06:19:45Z", "conditions": []any{map[string]any{"type": "Complete", "status": "True", "lastTransitionTime": "2026-09-18T06:19:45Z"}}})}, true,
+		{"finished", prewarmState{job: job(map[string]any{"completionTime": "2026-09-18T06:19:45Z", "conditions": []any{map[string]any{"type": "Complete", "status": "True", "lastTransitionTime": "2026-09-18T06:19:45Z"}}})}, true, "",
 			StepDone, "finished: the hold ended without a workload; Karpenter consolidates the empty node", "2026-09-18T06:00:08Z", "2026-09-18T06:19:45Z"},
-		{"no node came", prewarmState{job: job(failed("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z"))}, true,
+		{"no node came", prewarmState{job: job(failed("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z"))}, true, "",
 			StepFailed, "no node came within the placeholder's deadline of 1500 s (DeadlineExceeded Job was active longer than specified deadline): check the pool's NodeClaims and Karpenter's log", "2026-09-18T06:00:08Z", "2026-09-18T06:25:08Z"},
+		{"pending while Karpenter cannot launch the node", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Pending", nil, map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}})}}, true,
+			"InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a",
+			StepInProgress, "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (the nodes step carries Karpenter's message)", "2026-09-18T06:00:09Z", ""},
+		{"no node came, Karpenter said why", prewarmState{job: job(failed("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z"))}, true,
+			"InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a",
+			StepFailed, "no node came within the placeholder's deadline of 1500 s (DeadlineExceeded Job was active longer than specified deadline): Karpenter could not launch one — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (the nodes step carries its message)", "2026-09-18T06:00:08Z", "2026-09-18T06:25:08Z"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.state.namespace, tc.state.name = "org-acme", "mc-gpu-l4-prewarm"
-			st := prewarmStep(&tc.state, tc.releaseDone)
+			st := prewarmStep(&tc.state, tc.releaseDone, tc.refusal)
 			assert.Equal(t, StepPrewarm, st.Name)
 			assert.Equal(t, tc.want, st.State)
 			assert.Equal(t, tc.message, st.Message)

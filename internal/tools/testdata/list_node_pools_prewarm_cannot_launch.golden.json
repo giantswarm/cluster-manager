@@ -1,0 +1,66 @@
+{
+  "cluster": "gazelle",
+  "namespace": "org-giantswarm",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "gazelle-gpu-l40s",
+      "namespace": "org-giantswarm",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [
+        "g6e.2xlarge"
+      ],
+      "accelerator": "nvidia-l40s",
+      "sizes": [
+        {
+          "instanceType": "g6e.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 2.8035,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
+      "ownerRelease": {
+        "name": "gazelle-gpu-l40s",
+        "namespace": "org-giantswarm"
+      },
+      "phase": "scaling",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-18T02:23:03Z",
+          "finishedAt": "2026-09-18T02:23:03Z",
+          "message": "Helm install succeeded for release org-giantswarm/gazelle-gpu-l40s.v1 with chart gpu-node-pool@0.4.1"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-18T02:23:06Z",
+          "finishedAt": "2026-09-18T02:23:06Z"
+        },
+        {
+          "name": "nodes",
+          "state": "inProgress",
+          "since": "2026-09-18T02:26:37Z",
+          "message": "2 NodeClaims could not launch, the last (gazelle-gpu-l40s-zgbdh) at 2026-09-18T02:26:37Z — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (InsufficientCapacityError); Karpenter: \"creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla...\"; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+        },
+        {
+          "name": "prewarm",
+          "state": "inProgress",
+          "since": "2026-09-18T02:23:02Z",
+          "message": "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (the nodes step carries Karpenter's message)"
+        }
+      ]
+    }
+  ]
+}

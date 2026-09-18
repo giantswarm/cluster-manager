@@ -166,8 +166,9 @@ func ValuesSecretName(cluster, pool string) string { return ReleaseName(cluster,
 // when the cluster carries registry credentials — the valuesFrom Secret. The
 // release runs under the org's tenant ServiceAccount (its Cluster API objects
 // live in the org namespace on the installation; see Delivery in
-// compose.go). The objects carry the fleet's labels and, in apply mode, an
-// ownerReference to the Cluster.
+// compose.go) and does not wait for the chart's Jobs (the prewarm
+// placeholder holds a node for minutes; withoutJobWait). The objects carry
+// the fleet's labels and, in apply mode, an ownerReference to the Cluster.
 func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -189,6 +190,7 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(PoolChartURL, "tag", version)})
 	spec := helmReleaseSpec(name, false, values(c, p))
+	withoutJobWait(spec)
 	deliverAsTenant(spec, c.TenantServiceAccount)
 	objs := []*unstructured.Unstructured{source}
 	if len(c.RegistryCredentials) > 0 {

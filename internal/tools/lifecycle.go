@@ -259,7 +259,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release)))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
-		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone))
+		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal()))
 	}
 	if removing {
 		return PhaseRemoving, steps, true, r.pending
@@ -298,11 +298,13 @@ func poolPhase(steps []Step) Phase {
 // plus ten minutes, failed; Failed otherwise — the pod ended before its hold,
 // preempted by the first workload (backoffLimit 0: it is not replaced), done.
 // While the Job is active its pod says: Pending while the first node
-// launches, Running while it holds the node, terminating while the first
-// workload takes it. A Job that is gone after the release installed — its TTL
-// removed it ten minutes after it ended, or prewarm was set on an existing
-// pool — is done, saying so.
-func prewarmStep(p *prewarmState, releaseDone bool) Step {
+// launches — or while Karpenter cannot launch it, the refusal (the nodes
+// step's, in a line) named instead of the scheduler's message
+// (giantswarm/cluster-manager#55) —, Running while it holds the node,
+// terminating while the first workload takes it. A Job that is gone after
+// the release installed — its TTL removed it ten minutes after it ended, or
+// prewarm was set on an existing pool — is done, saying so.
+func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
 	st := Step{Name: StepPrewarm, State: StepDone}
 	job := p.namespace + "/" + p.name
 	if p.job == nil {
@@ -325,7 +327,12 @@ func prewarmStep(p *prewarmState, releaseDone bool) Step {
 		detail := strings.TrimSpace(cond.Reason + " " + strings.Join(strings.Fields(cond.Message), " "))
 		if cond.Reason == jobReasonDeadline {
 			st.State = StepFailed
-			st.Message = fmt.Sprintf("no node came within the placeholder's deadline of %d s (%s): check the pool's NodeClaims and Karpenter's log", nestedInt(p.job, "spec", "activeDeadlineSeconds"), detail)
+			st.Message = fmt.Sprintf("no node came within the placeholder's deadline of %d s (%s): ", nestedInt(p.job, "spec", "activeDeadlineSeconds"), detail)
+			if refusal != "" {
+				st.Message += "Karpenter could not launch one — " + refusal + " (the nodes step carries its message)"
+			} else {
+				st.Message += "check the pool's NodeClaims and Karpenter's log"
+			}
 			return st
 		}
 		st.Message = "preempted: the first workload took the placeholder's node before its hold ended (" + detail + ")"
@@ -345,6 +352,9 @@ func prewarmStep(p *prewarmState, releaseDone bool) Step {
 	case phase == "Running":
 		st.Since = latest(st.Since, nestedString(pod, "status", "startTime"))
 		st.Message = "holding node " + node + " until the first workload preempts the placeholder or its hold ends"
+	case phase == "Pending" && refusal != "":
+		st.Since = latest(st.Since, detect.Timestamp(pod.GetCreationTimestamp().Time))
+		st.Message = "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — " + refusal + " (the nodes step carries Karpenter's message)"
 	case phase == "Pending":
 		st.Since = latest(st.Since, detect.Timestamp(pod.GetCreationTimestamp().Time))
 		st.Message = "pending: the placeholder waits for the pool's first node, launched by Karpenter for its GPU"
@@ -427,11 +437,16 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 // condition True), ready, and terminating (deleted), else the MachinePool's
 // replicas against its readyReplicas where the cluster cannot be read. Done
 // when every node is counted — 0 at scale-to-zero; pending while the pool
-// itself is not ready. On a GPU pool of cluster-manager's (gpuPool), a
-// ready node that holds nothing is named idle, since its last pod left —
-// delete_node_pool removes it with the pool —, and a MachinePool that still
-// lists instances the cluster no longer has is said so, its list lags by
-// minutes (giantswarm/cluster-manager#49); any other pool's nodes carry the
+// itself is not ready. A node Karpenter could not launch — a NodeClaim
+// carrying its refusal, or the refusal event of a claim it deleted at once
+// for want of capacity — keeps the step in progress, with the refusal in
+// Karpenter's words, since the last one: the pool has no node for the pod
+// that waits, and it must not read done with none (giantswarm/cluster-manager#55).
+// On a GPU pool of cluster-manager's (gpuPool), a ready node that holds
+// nothing is named idle, since its last pod left — delete_node_pool removes
+// it with the pool —, and a MachinePool that still lists instances the
+// cluster no longer has is said so, its list lags by minutes
+// (giantswarm/cluster-manager#49); any other pool's nodes carry the
 // cluster's workloads and are never idle in that sense.
 func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool bool) Step {
 	st := Step{Name: StepNodes, State: StepPending}
@@ -442,6 +457,9 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	var since string
 	if live != nil {
 		for _, claim := range live.claims() {
+			if live.refused(claim) {
+				continue
+			}
 			cond, found := detect.ReadyCondition(claim)
 			switch {
 			case claim.GetDeletionTimestamp() != nil:
@@ -465,6 +483,10 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	}
 	st.Since = since
 	switch {
+	case live != nil && len(live.failures) > 0:
+		st.State = StepInProgress
+		st.Since = live.failures[len(live.failures)-1].at
+		st.Message = launchFailureMessage(live.failures, launching, ready, terminating)
 	case launching > 0 || terminating > 0:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, terminating)

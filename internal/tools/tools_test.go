@@ -79,6 +79,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	configsStorageGVR:          "LLMInferenceServiceConfigList",
 	detect.DaemonSetGVR:        "DaemonSetList",
 	detect.NodeClaimGVR:        "NodeClaimList",
+	detect.EventsGVR:           "EventList",
 	detect.GatewayGVR:          "GatewayList",
 	JobGVR:                     "JobList",
 }
