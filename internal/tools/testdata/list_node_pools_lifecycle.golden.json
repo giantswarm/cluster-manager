@@ -422,7 +422,7 @@
           "name": "nodes",
           "state": "inProgress",
           "since": "2026-09-17T09:40:00Z",
-          "message": "0 NodeClaim(s) launching, 0 ready, 1 terminating"
+          "message": "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-7-7.eu-west-1.compute.internal terminating since 2026-09-17T09:40:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)"
         }
       ]
     },

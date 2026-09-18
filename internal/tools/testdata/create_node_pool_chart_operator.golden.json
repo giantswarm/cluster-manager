@@ -129,6 +129,9 @@
         "interval": "10m",
         "releaseName": "wc1-gpu-l4",
         "serviceAccountName": "automation",
+        "uninstall": {
+          "disableWait": true
+        },
         "upgrade": {
           "disableWaitForJobs": true,
           "remediation": {

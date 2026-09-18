@@ -45,6 +45,8 @@ spec:
   interval: 10m
   releaseName: wc1-gpu-t4
   serviceAccountName: automation
+  uninstall:
+    disableWait: true
   upgrade:
     disableWaitForJobs: true
     remediation:

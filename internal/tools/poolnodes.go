@@ -65,6 +65,14 @@ func (n *poolNode) terminating() bool {
 	return n.claim != nil && n.claim.GetDeletionTimestamp() != nil
 }
 
+// deletedAt is when the NodeClaim was deleted (RFC3339); "" while it is not.
+func (n *poolNode) deletedAt() string {
+	if !n.terminating() {
+		return ""
+	}
+	return detect.Timestamp(n.claim.GetDeletionTimestamp().Time)
+}
+
 // idleSince is when the node's last pod left: the NodeClaim's
 // status.lastPodEventTime (Karpenter records every pod scheduled on or
 // removed from the node), else the claim's Ready transition, else the Node's

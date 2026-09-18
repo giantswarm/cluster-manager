@@ -123,6 +123,22 @@ func withoutJobWait(spec map[string]any) {
 	}
 }
 
+// withoutUninstallWait lets the release's uninstall succeed once Helm has
+// deleted the chart's objects, without waiting for them to be gone
+// (helm-controller's `uninstall.disableWait`). The pool chart's MachinePool
+// goes only when its NodeClaims have, which is when EC2 has terminated the
+// instances — 6 min 52 s once, longer than helm-controller's five-minute
+// default timeout: waited for, the uninstall failed (`UninstallFailed`,
+// `context deadline exceeded`) and the release went with the retry minutes
+// later (giantswarm/cluster-manager#57). Nothing depends on the wait: the
+// MachinePool and the instance terminate on their own, and list_node_pools
+// names the terminating node until they are gone. The pool release's alone
+// — the operator's and the slice's objects go with their uninstall, so their
+// wait keeps its meaning.
+func withoutUninstallWait(spec map[string]any) {
+	spec["uninstall"] = map[string]any{"disableWait": true}
+}
+
 // ociRepositorySpec is the source of one of cluster-manager's releases: the
 // chart's catalog location and the reference that pins or follows it
 // (`tag` for an exact pin, `semver` for a range).
