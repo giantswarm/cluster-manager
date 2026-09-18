@@ -69,10 +69,12 @@ type Config struct {
 	// ServingNamespace is where the InferenceServices go on a serving
 	// cluster (the backend document's target.servingNamespace).
 	ServingNamespace string
-	// CacheClaimName names the model cache claim in the serving namespace
-	// (the connectivity chart's `modelServing.cache.pvc.name`): the
-	// PersistentVolumeClaim whose volume's zone a new pool's nodes are pinned
-	// to, and list_clusters names. Empty is DefaultCacheClaimName.
+	// CacheClaimName is the base name of the model cache claims in the
+	// serving namespace (the connectivity chart's default
+	// `modelServing.cache.pvc.name`): the one claim of before, and the claim
+	// of a zone is `<name>-<zone>` (giantswarm/cluster-manager#71) — what a
+	// new pool's slice mounts and its nodes are pinned by, and list_clusters
+	// names. Empty is DefaultCacheClaimName.
 	CacheClaimName string
 	// SliceChartVersion, when set, pins the slice release's agent-platform
 	// chart as given instead of the version the installation's platform
@@ -110,8 +112,8 @@ type Config struct {
 const DefaultApplyBudget = 8 * time.Second
 
 // DefaultCacheClaimName is the connectivity chart's default name of the
-// model cache claim.
-const DefaultCacheClaimName = "hf-cache"
+// model cache claim, the base of the claims per zone.
+const DefaultCacheClaimName = compose.DefaultCacheClaimName
 
 func (c Config) applyBudget() time.Duration {
 	if c.ApplyBudget == 0 {

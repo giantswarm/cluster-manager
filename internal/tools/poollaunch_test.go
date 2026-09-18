@@ -122,20 +122,23 @@ func TestLaunchFailureSummary(t *testing.T) {
 }
 
 // TestLaunchContextRemedy: the way around a refusal points at what decided
-// where the launch was tried (giantswarm/cluster-manager#65) — the model
-// cache claim's pin with its two ways out, the zones named on create with
-// cache false where the claim lives among them, or nothing pinned.
+// where the launch was tried (giantswarm/cluster-manager#65, #71) — the pin,
+// the model cache claim living in a pinned zone when one does, and the
+// re-run that moves the pool to a zone with capacity, whose claim the slice
+// then mounts; or nothing pinned.
 func TestLaunchContextRemedy(t *testing.T) {
 	claim := &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-1", Zone: "eu-central-1b"}
+	read := cacheClaims{namespace: "model-serving", base: "hf-cache", claims: []*detect.CacheClaim{claim}}
 	const widen = "wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+	const move = "re-run create_node_pool on the pool with zones naming one zone with capacity — with the cache on its slice then mounts that zone's model cache claim (the one Bound there, else hf-cache-<zone>, created there and kept; the weights downloaded once more), with cache false it serves from the node's local disk; " + widen
 	assert.Equal(t, widen, launchContext{}.remedy())
-	assert.Equal(t, widen, launchContext{claim: claim}.remedy(), "a claim pins nothing while the pool names no zones")
-	assert.Equal(t, "the pool is pinned to eu-central-1b by the model cache claim model-serving/hf-cache (volume pvc-1 lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); "+widen,
-		launchContext{zones: []string{"eu-central-1b"}, claim: claim}.remedy())
-	assert.Equal(t, "the pool is pinned to eu-central-1a by the zones named on create: re-run create_node_pool with zones naming a zone with capacity; "+widen,
-		launchContext{zones: []string{"eu-central-1a"}, claim: claim}.remedy(), "the claim's zone is not among the pool's: the pool serves without the cache")
-	assert.Equal(t, "the pool is pinned to eu-central-1a, eu-central-1b by the zones named on create: re-run create_node_pool with zones naming a zone with capacity — the model cache claim model-serving/hf-cache lives in eu-central-1b, so zones without it take cache false; "+widen,
-		launchContext{zones: []string{"eu-central-1a", "eu-central-1b"}, claim: claim}.remedy())
+	assert.Equal(t, widen, launchContext{claims: read}.remedy(), "a claim pins nothing while the pool names no zones")
+	assert.Equal(t, "the pool is pinned to eu-central-1b — the model cache claim model-serving/hf-cache (volume pvc-1) lives in eu-central-1b and the pool's slice mounts it: "+move,
+		launchContext{zones: []string{"eu-central-1b"}, claims: read}.remedy())
+	assert.Equal(t, "the pool is pinned to eu-central-1a: "+move,
+		launchContext{zones: []string{"eu-central-1a"}, claims: read}.remedy(), "no claim lives in the pool's zone: the pool's slice mounts the zone's own claim")
+	assert.Equal(t, "the pool is pinned to eu-central-1a, eu-central-1b — the model cache claim model-serving/hf-cache (volume pvc-1) lives in eu-central-1b and the pool's slice mounts it: "+move,
+		launchContext{zones: []string{"eu-central-1a", "eu-central-1b"}, claims: read}.remedy(), "a pool without the cache may span zones")
 	assert.Equal(t, []string{"eu-central-1a", "eu-central-1c"}, launchFailure{message: "You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c."}.elsewhere())
 	assert.Nil(t, launchFailure{message: iceMessage}.elsewhere(), "cut before AWS's list")
 }

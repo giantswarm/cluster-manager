@@ -31,9 +31,10 @@ type ModelServingInput struct {
 	DryRun    bool
 	// Force (disable) removes the slice while models are still served.
 	Force bool
-	// Cache (enable) is whether the slice's predictors mount the serving
-	// namespace's model cache claim (false composes compose.SliceSpec.NoCache);
-	// nil keeps the default, the cache on.
+	// Cache (enable) is whether the slice's predictors mount a model cache
+	// claim (false composes compose.SliceSpec.NoCache); nil keeps the
+	// default, the cache on — the claim the release mounts already, else the
+	// base name (giantswarm/cluster-manager#71).
 	Cache *bool
 }
 
@@ -88,20 +89,24 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	cache := in.Cache == nil || *in.Cache
-	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, !cache)
+	// The slice keeps the claim its release mounts (the zone's claim the
+	// last pool named), else the base name: enable_model_serving never moves
+	// the cache to another zone (giantswarm/cluster-manager#71).
+	pin := zonePin{cache: in.Cache == nil || *in.Cache, claimName: reads.cacheClaim}
+	if pin.claimName == "" {
+		pin.claimName = s.cfg.cacheClaimName()
+	}
+	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, pin.sliceCache())
 	if err != nil {
 		return nil, err
 	}
 	if slice == nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("serving is already present on %s, provided by %s (%s): the slice release is composed only where nothing provides serving — nothing to do", c.GetName(), providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
-	// With the cache off the answer says what becomes of a claim that
-	// exists: read only then.
-	var claim *detect.CacheClaim
-	if !cache {
-		claim = s.cacheClaim(ctx, target)
-	}
+	// The answer says where the claim the slice mounts stands, and what
+	// becomes of the claims that exist with the cache off.
+	claims := s.readCacheClaims(ctx, target)
+	pin.claim = claims.named(pin.claimName)
 	instances, err := poolShapes(ctx, dyn, c.GetNamespace(), c.GetName(), pool)
 	if err != nil {
 		return nil, err
@@ -116,7 +121,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{},
-		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, cache, claim),
+		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin),
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
 	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
@@ -186,23 +191,33 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 
 // sliceReads is what the slice's part of a write reads: the serving layer
 // detected on the target and, where the slice would be composed, the
-// platform's inputs.
+// platform's inputs and the model cache claim the slice release mounts
+// already (its values' modelServing.cache.pvc.name; empty for the chart's
+// default, or no release yet).
 type sliceReads struct {
-	serving  detect.Component
-	platform compose.PlatformInputs
+	serving    detect.Component
+	platform   compose.PlatformInputs
+	cacheClaim string
 }
 
 // readSlice detects serving on the target and, where the slice would be
-// composed, reads the platform's inputs and checks for a second release of
-// the chart — the two concurrently. A refusal from either is returned as the
-// error.
+// composed, reads the platform's inputs and the cluster's releases of the
+// chart — a second release under another name is a refusal, the slice's own
+// says which claim it mounts — the two concurrently. A refusal from either
+// is returned as the error.
 func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target) (sliceReads, error) {
 	r := sliceReads{serving: detect.Serving(ctx, t.Target)}
 	if !composesSlice(r.serving) {
 		return r, nil
 	}
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return s.refuseSecondRelease(gctx, dyn, t.Namespace, t.Cluster) })
+	g.Go(func() error {
+		hr, err := s.sliceReleaseOf(gctx, dyn, t.Namespace, t.Cluster)
+		if hr != nil {
+			r.cacheClaim, _, _ = unstructured.NestedString(hr.Object, "spec", "values", "modelServing", "cache", "pvc", "name")
+		}
+		return err
+	})
 	g.Go(func() (err error) {
 		r.platform, err = s.platformInputs(gctx, dyn)
 		return err
@@ -226,8 +241,9 @@ func composesSlice(serving detect.Component) bool {
 // platform's chart, a human), the `<cluster>-agent-platform` release filled
 // from the platform's inputs when none does — or when the one running is
 // cluster-manager's own, so the re-run is its update —, a refusal when the
-// cluster cannot be read.
-func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string, noCache bool) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
+// cluster cannot be read. cache is the model cache the slice serves from:
+// on with the claim its predictors mount, or off.
+func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string, cache sliceCache) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
 	serving := r.serving
 	switch {
 	case serving.Status == detect.StatusUnknown:
@@ -236,7 +252,7 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 		return serving, nil, nil, nil
 	}
 	var err error
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: noCache}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim}
 	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
@@ -256,21 +272,26 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 	return serving, slice, objs, nil
 }
 
-// refuseSecondRelease refuses when the cluster already has a release of the
-// agent-platform chart under another name than `<cluster>-agent-platform`:
+// sliceReleaseOf reads the cluster's releases of the agent-platform chart:
+// the `<cluster>-agent-platform` release as it exists (nil for none), and a
+// refusal when the cluster has a release of the chart under another name —
 // one release of the chart per cluster, its slices toggles in the values.
-func (s *Service) refuseSecondRelease(ctx context.Context, dyn dynamic.Interface, ns, cluster string) error {
+func (s *Service) sliceReleaseOf(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (*unstructured.Unstructured, error) {
 	hrs, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: compose.LabelCluster + "=" + cluster})
 	if err != nil {
-		return fmt.Errorf("list releases of %s: %w", cluster, err)
+		return nil, fmt.Errorf("list releases of %s: %w", cluster, err)
 	}
+	var own *unstructured.Unstructured
 	for i := range hrs.Items {
 		hr := &hrs.Items[i]
-		if hr.GetName() != compose.SliceReleaseName(cluster) && chartOf(ctx, dyn, hr) == compose.SliceChart {
-			return &ErrRefused{Reason: fmt.Sprintf("cluster %s already has a release of the %s chart under another name (HelmRelease %s/%s, %s): a cluster has one release of the chart, its slices toggles in the values — switch the serving slice on in that release, or remove it and re-run", cluster, compose.SliceChart, ns, hr.GetName(), ownerDescription(hr))}
+		switch {
+		case hr.GetName() == compose.SliceReleaseName(cluster):
+			own = hr
+		case chartOf(ctx, dyn, hr) == compose.SliceChart:
+			return nil, &ErrRefused{Reason: fmt.Sprintf("cluster %s already has a release of the %s chart under another name (HelmRelease %s/%s, %s): a cluster has one release of the chart, its slices toggles in the values — switch the serving slice on in that release, or remove it and re-run", cluster, compose.SliceChart, ns, hr.GetName(), ownerDescription(hr))}
 		}
 	}
-	return nil
+	return own, nil
 }
 
 // platformInputs reads global.domain, global.identity, the wildcard

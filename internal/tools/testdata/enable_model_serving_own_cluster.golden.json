@@ -234,6 +234,6 @@
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache (the connectivity chart applies it where it does not exist, and keeps it): the weights and compiled graphs of every served model are kept there, and a pool created while the claim is Bound follows its zone"
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — it does not exist yet: the connectivity chart creates it and keeps it, and the first predictor binds it to a volume in its node's zone: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
   }
 }

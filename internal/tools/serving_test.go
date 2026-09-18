@@ -115,6 +115,46 @@ func TestEnableModelServingWithoutCache(t *testing.T) {
 	assert.Equal(t, "model-serving/hf-cache", on.Cache.Claim)
 }
 
+// TestEnableModelServingKeepsTheZoneClaim (giantswarm/cluster-manager#71): a
+// re-run of enable_model_serving on a slice release that mounts a zone's
+// claim keeps that claim — it never moves the cache to another zone — and
+// names it; with the cache off the claim name is not written, and the claims
+// that exist are named as left alone.
+func TestEnableModelServingKeepsTheZoneClaim(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "prewarm.yaml")
+	l.add(t, l.installation, "cache-claim.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	in := l4("gazelle", "gpu-l40s", false)
+	in.Pool.Accelerator, in.Pool.Sizes, in.Pool.MaxGPUs, in.Pool.Zones = "nvidia-l40s", []string{"2xlarge"}, 1, []string{"eu-central-1a"}
+	_, err := svc.CreateNodePool(ctx, in)
+	require.NoError(t, err, "the slice landed mounting the zone's claim")
+
+	out, err := svc.EnableModelServing(ctx, serving("gazelle", true))
+	require.NoError(t, err)
+	name, found, _ := unstructured.NestedString(out.Manifests[1], "spec", "values", "modelServing", "cache", "pvc", "name")
+	require.True(t, found, "the re-run keeps the claim the release mounts")
+	assert.Equal(t, "hf-cache-eu-central-1a", name)
+	assert.True(t, out.Cache.Enabled)
+	assert.Equal(t, "model-serving/hf-cache-eu-central-1a", out.Cache.Claim)
+	assert.Contains(t, out.Cache.Note, "it does not exist yet: the connectivity chart creates it")
+	for _, o := range out.Objects {
+		if o.Kind == "HelmRelease" && o.Name == "gazelle-agent-platform" {
+			assert.NotContains(t, o.Changes, "spec.values.modelServing.cache.pvc.name", "nothing to change for the claim")
+		}
+	}
+
+	off := false
+	in2 := serving("gazelle", true)
+	in2.Cache = &off
+	out, err = svc.EnableModelServing(ctx, in2)
+	require.NoError(t, err)
+	_, found, _ = unstructured.NestedString(out.Manifests[1], "spec", "values", "modelServing", "cache", "pvc", "name")
+	assert.False(t, found, "no claim is mounted: none is named")
+	assert.Contains(t, out.Cache.Note, "the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is")
+}
+
 // TestCreateNodePoolUpdatesTheSliceInPlace: with the slice on wc1 from
 // enable_model_serving, a second pool makes create_node_pool update the one
 // release — its dry-run names the changed paths (the selector goes, and the

@@ -53,8 +53,8 @@ const (
 )
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
-// version skew, a GitOps-owned object, nodes still busy, zones outside the
-// model cache's.
+// version skew, a GitOps-owned object, nodes still busy, zones against the
+// model cache.
 type ErrRefused struct {
 	Reason string
 	// Refused is the structured form of the nodes guard's and the zones
@@ -65,7 +65,7 @@ type ErrRefused struct {
 // Refused is a refusal as the portal renders it without parsing prose:
 // delete_node_pool's nodes guard — the pool's busy nodes, its idle ones, the
 // models served on the cluster, the hint, and what the guard read — and
-// create_node_pool's zones against the model cache claim's zone (CacheZone).
+// create_node_pool's zones against the model cache (CacheZone, CacheClaims).
 type Refused struct {
 	// Nodes are the pool's busy nodes by name — by provider id when read
 	// from the MachinePool.
@@ -84,10 +84,14 @@ type Refused struct {
 	// `machinePool` (the MachinePool's provider IDs, when the cluster cannot
 	// be read as the caller).
 	ReadFrom string `json:"readFrom"`
-	// CacheZone is create_node_pool's refusal of zones outside the model
-	// cache claim's zone (giantswarm/cluster-manager#65); nil for the nodes
-	// guard's.
+	// CacheZone is create_node_pool's refusal of the zones named against the
+	// model cache: several zones with the cache on, or the zone's claim Bound
+	// elsewhere (giantswarm/cluster-manager#65, #71); nil for the others.
 	CacheZone *CacheZoneRefusal `json:"cacheZone,omitempty"`
+	// CacheClaims is create_node_pool's refusal of no zones while the
+	// serving namespace has several model cache claims
+	// (giantswarm/cluster-manager#71); nil for the others.
+	CacheClaims *CacheClaimsRefusal `json:"cacheClaims,omitempty"`
 }
 
 // What the nodes guard read from (Refused.ReadFrom).
@@ -112,10 +116,10 @@ type CreateNodePoolInput struct {
 	// Teleport overrides the default (on when the cluster has its join-token
 	// Secret); nil keeps the default.
 	Teleport *bool
-	// Cache is whether the slice's predictors mount the serving namespace's
-	// model cache claim (false composes compose.SliceSpec.NoCache); nil keeps
-	// the default, the cache on. Pool.Zones are the zones the caller named,
-	// judged against the claim (zonePinFor).
+	// Cache is whether the slice's predictors mount a model cache claim
+	// (false composes compose.SliceSpec.NoCache); nil keeps the default, the
+	// cache on. Pool.Zones are the zones the caller named: one zone, whose
+	// claim the slice mounts, judged against the claims as read (zonePinFor).
 	Cache  *bool
 	Mode   string
 	DryRun bool
@@ -183,19 +187,22 @@ type WriteResult struct {
 	PresetFit *PresetFit              `json:"presetFit,omitempty"`
 	Warnings  []string                `json:"warnings,omitempty"`
 	// Zones are the availability zones the pool's nodes are pinned to
-	// (create): the zones the caller named, or the zone the serving
-	// namespace's model cache claim is bound to — one volume in one zone,
-	// which a node elsewhere strands a predictor mounting
-	// (giantswarm/cluster-manager#59, #65). Empty for no pin; ZonesNote says
-	// in a sentence whose the pin is, what was found and what it means, and
-	// CacheClaim is the claim as read (null for none). Cache is the model
-	// cache setting of the slice the write composed (create, enable): whether
-	// the predictors mount the claim, which, and what follows; null when no
-	// slice was composed.
-	Zones      []string           `json:"zones,omitempty"`
-	ZonesNote  string             `json:"zonesNote,omitempty"`
-	CacheClaim *detect.CacheClaim `json:"cacheClaim,omitempty"`
-	Cache      *CacheSetting      `json:"cache,omitempty"`
+	// (create): the zone the caller named, or the zone the serving
+	// namespace's one model cache claim is bound to — a claim is one volume
+	// in one zone, which a node elsewhere strands a predictor mounting
+	// (giantswarm/cluster-manager#59, #65, #71). Empty for no pin; ZonesNote
+	// says in a sentence whose the pin is, what was found and what it means.
+	// CacheClaim is the claim the slice mounts as read (null while it does
+	// not exist yet, or with the cache off), CacheClaims every model cache
+	// claim of the serving namespace as read (null when they cannot be
+	// read). Cache is the model cache setting of the slice the write composed
+	// (create, enable): whether the predictors mount a claim, which, and what
+	// follows; null when no slice was composed.
+	Zones       []string             `json:"zones,omitempty"`
+	ZonesNote   string               `json:"zonesNote,omitempty"`
+	CacheClaim  *detect.CacheClaim   `json:"cacheClaim,omitempty"`
+	CacheClaims []*detect.CacheClaim `json:"cacheClaims,omitempty"`
+	Cache       *CacheSetting        `json:"cache,omitempty"`
 	// Partial marks an apply that stopped writing so its answer arrives
 	// within the caller's deadline: the objects it did not reach are listed
 	// with action `pending`, and NextStep says what to do — re-run, the
@@ -251,12 +258,13 @@ func (a ObjectAction) String() string {
 // (giantswarm/cluster-manager#26). The answer lists the pool's sizes with what each leaves a
 // predictor and, where the cluster publishes serving presets, the smallest
 // size that hosts each — a preset no size hosts is a warning
-// (giantswarm/agent-platform#502). The pool's nodes are pinned to the zones
-// the caller named — checked against the cluster's node subnets and the
-// model cache claim's zone — or, with none named, to the zone of a claim
-// bound in the serving namespace (compose.PoolSpec.Zones; zonePinFor), and
-// the answer says so; with cache false the slice serves without the claim
-// and no zone follows from it (giantswarm/cluster-manager#59, #65).
+// (giantswarm/agent-platform#502). The pool's nodes are pinned to the zone
+// the caller named — checked against the cluster's node subnets — and the
+// slice mounts that zone's model cache claim, or, with none named, to the
+// zone of the one claim bound in the serving namespace
+// (compose.PoolSpec.Zones; zonePinFor), and the answer says so; with cache
+// false the slice serves without a claim and no zone follows from one
+// (giantswarm/cluster-manager#59, #65, #71).
 // LLMInferenceServiceConfigs a serving layer that went left terminating in
 // the release namespace are healed before the slice lands
 // (giantswarm/cluster-manager#28). Every refusal comes before any write.
@@ -315,7 +323,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	pinned := onlyOf(r.pools)
-	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned, !cache)
+	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned, pin.sliceCache())
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +349,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
-		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, Cache: s.cacheSettingFor(slice, cache, pin.claim),
+		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: r.cache.claims, Cache: s.cacheSettingFor(slice, r.cache, pin),
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
@@ -386,9 +394,9 @@ type poolReads struct {
 	// aws is the cluster's AWSCluster: the region for the sizes' prices, the
 	// node subnets' zones the caller's zones are checked against.
 	aws awsInfra
-	// cache is the serving namespace's model cache claim on the target, the
-	// pool's zone pin; nil for none.
-	cache *detect.CacheClaim
+	// cache is the serving namespace's model cache claims on the target: the
+	// pool's zone pin and the claim its slice mounts.
+	cache cacheClaims
 }
 
 // readPool reads the pool's inputs concurrently: the cluster's facts, its
@@ -439,8 +447,8 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 		return nil
 	})
 	g.Go(func() error {
-		defer timed(gctx, "cache claim")()
-		r.cache = s.readCacheClaim(gctx, t)
+		defer timed(gctx, "cache claims")()
+		r.cache = s.readCacheClaims(gctx, t)
 		return nil
 	})
 	if err := g.Wait(); err != nil {

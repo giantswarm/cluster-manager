@@ -63,19 +63,19 @@ var (
 
 // launchContext is what the pool release says about the node Karpenter
 // launches: the instance types of the pool's sizes, the zones its nodes are
-// pinned to (pool.zones), and the model cache claim on the cluster when the
+// pinned to (pool.zones), and the model cache claims on the cluster when the
 // pool is pinned — so the refusal names what the truncated message cannot,
-// and the remedy what decided where the launch was tried. Empty for a pool
-// without a release, or one that launches its nodes.
+// and the remedy what decided where the launch was tried and what a move
+// costs. Empty for a pool without a release, or one that launches its nodes.
 type launchContext struct {
 	instanceTypes []string
 	zones         []string
-	claim         *detect.CacheClaim
+	claims        cacheClaims
 }
 
 // launchContext reads the context of a pool's refusals, only while it has
-// one: the sizes and zones from the release's values, the cache claim on the
-// cluster when the pool is pinned to zones.
+// one: the sizes and zones from the release's values, the cache claims on
+// the cluster when the pool is pinned to zones.
 func (s *Service) launchContext(ctx context.Context, t target, release *unstructured.Unstructured, live *poolLive) launchContext {
 	if release == nil || live == nil || len(live.failures) == 0 {
 		return launchContext{}
@@ -88,34 +88,29 @@ func (s *Service) launchContext(ctx context.Context, t target, release *unstruct
 		}
 	}
 	if len(lc.zones) > 0 {
-		lc.claim = s.cacheClaim(ctx, t)
+		lc.claims = s.readCacheClaims(ctx, t)
 	}
 	return lc
 }
 
-// pinnedByClaim: the pool's one zone is the model cache claim's.
-func (lc launchContext) pinnedByClaim() bool {
-	return lc.claim != nil && lc.claim.Zone != "" && len(lc.zones) == 1 && lc.zones[0] == lc.claim.Zone
-}
-
 // remedy is the way around the refusal — shown, never chosen for the
 // person: wider sizes or another accelerator for a pool that may use every
-// zone; for a pool pinned by the model cache claim, the pin and its two
-// ways out; for a pool pinned by the zones named on create, other zones —
-// with cache false where the claim's zone is among the pinned ones.
+// zone; for a pool pinned to zones (the zone named on create, or the one
+// model cache claim's), the pin, the claim living in it when one does, and
+// the re-run that moves the pool — to another zone, whose claim the slice
+// then mounts (giantswarm/cluster-manager#71), or without the cache.
 func (lc launchContext) remedy() string {
 	const widen = "wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
-	switch {
-	case len(lc.zones) == 0:
+	if len(lc.zones) == 0 {
 		return widen
-	case lc.pinnedByClaim():
-		return fmt.Sprintf("the pool is pinned to %s by the model cache claim %s (volume %s lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); %s", lc.zones[0], lc.claim, lc.claim.Volume, widen)
 	}
-	msg := fmt.Sprintf("the pool is pinned to %s by the zones named on create: re-run create_node_pool with zones naming a zone with capacity", strings.Join(lc.zones, ", "))
-	if lc.claim != nil && lc.claim.Zone != "" && slices.Contains(lc.zones, lc.claim.Zone) {
-		msg += fmt.Sprintf(" — the model cache claim %s lives in %s, so zones without it take cache false", lc.claim, lc.claim.Zone)
+	msg := "the pool is pinned to " + strings.Join(lc.zones, ", ")
+	for _, zone := range lc.zones {
+		if claim := lc.claims.boundIn(zone); claim != nil {
+			msg += fmt.Sprintf(" — the model cache claim %s (volume %s) lives in %s and the pool's slice mounts it", claim, claim.Volume, zone)
+		}
 	}
-	return msg + "; " + widen
+	return fmt.Sprintf("%s: re-run create_node_pool on the pool with zones naming one zone with capacity — with the cache on its slice then mounts that zone's model cache claim (the one Bound there, else %s, created there and kept; the weights downloaded once more), with cache false it serves from the node's local disk; %s", msg, detect.ZoneClaimName(lc.claims.base, "<zone>"), widen)
 }
 
 // poolZones are the zones a pool release pins its nodes to (pool.zones);

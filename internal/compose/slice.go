@@ -31,6 +31,10 @@ const (
 	// LabelMachinePool is the node label the gpu-node-pool chart stamps on a
 	// pool's nodes: `<cluster>-<pool>`.
 	LabelMachinePool = "giantswarm.io/machine-pool"
+	// DefaultCacheClaimName is the connectivity chart's default name of the
+	// model cache claim (`modelServing.cache.pvc.name`): what the slice
+	// mounts when the values name none.
+	DefaultCacheClaimName = "hf-cache"
 )
 
 // Where the installation's Dex serves its key set in-cluster
@@ -150,6 +154,14 @@ type SliceSpec struct {
 	// keep). The zero value keeps the chart's default, the cache on
 	// (giantswarm/cluster-manager#65).
 	NoCache bool
+	// CacheClaim names the model cache claim the slice's predictors mount:
+	// the connectivity chart's `modelServing.cache.pvc.name` — the claim of
+	// the zone the pool runs in (`<base>-<zone>`), or the one claim of
+	// before (giantswarm/cluster-manager#71). The chart creates the claim
+	// where it does not exist and keeps it. Empty, or the chart's default
+	// (DefaultCacheClaimName), writes nothing; nothing is written with
+	// NoCache either, since no claim is mounted then.
+	CacheClaim string
 }
 
 // SliceReleaseName names the slice release of a cluster.
@@ -279,7 +291,9 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
 // placement contract, giantswarm/agent-platform#315) and, until a pinned
 // chart carries that key, to modelServing.serving.nodeSelector, the route the
-// discovery ConfigMap takes to the predictors today.
+// discovery ConfigMap takes to the predictors today. The model cache is the
+// chart's default, on, unless the spec switches it off (NoCache) or names the
+// claim the predictors mount (CacheClaim, the claim of the pool's zone).
 func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 	if s.Platform.Domain == "" {
 		return nil, fmt.Errorf("the platform's global.domain is empty: the slice's domain and models host derive from it")
@@ -325,8 +339,11 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 			set(selector, "modelServing", "serving", "nodeSelector"),
 		)
 	}
-	if s.NoCache {
+	switch {
+	case s.NoCache:
 		steps = append(steps, set(false, "modelServing", "cache", "enabled"))
+	case s.CacheClaim != "" && s.CacheClaim != DefaultCacheClaimName:
+		steps = append(steps, set(s.CacheClaim, "modelServing", "cache", "pvc", "name"))
 	}
 	for _, err := range steps {
 		if err != nil {
