@@ -4,14 +4,14 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: gpu-node-pool
-    giantswarm.io/cluster: wc1
+    giantswarm.io/cluster: gazelle
     giantswarm.io/node-pool: gpu-l40s
-  name: wc1-gpu-l40s
-  namespace: org-acme
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
+    name: gazelle
     uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
 spec:
   interval: 10m
@@ -19,55 +19,31 @@ spec:
     tag: 0.5.0
   url: oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: cluster-manager
-    app.kubernetes.io/name: gpu-node-pool
-    giantswarm.io/cluster: wc1
-    giantswarm.io/node-pool: gpu-l40s
-  name: wc1-gpu-l40s-values
-  namespace: org-acme
-  ownerReferences:
-  - apiVersion: cluster.x-k8s.io/v1beta1
-    kind: Cluster
-    name: wc1
-    uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
-stringData:
-  values.yaml: |
-    cluster:
-      registryCredentials:
-        registry.acme.example.io:
-          password: s3cret
-          username: puller
-type: Opaque
----
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: gpu-node-pool
-    giantswarm.io/cluster: wc1
+    giantswarm.io/cluster: gazelle
     giantswarm.io/node-pool: gpu-l40s
-  name: wc1-gpu-l40s
-  namespace: org-acme
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
+    name: gazelle
     uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
 spec:
   chartRef:
     kind: OCIRepository
-    name: wc1-gpu-l40s
+    name: gazelle-gpu-l40s
   install:
     disableWaitForJobs: true
     remediation:
       retries: 3
   interval: 10m
-  releaseName: wc1-gpu-l40s
+  releaseName: gazelle-gpu-l40s
   serviceAccountName: automation
   uninstall:
     disableWait: true
@@ -81,17 +57,9 @@ spec:
       cilium:
         ipamMode: kubernetes
       managementCluster: gazelle
-      name: wc1
-      organization: acme
-      proxy:
-        enabled: true
-        httpProxy: http://proxy.acme.example.io:3128
-        httpsProxy: http://proxy.acme.example.io:3128
-        noProxy: 10.0.0.0/8,.acme.example.io
+      name: gazelle
+      organization: giantswarm
       registryMirrors:
-        docker.io:
-        - registry.acme.example.io
-        - docker.io
         gsoci.azurecr.io:
         - gsoci.azurecr.io
     pool:
@@ -99,11 +67,14 @@ spec:
       kubernetesVersion: 1.31.4
       machineImage: flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs
       maxSize:
-        nvidia.com/gpu: "4"
+        nvidia.com/gpu: "1"
       name: gpu-l40s
+      prewarm:
+        enabled: true
+      sizes:
+      - 2xlarge
+      - 4xlarge
+      zones:
+      - eu-central-1b
     teleport:
-      enabled: false
-  valuesFrom:
-  - kind: Secret
-    name: wc1-gpu-l40s-values
-    valuesKey: values.yaml
+      enabled: true

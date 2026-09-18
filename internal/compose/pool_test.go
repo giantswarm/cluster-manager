@@ -40,8 +40,9 @@ func own() Cluster {
 
 // TestPoolGoldens pins the HelmRelease and OCIRepository shape byte for byte
 // per input: one golden per accelerator, plus the snapshot variants (proxy,
-// registry credentials as a valuesFrom Secret, teleport off, explicit sizes)
-// and the own cluster's pool with prewarm (giantswarm/cluster-manager#48).
+// registry credentials as a valuesFrom Secret, teleport off, explicit sizes),
+// the own cluster's pool with prewarm (giantswarm/cluster-manager#48) and a
+// pool pinned to the model cache's zone (giantswarm/cluster-manager#59).
 func TestPoolGoldens(t *testing.T) {
 	proxied := wc1()
 	proxied.Proxy = Proxy{Enabled: true, HTTPProxy: "http://proxy.acme.example.io:3128", HTTPSProxy: "http://proxy.acme.example.io:3128", NoProxy: "10.0.0.0/8,.acme.example.io"}
@@ -62,6 +63,7 @@ func TestPoolGoldens(t *testing.T) {
 		{"t4-pinned-chart", wc1(), PoolSpec{Name: "gpu-t4", Accelerator: "nvidia-t4", MaxGPUs: 2, ChartVersion: "0.2.0"}},
 		{"l40s-proxy-credentials-no-teleport", proxied, PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 4}},
 		{"own-cluster-prewarm", own(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 4, Prewarm: true}},
+		{"l40s-cache-zone", own(), PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 1, Sizes: []string{"2xlarge", "4xlarge"}, Prewarm: true, Zones: []string{"eu-central-1b"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,6 +85,11 @@ func TestPoolGoldens(t *testing.T) {
 			assert.Equal(t, DefaultTenantServiceAccount, sa, "the pool's Cluster API objects live in the org namespace: delivered as the tenant")
 			prewarm, hasPrewarm, _ := unstructured.NestedBool(release.Object, "spec", "values", "pool", "prewarm", "enabled")
 			assert.Equal(t, tc.pool.Prewarm, hasPrewarm && prewarm, "pool.prewarm.enabled exactly when asked for; no block otherwise")
+			zones, hasZones, _ := unstructured.NestedStringSlice(release.Object, "spec", "values", "pool", "zones")
+			assert.Equal(t, len(tc.pool.Zones) > 0, hasZones, "pool.zones exactly when the pool is pinned; no block otherwise (giantswarm/cluster-manager#59)")
+			if hasZones {
+				assert.Equal(t, tc.pool.Zones, zones)
+			}
 			for _, action := range []string{"install", "upgrade"} {
 				noJobWait, _, _ := unstructured.NestedBool(release.Object, "spec", action, "disableWaitForJobs")
 				assert.True(t, noJobWait, "%s does not wait for the chart's Jobs: the prewarm placeholder holds a node for minutes (giantswarm/cluster-manager#55)", action)

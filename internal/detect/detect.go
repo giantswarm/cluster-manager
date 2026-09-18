@@ -142,6 +142,16 @@ const (
 	// AnnotationModel is model-manager's annotation on a serving object it
 	// composed: the id of the model it serves.
 	AnnotationModel = "model-manager.giantswarm.io/model"
+	// ManagedByModelManager is the `app.kubernetes.io/managed-by` value
+	// model-manager puts on every serving object it composes.
+	ManagedByModelManager = "model-manager"
+	// The labels KServe puts on a predictor's pods, naming the serving
+	// object: the InferenceService's on its predictor, and the name and
+	// part-of on an LLMInferenceService's workload.
+	LabelKServeInferenceService = "serving.kserve.io/inferenceservice"
+	LabelName                   = "app.kubernetes.io/name"
+	LabelPartOf                 = "app.kubernetes.io/part-of"
+	PartOfLLMISVC               = "llminferenceservice"
 	// hfScheme prefixes a Hugging Face repository in a serving object's
 	// storage uri.
 	hfScheme = "hf://"
@@ -608,7 +618,39 @@ type ServedModel struct {
 	// repository of its hf:// uri, else the repository of the
 	// InferenceService's hf:// storageUri; empty when the object names none.
 	Model string
+	// ManagedBy is the object's `app.kubernetes.io/managed-by` label:
+	// ManagedByModelManager on a model the platform serves, empty on one
+	// made by hand.
+	ManagedBy string
 }
+
+// Managed reports whether model-manager composed the serving object — a
+// model the platform serves in its serving namespace.
+func (m ServedModel) Managed(namespace string) bool {
+	return m.Namespace == namespace && m.ManagedBy == ManagedByModelManager
+}
+
+// PredictorOf reports whether pod is a KServe predictor's and, when it is,
+// the kind and name of the serving object it belongs to: the
+// InferenceService's label on its predictor, the name beside the part-of
+// on an LLMInferenceService's workload (a workload without the name label
+// is a predictor of no named model).
+func PredictorOf(pod *unstructured.Unstructured) (kind, name string, ok bool) {
+	labels := pod.GetLabels()
+	if isvc := labels[LabelKServeInferenceService]; isvc != "" {
+		return KindInferenceService, isvc, true
+	}
+	if labels[LabelPartOf] == PartOfLLMISVC {
+		return KindLLMISVC, labels[LabelName], true
+	}
+	return "", "", false
+}
+
+// The kinds of the serving objects.
+const (
+	KindInferenceService = "InferenceService"
+	KindLLMISVC          = "LLMInferenceService"
+)
 
 // String names the object and, when known, its model:
 // `LLMInferenceService model-serving/qwen3-4b-instruct (Qwen/Qwen3-4B-Instruct-2507)`.
@@ -637,7 +679,7 @@ func ServedModels(ctx context.Context, reader dynamic.Interface) ([]ServedModel,
 		}
 		for i := range items.Items {
 			obj := &items.Items[i]
-			out = append(out, ServedModel{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Model: modelOf(obj)})
+			out = append(out, ServedModel{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Model: modelOf(obj), ManagedBy: obj.GetLabels()[compose.LabelManagedBy]})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })

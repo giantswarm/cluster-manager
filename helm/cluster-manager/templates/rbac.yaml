@@ -13,9 +13,12 @@ Kubernetes version when the control plane object is not readable), the
 cluster's own values (the HelmRelease or App named like the cluster and its
 ConfigMap), the teleport join-token Secret's presence, the kubeconfig
 Secret's cluster section (apiserver and CA), a pool release's prewarm
-placeholder (its Job and pod in the release's org- namespace), and the events
+placeholder (its Job and pod in the release's org- namespace), the events
 on Karpenter's NodeClaims (a refusal to launch a node outlives the claim as a
-Warning event in the default namespace). The node-pool writes create,
+Warning event in the default namespace), and the model cache claim of the
+serving namespace with its volume (the zone a pool's nodes are pinned to;
+the pods of the serving namespace say whether a predictor waits for a node
+of a pool). The node-pool writes create,
 update and delete the pool and operator releases' HelmRelease, OCIRepository
 and values Secret in org- namespaces, and the kserve backend ConfigMap in
 model-manager's namespace. The detection on the installation's own cluster
@@ -45,7 +48,7 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["nodes", "pods", "events"]
+    resources: ["nodes", "pods", "events", "persistentvolumeclaims", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]

@@ -50,6 +50,7 @@ spec:
             {{- end }}
             - --model-manager-namespace={{ .Values.modelManager.namespace }}
             - --serving-namespace={{ .Values.serving.namespace }}
+            - --serving-cache-claim={{ .Values.serving.cacheClaim }}
             {{- with .Values.serving.sliceChartVersion }}
             - --slice-chart-version={{ . }}
             {{- end }}

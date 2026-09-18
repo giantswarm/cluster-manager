@@ -20,7 +20,7 @@ const (
 	// the newest released chart. The pool release pins the chart exactly — a
 	// bootstrap change rolls GPU nodes under a served model, so bumps are
 	// explicit (bumblebee-plans#46 D3).
-	DefaultPoolChartVersion = "0.4.1"
+	DefaultPoolChartVersion = "0.5.0"
 	// ReleaseInterval is the reconciliation interval of the source and the
 	// release.
 	ReleaseInterval = "10m"
@@ -124,6 +124,15 @@ type PoolSpec struct {
 	// own pool (cluster.name == cluster.managementCluster) and fails the
 	// release otherwise; Pool refuses it for a workload cluster instead.
 	Prewarm bool
+	// Zones pins the pool's nodes to availability zones: the chart's
+	// `pool.zones`, a `topology.kubernetes.io/zone In [...]` requirement on
+	// the Karpenter NodePool, so every node — prewarm placeholder and
+	// workload alike — comes up there. create_node_pool sets it to the zone
+	// of the serving namespace's kept model cache claim: one EBS volume,
+	// bound in one zone by the first predictor, which a node in another zone
+	// strands the predictor mounting it (giantswarm/cluster-manager#59). Nil
+	// writes no zones block: the chart's default constrains nothing.
+	Zones []string
 }
 
 // Validate checks the caller's part against the chart's contract.
@@ -211,8 +220,8 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 // settings, the pins and the caller's shape. Chart defaults that the
 // snapshot does not override (minSize 0, volumes and their throughput,
 // consolidation, maxPods, the placeholder's hold and image) are left to the
-// chart; the prewarm block is written only when the caller asks for it, so a
-// re-run without it removes the block.
+// chart; the prewarm block and the zones are written only when the caller
+// asks for them, so a re-run without them removes them.
 func values(c Cluster, p PoolSpec) map[string]any {
 	mirrors := map[string]any{}
 	for host, endpoints := range c.RegistryMirrors {
@@ -256,6 +265,13 @@ func values(c Cluster, p PoolSpec) map[string]any {
 	}
 	if p.Prewarm {
 		pool["prewarm"] = map[string]any{valueEnabled: true}
+	}
+	if len(p.Zones) > 0 {
+		zones := make([]any, 0, len(p.Zones))
+		for _, z := range p.Zones {
+			zones = append(zones, z)
+		}
+		pool["zones"] = zones
 	}
 	return map[string]any{
 		"cluster":  cluster,

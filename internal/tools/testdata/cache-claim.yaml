@@ -1,0 +1,51 @@
+# The serving namespace's model cache claim as an installation shows it once
+# the first predictor has mounted it (giantswarm/cluster-manager#59): the
+# connectivity chart's PersistentVolumeClaim, kept when the slice goes, Bound
+# to one EBS volume whose node affinity names the zone the predictor's node
+# was in. Every pool created while the claim exists is pinned to that zone.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hf-cache
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/component: model-serving
+    app.kubernetes.io/name: agent-platform-connectivity
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: agent-platform-connectivity-hf-cache
+  volumeName: pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80
+  resources:
+    requests:
+      storage: 500Gi
+status:
+  phase: Bound
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80
+spec:
+  capacity:
+    storage: 500Gi
+  csi:
+    driver: ebs.csi.aws.com
+    volumeHandle: vol-0a1b2c3d4e5f60001
+  claimRef:
+    kind: PersistentVolumeClaim
+    name: hf-cache
+    namespace: model-serving
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values: [eu-central-1b]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: agent-platform-connectivity-hf-cache
+status:
+  phase: Bound

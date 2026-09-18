@@ -207,7 +207,9 @@ func assertGolden(t *testing.T, name string, v any) {
 }
 
 func TestListClusters(t *testing.T) {
-	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "cache-claim.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
 	answer, err := svc.ListClusters(context.Background())
 	require.NoError(t, err)
 	clusters := answer.Clusters
@@ -234,6 +236,8 @@ func TestListClusters(t *testing.T) {
 	assert.Equal(t, detect.ProviderChart, byName["wc2"].Serving.Provider, "the platform's discovery ConfigMap")
 	assert.Equal(t, []string{"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)
 	assert.Equal(t, detect.StatusAbsent, byName["gazelle"].GPUOperator.Status, "the installation's own cluster is read through the installation")
+	assert.Equal(t, &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}, byName["gazelle"].Serving.Readiness.CacheClaim, "the model cache claim and its zone under serving readiness (giantswarm/cluster-manager#59)")
+	assert.Nil(t, byName["wc1"].Serving.Readiness.CacheClaim, "no claim on wc1")
 
 	assertGolden(t, "list_clusters", clusters)
 }
