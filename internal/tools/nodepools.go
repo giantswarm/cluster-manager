@@ -109,11 +109,11 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 		pools     *unstructured.UnstructuredList
 		releases  map[string]*unstructured.Unstructured
 		t         target
-		region    compose.Region
+		infra     awsInfra
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { cpVersion = controlPlaneVersion(gctx, dyn, c); return nil })
-	g.Go(func() error { region = awsInfrastructure(gctx, dyn, c).region; return nil })
+	g.Go(func() error { infra = awsInfrastructure(gctx, dyn, c); return nil })
 	g.Go(func() (err error) {
 		pools, err = dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(gctx, metav1.ListOptions{
 			LabelSelector: LabelClusterName + "=" + c.GetName(),
@@ -149,7 +149,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 	g, gctx = errgroup.WithContext(ctx)
 	for name, e := range entries {
 		g.Go(func() error {
-			np := s.nodePool(gctx, dyn, c, t, e.mp, e.release, name, cpVersion, region)
+			np := s.nodePool(gctx, dyn, c, t, e.mp, e.release, name, cpVersion, infra)
 			mu.Lock()
 			out.NodePools = append(out.NodePools, np)
 			mu.Unlock()
@@ -163,8 +163,8 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 
 // nodePool is one pool of the answer: the MachinePool's facts where it
 // exists, the release's otherwise, and the lifecycle derived from both.
-func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, name, cpVersion string, region compose.Region) NodePool {
-	r := s.readPoolState(ctx, dyn, c, t, mp, release, name)
+func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, name, cpVersion string, infra awsInfra) NodePool {
+	r := s.readPoolState(ctx, dyn, c, t, mp, release, name, infra.zones)
 	np := NodePool{Name: name, Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, InstanceTypes: []string{}}
 	if mp != nil {
 		np.Version = nestedString(mp, "spec", "template", "spec", "version")
@@ -179,7 +179,7 @@ func (s *Service) nodePool(ctx context.Context, dyn dynamic.Interface, c *unstru
 		var sizes []string
 		np.Accelerator, sizes = poolValues(r.release)
 		if shapes, err := compose.Shapes(np.Accelerator, sizes); err == nil {
-			np.Sizes = compose.Priced(shapes, region)
+			np.Sizes = compose.Priced(shapes, infra.region)
 		} else {
 			slog.Debug("pool release names sizes outside the curated shapes", "cluster", c.GetName(), "pool", name, "error", err)
 		}

@@ -137,7 +137,7 @@ func prewarmPodSelector(release string) string {
 // readPoolState reads a pool's objects concurrently: the owning release, the
 // infrastructure, the NodeClaims on the cluster and the teardown's targets.
 // A failed read leaves its part empty; the pool is still listed.
-func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, pool string) *poolState {
+func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, mp, release *unstructured.Unstructured, pool string, clusterZones []string) *poolState {
 	r := &poolState{mp: mp, release: release}
 	g, gctx := errgroup.WithContext(ctx)
 	if mp != nil {
@@ -196,7 +196,7 @@ func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *u
 		})
 	}
 	_ = g.Wait()
-	r.launch = s.launchContext(ctx, t, r.release, r.live)
+	r.launch = s.launchContext(ctx, t, r.release, r.live, clusterZones)
 	return r
 }
 
