@@ -1,0 +1,34 @@
+# The general pool's one node and NodeClaim on wc1, without a GPU workload —
+# it carries the cluster's own pods, which the pool listing never reads.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-general-node-1
+  creationTimestamp: "2026-09-16T08:00:00Z"
+  labels:
+    giantswarm.io/machine-pool: wc1-general
+spec:
+  providerID: aws:///eu-west-1a/i-0a1b2c3d4e5f60010
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  name: wc1-general-m4n8b
+  creationTimestamp: "2026-09-16T07:58:00Z"
+  labels:
+    karpenter.sh/nodepool: wc1-general
+spec:
+  nodeClassRef:
+    name: wc1-general
+status:
+  nodeName: wc1-general-node-1
+  providerID: aws:///eu-west-1a/i-0a1b2c3d4e5f60010
+  lastPodEventTime: "2026-09-16T08:30:00Z"
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-16T08:02:00Z"

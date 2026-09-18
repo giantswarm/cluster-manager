@@ -144,8 +144,11 @@ func (l *poolLive) holds(n *poolNode) string {
 
 // readPoolLive lists the pool's NodeClaims and Nodes concurrently, pairs
 // them (the claim's status.nodeName, else its providerID against the Node's
-// spec.providerID), and reads the pods on every registered node.
-func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string) *poolLive {
+// spec.providerID), and — withHolders — reads the pods on every registered
+// node. What holds a node is a GPU pool's notion (a GPU workload or a
+// predictor); on any other pool the nodes carry the cluster's workloads and
+// are never idle in that sense, so their pods are not read.
+func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, withHolders bool) *poolLive {
 	defer timed(ctx, "read pool nodes", "pool", pool)()
 	l := &poolLive{}
 	var claims, nodes *unstructured.UnstructuredList
@@ -186,6 +189,9 @@ func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string) *p
 		}
 	}
 	sort.Slice(l.nodes, func(i, j int) bool { return l.nodes[i].name() < l.nodes[j].name() })
+	if !withHolders {
+		return l
+	}
 	g, gctx = errgroup.WithContext(ctx)
 	for _, n := range l.nodes {
 		if n.node == nil {

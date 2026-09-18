@@ -738,7 +738,7 @@ func (s *Service) nodesGuard(ctx context.Context, dyn dynamic.Interface, c *unst
 	if t.Reader == nil {
 		return nil, machinePoolGuard(ctx, dyn, mp, t, t.Reason)
 	}
-	live := readPoolLive(ctx, t.Reader, pool)
+	live := readPoolLive(ctx, t.Reader, pool, true)
 	if !live.readable() {
 		return nil, machinePoolGuard(ctx, dyn, mp, t, fmt.Sprintf("the pool's NodeClaims and Nodes on %s cannot be listed as you (%v; %v)", t.Cluster, live.claimsErr, live.nodesErr))
 	}
