@@ -67,5 +67,8 @@ spec:
                     values:
                     - wc1-gpu-l4
                     - wc1-gpu-t4
+          config:
+            core:
+              sleepInterval: 10s
       toolkit:
         enabled: false

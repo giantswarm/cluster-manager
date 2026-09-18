@@ -28,6 +28,19 @@ const (
 	// NFDValuesKey is the values key of the operator chart's Node Feature
 	// Discovery subchart, under OperatorValuesKey.
 	NFDValuesKey = "node-feature-discovery"
+	// NFDWorkerSleepInterval is the Node Feature Discovery worker's
+	// `core.sleepInterval` (`worker.config`, rendered into its nfd-worker.conf
+	// ConfigMap): how often the worker re-reads the node's hardware and
+	// publishes its features. Upstream's default is 60 s — on a node that
+	// joins for one predictor, up to a minute passes between the worker's
+	// start and `nvidia.com/gpu.present`, and the operator rolls the toolkit,
+	// device plugin and GPU feature discovery onto the node only after that
+	// label: on an installation, Ready to `nvidia.com/gpu` allocatable took
+	// ~102 s. 10 s bounds the wait at a scan a few times a minute, cheap on
+	// a pool of a handful of nodes; the rest of `worker.config` stays the
+	// operator chart's (its PCI device class whitelist) — Helm merges the
+	// maps.
+	NFDWorkerSleepInterval = "10s"
 
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
@@ -128,9 +141,9 @@ func OperatorReleaseName(cluster string) string { return cluster + OperatorRelea
 // installation's own cluster included, whose Secret points at the same API
 // server (see Delivery in compose.go) — configured from the table's row,
 // with Node Feature Discovery's worker pinned to the cluster's GPU pools
-// (pools: the pool names within the cluster; see PoolAffinity). The objects
-// carry the fleet's labels and, in apply mode, an ownerReference to the
-// Cluster.
+// (pools: the pool names within the cluster; see PoolAffinity) and polling
+// every NFDWorkerSleepInterval. The objects carry the fleet's labels and, in
+// apply mode, an ownerReference to the Cluster.
 func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstructured {
 	name := OperatorReleaseName(c.Name)
 	meta := objectMeta(c, map[string]any{
@@ -139,12 +152,14 @@ func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstru
 		LabelCluster:   c.Name,
 	})
 	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(OperatorChartURL, "semver", OperatorChartRange)})
-	values := map[string]any{
-		"driver":  map[string]any{valueEnabled: row.Driver},
-		"toolkit": map[string]any{valueEnabled: row.Toolkit},
-	}
+	worker := map[string]any{"config": map[string]any{"core": map[string]any{"sleepInterval": NFDWorkerSleepInterval}}}
 	if affinity := PoolAffinity(c, pools); affinity != nil {
-		values[NFDValuesKey] = map[string]any{"worker": map[string]any{"affinity": affinity}}
+		worker["affinity"] = affinity
+	}
+	values := map[string]any{
+		"driver":     map[string]any{valueEnabled: row.Driver},
+		"toolkit":    map[string]any{valueEnabled: row.Toolkit},
+		NFDValuesKey: map[string]any{"worker": worker},
 	}
 	spec := helmReleaseSpec(OperatorChart, true, map[string]any{OperatorValuesKey: values})
 	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}

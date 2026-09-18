@@ -55,5 +55,10 @@ spec:
     gpu-operator:
       driver:
         enabled: false
+      node-feature-discovery:
+        worker:
+          config:
+            core:
+              sleepInterval: 10s
       toolkit:
         enabled: false

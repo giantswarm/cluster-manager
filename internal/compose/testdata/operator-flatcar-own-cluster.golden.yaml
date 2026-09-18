@@ -66,5 +66,8 @@ spec:
                     operator: In
                     values:
                     - gazelle-gpu-l4
+          config:
+            core:
+              sleepInterval: 10s
       toolkit:
         enabled: false
