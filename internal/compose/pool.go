@@ -24,8 +24,12 @@ const (
 	// on its NVMe instance store (the chart's default `pool.volumes.libSource:
 	// instance-store`; cluster-manager writes no volumes block): every size
 	// of the curated families has one (the shape table's stores), so no
-	// size is refused.
-	DefaultPoolChartVersion = "0.7.0"
+	// size is refused. 0.7.1 runs containerd with an unlimited locked-memory
+	// limit (the bootstrap's memlock.conf drop-in): a container inherits the
+	// limit and has no CAP_IPC_LOCK, so a serving runtime that mlock()s its
+	// weights died at engine start under the unit's 8 MB default
+	// (giantswarm/agent-platform#564).
+	DefaultPoolChartVersion = "0.7.1"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot
