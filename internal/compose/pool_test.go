@@ -83,6 +83,10 @@ func TestPoolGoldens(t *testing.T) {
 			assert.Equal(t, DefaultTenantServiceAccount, sa, "the pool's Cluster API objects live in the org namespace: delivered as the tenant")
 			prewarm, hasPrewarm, _ := unstructured.NestedBool(release.Object, "spec", "values", "pool", "prewarm", "enabled")
 			assert.Equal(t, tc.pool.Prewarm, hasPrewarm && prewarm, "pool.prewarm.enabled exactly when asked for; no block otherwise")
+			for _, action := range []string{"install", "upgrade"} {
+				noJobWait, _, _ := unstructured.NestedBool(release.Object, "spec", action, "disableWaitForJobs")
+				assert.True(t, noJobWait, "%s does not wait for the chart's Jobs: the prewarm placeholder holds a node for minutes (giantswarm/cluster-manager#55)", action)
+			}
 		})
 	}
 }

@@ -109,6 +109,20 @@ func helmReleaseSpec(name string, crds bool, values map[string]any) map[string]a
 	}
 }
 
+// withoutJobWait lets the release's install and upgrade succeed while a Job
+// of the chart still runs (helm-controller's `disableWaitForJobs`). Helm
+// counts a Job as ready only once it completes, and the pool chart's prewarm
+// placeholder is a Job meant to hold a node for minutes: waited for, the
+// install ran into its five-minute timeout, failed and was uninstalled with
+// every object of the pool (giantswarm/cluster-manager#55). The pool
+// release's alone — the operator and the slice run no Job meant to outlive
+// their install, so their wait keeps its meaning.
+func withoutJobWait(spec map[string]any) {
+	for _, action := range []string{"install", "upgrade"} {
+		spec[action].(map[string]any)["disableWaitForJobs"] = true
+	}
+}
+
 // ociRepositorySpec is the source of one of cluster-manager's releases: the
 // chart's catalog location and the reference that pins or follows it
 // (`tag` for an exact pin, `semver` for a range).

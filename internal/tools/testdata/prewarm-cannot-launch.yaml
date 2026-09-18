@@ -1,0 +1,268 @@
+# The installation's own cluster with a pool created with prewarm whose first
+# node Karpenter cannot launch (giantswarm/cluster-manager#55), added to
+# installation.yaml: the pool release installed (its install does not wait
+# for the placeholder Job), its MachinePool ready at zero replicas, the
+# placeholder Job active with its pod Pending — and no NodeClaim: Karpenter
+# answered both launches with insufficient capacity for the pool's one size
+# in the zone it tried, deleted each claim within seconds and left the
+# refusal as a Warning event on the claim in the default namespace, beside
+# the events that say nothing about launching (a terminating claim's
+# TerminationGracePeriodExpiring, the general pool's consolidation notes).
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/name: cluster-aws
+    giantswarm.io/cluster: gazelle
+spec:
+  chart:
+    spec:
+      chart: cluster-aws
+      version: 4.2.0
+  values:
+    global:
+      managementCluster: gazelle
+      connectivity:
+        baseDomain: gazelle.example.io
+        cilium:
+          ipamMode: kubernetes
+      components:
+        containerd:
+          containerRegistries:
+            gsoci.azurecr.io:
+              - endpoint: gsoci.azurecr.io
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gazelle-teleport-join-token
+  namespace: org-giantswarm
+stringData:
+  joinToken: not-read-by-cluster-manager
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T02:22:59Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: gazelle
+    giantswarm.io/node-pool: gpu-l40s
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: gazelle-gpu-l40s
+  install:
+    disableWaitForJobs: true
+    remediation:
+      retries: 3
+  upgrade:
+    disableWaitForJobs: true
+    remediation:
+      retries: 3
+  values:
+    pool:
+      accelerator: nvidia-l40s
+      sizes: [2xlarge]
+      prewarm:
+        enabled: true
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      message: Helm install succeeded for release org-giantswarm/gazelle-gpu-l40s.v1 with chart gpu-node-pool@0.4.1
+      lastTransitionTime: "2026-09-18T02:23:03Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T02:23:02Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: gazelle
+    helm.toolkit.fluxcd.io/name: gazelle-gpu-l40s
+    helm.toolkit.fluxcd.io/namespace: org-giantswarm
+spec:
+  clusterName: gazelle
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KarpenterMachinePool
+        name: gazelle-gpu-l40s
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-18T02:23:06Z"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KarpenterMachinePool
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+spec:
+  nodePool:
+    template:
+      spec:
+        requirements:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["g6e.2xlarge"]
+---
+# The placeholder: created with the release's install, its pod Pending for a
+# node that does not come.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gazelle-gpu-l40s-prewarm
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T02:23:02Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/instance: gazelle-gpu-l40s
+    giantswarm.io/machine-pool: gazelle-gpu-l40s
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1500
+  ttlSecondsAfterFinished: 600
+status:
+  active: 1
+  startTime: "2026-09-18T02:23:02Z"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gazelle-gpu-l40s-prewarm-npw2v
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T02:23:02Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/instance: gazelle-gpu-l40s
+    giantswarm.io/machine-pool: gazelle-gpu-l40s
+    batch.kubernetes.io/job-name: gazelle-gpu-l40s-prewarm
+spec:
+  priorityClassName: agent-platform-prewarm-placeholder
+  priority: -1000
+  containers:
+    - name: hold
+      image: gsoci.azurecr.io/giantswarm/alpine:3.22.1
+      resources:
+        requests:
+          nvidia.com/gpu: "1"
+status:
+  phase: Pending
+  conditions:
+    - type: PodScheduled
+      status: "False"
+      reason: Unschedulable
+      message: "0/12 nodes are available: 12 Insufficient nvidia.com/gpu. preemption: 0/12 nodes are available: 12 No preemption victims found for incoming pod."
+      lastTransitionTime: "2026-09-18T02:23:02Z"
+---
+# Karpenter's refusals, as its event recorder writes them: one per claim,
+# the message cut by Karpenter after the first zone.
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-gpu-l40s-txjc8.18d64909b0856ac3
+  namespace: default
+  creationTimestamp: "2026-09-18T02:23:27Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-gpu-l40s-txjc8
+  uid: 3aa53629-ab67-4402-94f5-d7b1453f731b
+reason: InsufficientCapacityError
+type: Warning
+count: 1
+firstTimestamp: "2026-09-18T02:23:27Z"
+lastTimestamp: "2026-09-18T02:23:27Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: "NodeClaim gazelle-gpu-l40s-txjc8 event: creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."
+---
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-gpu-l40s-txjc8.18d64909ee727f80
+  namespace: default
+  creationTimestamp: "2026-09-18T02:23:28Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-gpu-l40s-txjc8
+  uid: 3aa53629-ab67-4402-94f5-d7b1453f731b
+reason: TerminationGracePeriodExpiring
+type: Warning
+count: 1
+firstTimestamp: "2026-09-18T02:23:28Z"
+lastTimestamp: "2026-09-18T02:23:28Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: All pods will be deleted by 2026-09-18T02:53:27Z
+---
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-gpu-l40s-zgbdh.18d64935eb7267b6
+  namespace: default
+  creationTimestamp: "2026-09-18T02:26:37Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-gpu-l40s-zgbdh
+  uid: d2d0031d-8418-4b86-b946-13b969fbd6a2
+reason: InsufficientCapacityError
+type: Warning
+count: 1
+firstTimestamp: "2026-09-18T02:26:37Z"
+lastTimestamp: "2026-09-18T02:26:37Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: "NodeClaim gazelle-gpu-l40s-zgbdh event: creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."
+---
+# The general pool's claim: a note on consolidation, nothing about launching.
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-karpenter-7b4gq.18d6445c7d3636f4
+  namespace: default
+  creationTimestamp: "2026-09-18T00:57:45Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-karpenter-7b4gq
+  uid: 02f0572e-6cb3-4900-bc52-c3eafd609cd5
+reason: Unconsolidatable
+type: Normal
+count: 4
+firstTimestamp: "2026-09-18T00:57:45Z"
+lastTimestamp: "2026-09-18T02:15:00Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: Can't replace with a cheaper node

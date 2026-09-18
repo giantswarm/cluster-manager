@@ -86,6 +86,7 @@
           "name": "wc2-gpu-l4b"
         },
         "install": {
+          "disableWaitForJobs": true,
           "remediation": {
             "retries": 3
           }
@@ -94,6 +95,7 @@
         "releaseName": "wc2-gpu-l4b",
         "serviceAccountName": "automation",
         "upgrade": {
+          "disableWaitForJobs": true,
           "remediation": {
             "retries": 3
           }

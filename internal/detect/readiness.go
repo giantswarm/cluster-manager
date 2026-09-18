@@ -18,6 +18,10 @@ var (
 	// NodeClaimGVR is Karpenter's NodeClaim: one per node it launches,
 	// labelled with its NodePool (LabelKarpenterNodePool).
 	NodeClaimGVR = schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodeclaims"}
+	// EventsGVR is the core events: Karpenter's refusal to launch a
+	// NodeClaim it deleted at once lives on as a Warning event on the claim
+	// in the default namespace (giantswarm/cluster-manager#55).
+	EventsGVR = schema.GroupVersionResource{Version: "v1", Resource: "events"}
 	// GatewayGVR is the Gateway API's Gateway — the slice's models Gateway.
 	GatewayGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 )
