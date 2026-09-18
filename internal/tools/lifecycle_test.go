@@ -2,13 +2,18 @@ package tools
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // add puts a fixture's objects into a fake client beside what it has.
@@ -184,4 +189,37 @@ func TestPrewarmStep(t *testing.T) {
 			assert.Equal(t, tc.finished, st.FinishedAt)
 		})
 	}
+}
+
+// TestListNodePoolsNamesIdleNodesOfGPUPoolsOnly (giantswarm/cluster-manager#49):
+// what holds a node — a GPU workload or a predictor — is a GPU pool's
+// notion. The cluster's general Karpenter pool, made by other means, carries
+// the cluster's workloads: its nodes are never named idle and their pods are
+// not read (on an installation that was fifteen pod lists per call and every
+// node of the platform's pool "idle"); the GPU pool's nodes are judged, one
+// pod list per node.
+func TestListNodePoolsNamesIdleNodesOfGPUPoolsOnly(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "general-pool.yaml").add(t, l.targets[wc1APIServer], "targets/wc1-general.yaml")
+	var podLists atomic.Int32
+	fakeTarget(t, l, wc1APIServer).PrependReactor("list", detect.PodsGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		podLists.Add(1)
+		return false, nil, nil
+	})
+	pools, err := l.service(Config{Installation: "gazelle"}).ListNodePools(context.Background(), "wc1", "")
+	require.NoError(t, err)
+	byName := map[string]NodePool{}
+	for _, p := range pools.NodePools {
+		byName[p.Name] = p
+	}
+	require.Len(t, byName, 3)
+
+	general := byName["wc1-general"]
+	assert.Equal(t, PhaseReady, general.Phase)
+	assert.Nil(t, general.OwnerRelease)
+	assert.Equal(t, "1 node(s) ready (aws:///eu-west-1a/i-0a1b2c3d4e5f60010)", general.Steps[len(general.Steps)-1].Message, "no idle clause on a pool that is not a GPU pool")
+
+	gpu := byName["wc1-gpu-a10g"]
+	assert.Contains(t, gpu.Steps[2].Message, "2 idle since 2026-09-16T12:30:00Z (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2)")
+	assert.Equal(t, int32(2), podLists.Load(), "the GPU pool's two nodes are read, the general pool's node is not")
 }

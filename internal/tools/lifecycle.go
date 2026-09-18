@@ -157,7 +157,7 @@ func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *u
 	}
 	if t.Reader != nil {
 		g.Go(func() error {
-			if live := readPoolLive(gctx, t.Reader, pool); live.readable() {
+			if live := readPoolLive(gctx, t.Reader, pool, gpuPoolRelease(release)); live.readable() {
 				r.live = live
 			}
 			return nil
@@ -254,7 +254,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	if r.mp != nil && r.mp.GetDeletionTimestamp() != nil {
 		removing = true
 	}
-	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone))
+	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release)))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
 		steps = append(steps, prewarmStep(r.prewarm))
@@ -415,11 +415,13 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 // condition True), ready, and terminating (deleted), else the MachinePool's
 // replicas against its readyReplicas where the cluster cannot be read. Done
 // when every node is counted — 0 at scale-to-zero; pending while the pool
-// itself is not ready. A ready node that holds nothing is named idle, since
-// its last pod left: delete_node_pool removes it with the pool. A Karpenter
-// pool's MachinePool that still lists instances the cluster no longer has
-// is said so — its list lags by minutes (giantswarm/cluster-manager#49).
-func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady bool) Step {
+// itself is not ready. On a GPU pool of cluster-manager's (gpuPool), a
+// ready node that holds nothing is named idle, since its last pod left —
+// delete_node_pool removes it with the pool —, and a MachinePool that still
+// lists instances the cluster no longer has is said so, its list lags by
+// minutes (giantswarm/cluster-manager#49); any other pool's nodes carry the
+// cluster's workloads and are never idle in that sense.
+func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool bool) Step {
 	st := Step{Name: StepNodes, State: StepPending}
 	if mp == nil {
 		return st
@@ -454,7 +456,7 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady b
 	case launching > 0 || terminating > 0:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, terminating)
-	case live != nil && len(live.nodes) == 0 && replicas > 0 && karpenterPool(infra):
+	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0:
 		st.State, st.FinishedAt = StepDone, since
 		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
 	case replicas != readyReplicas:
@@ -471,7 +473,7 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady b
 		if ids := providerIDs(infra); len(ids) > 0 {
 			st.Message += " (" + strings.Join(ids, ", ") + ")"
 		}
-		if live != nil {
+		if gpuPool && live != nil {
 			if idle := live.idle(); len(idle) > 0 {
 				st.Message += fmt.Sprintf(", %d idle since %s (%s): delete_node_pool removes an idle node with the pool", len(idle), earliestIdle(idle), strings.Join(nodeNames(idle), ", "))
 			}
@@ -480,11 +482,11 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady b
 	return st
 }
 
-// karpenterPool reports whether a pool's infrastructure is a
-// KarpenterMachinePool — the one kind whose nodes come and go with the
-// NodeClaims the cluster shows.
-func karpenterPool(infra *unstructured.Unstructured) bool {
-	return infra != nil && infra.GetKind() == "KarpenterMachinePool"
+// gpuPoolRelease reports whether hr is a GPU pool release of
+// cluster-manager's chart (gpu-node-pool) — the pools whose nodes are idle
+// or busy by their GPU workload.
+func gpuPoolRelease(hr *unstructured.Unstructured) bool {
+	return hr != nil && hr.GetLabels()[compose.LabelChartName] == compose.PoolChart
 }
 
 // providerIDs names a pool's nodes by provider id, from its infrastructure
