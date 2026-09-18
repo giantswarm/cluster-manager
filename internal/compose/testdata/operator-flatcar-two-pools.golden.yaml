@@ -53,6 +53,15 @@ spec:
       retries: 3
   values:
     gpu-operator:
+      daemonsets:
+        tolerations:
+        - effect: NoSchedule
+          key: nvidia.com/gpu
+          operator: Exists
+        - key: node.cluster.x-k8s.io/uninitialized
+          operator: Exists
+        - key: ebs.csi.aws.com/agent-not-ready
+          operator: Exists
       dcgmExporter:
         enabled: false
       driver:
@@ -74,6 +83,18 @@ spec:
           config:
             core:
               sleepInterval: 10s
+          tolerations:
+          - effect: NoSchedule
+            key: node-role.kubernetes.io/control-plane
+            operator: Equal
+            value: ""
+          - effect: NoSchedule
+            key: nvidia.com/gpu
+            operator: Exists
+          - key: node.cluster.x-k8s.io/uninitialized
+            operator: Exists
+          - key: ebs.csi.aws.com/agent-not-ready
+            operator: Exists
       toolkit:
         enabled: false
       validator:

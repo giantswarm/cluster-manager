@@ -114,6 +114,19 @@ func TestOperatorGoldens(t *testing.T) {
 			assert.Equal(t, NFDWorkerSleepInterval, sleep, "the worker polls every 10 s, pools or none: a fresh node is labelled within seconds, not upstream's minute")
 			config, _, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "config")
 			assert.Equal(t, map[string]any{"core": map[string]any{"sleepInterval": NFDWorkerSleepInterval}}, config, "nothing else of worker.config is set: the operator chart's PCI whitelist merges in")
+			startup := []any{map[string]any{"key": TaintUninitialized, "operator": "Exists"}, map[string]any{"key": TaintEBSAgentNotReady, "operator": "Exists"}}
+			workerTolerations, _, _ := unstructured.NestedSlice(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "tolerations")
+			assert.Equal(t, append([]any{controlPlaneToleration(), gpuToleration()}, startup...), workerTolerations, "the worker keeps the chart's tolerations and tolerates the start-up taints DaemonSets remove, whatever their value and effect")
+			operandTolerations, _, _ := unstructured.NestedSlice(release.Object, "spec", "values", OperatorValuesKey, "daemonsets", "tolerations")
+			assert.Equal(t, append([]any{gpuToleration()}, startup...), operandTolerations, "the validator, device plugin and GPU feature discovery the same")
+			daemonsets, _, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, "daemonsets")
+			assert.Len(t, daemonsets, 1, "nothing else of daemonsets is set: the chart's priority class and update strategy merge in")
+			for _, list := range [][]any{workerTolerations, operandTolerations} {
+				for _, tol := range list {
+					assert.NotEqual(t, "node.cilium.io/agent-not-ready", tol.(map[string]any)["key"], "the operands use the pod network: the CNI must be up before their sandbox, the Cilium taint is not tolerated")
+					assert.NotEqual(t, "karpenter.sh/unregistered", tol.(map[string]any)["key"], "Karpenter removes its own taint at registration")
+				}
+			}
 			affinity, hasAffinity, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "affinity")
 			if tc.pinned == nil {
 				assert.False(t, hasAffinity, "no pool pins the worker nowhere: the chart runs it everywhere, as upstream")
