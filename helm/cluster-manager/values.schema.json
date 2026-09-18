@@ -487,7 +487,7 @@
             "properties": {
                 "cacheClaim": {
                     "type": "string",
-                    "description": "Name of the model cache `PersistentVolumeClaim` in the serving namespace (the connectivity chart's `modelServing.cache.pvc.name`). The claim outlives the pool and is one volume bound in one zone: `create_node_pool` pins a pool's nodes to that zone (the gpu-node-pool chart's `pool.zones`) and `list_clusters` names the claim and its zone under serving readiness."
+                    "description": "Base name of the model cache `PersistentVolumeClaim`s in the serving namespace (the connectivity chart's default `modelServing.cache.pvc.name`). A claim outlives the pool and is one volume bound in one zone, so the cache is one claim per zone: `create_node_pool` with `zones` composes the zone's claim into the pool's slice — the claim Bound there, else `<cacheClaim>-<zone>` — and pins the pool's nodes to the zone (the gpu-node-pool chart's `pool.zones`); `list_clusters` names every claim with its zone under serving readiness."
                 },
                 "certificateIssuer": {
                     "type": "string",
