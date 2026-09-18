@@ -258,6 +258,12 @@ func modelsGateway(ctx context.Context, reader dynamic.Interface) *GatewayState 
 	return nil
 }
 
+// ConditionOf reads one condition of an object's status.conditions by type;
+// found is false when it has none of that type.
+func ConditionOf(obj *unstructured.Unstructured, typ string) (Condition, bool) {
+	return condition(obj, typ)
+}
+
 // condition reads one condition of status.conditions by type.
 func condition(obj *unstructured.Unstructured, typ string) (Condition, bool) {
 	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")

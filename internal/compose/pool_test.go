@@ -30,9 +30,18 @@ func wc1() Cluster {
 	}
 }
 
+// own is the installation's own cluster: the pool's nodes join the cluster
+// the release lives on, the one place the chart renders pool.prewarm.
+func own() Cluster {
+	c := wc1()
+	c.Name, c.Namespace, c.Organization = c.ManagementCluster, "org-giantswarm", "giantswarm"
+	return c
+}
+
 // TestPoolGoldens pins the HelmRelease and OCIRepository shape byte for byte
 // per input: one golden per accelerator, plus the snapshot variants (proxy,
-// registry credentials as a valuesFrom Secret, teleport off, explicit sizes).
+// registry credentials as a valuesFrom Secret, teleport off, explicit sizes)
+// and the own cluster's pool with prewarm (giantswarm/cluster-manager#48).
 func TestPoolGoldens(t *testing.T) {
 	proxied := wc1()
 	proxied.Proxy = Proxy{Enabled: true, HTTPProxy: "http://proxy.acme.example.io:3128", HTTPSProxy: "http://proxy.acme.example.io:3128", NoProxy: "10.0.0.0/8,.acme.example.io"}
@@ -52,6 +61,7 @@ func TestPoolGoldens(t *testing.T) {
 		{"a10g-sizes", wc1(), PoolSpec{Name: "gpu-a10g", Accelerator: "nvidia-a10g", MaxGPUs: 8, Sizes: []string{"xlarge", "2xlarge"}}},
 		{"t4-pinned-chart", wc1(), PoolSpec{Name: "gpu-t4", Accelerator: "nvidia-t4", MaxGPUs: 2, ChartVersion: "0.2.0"}},
 		{"l40s-proxy-credentials-no-teleport", proxied, PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 4}},
+		{"own-cluster-prewarm", own(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 4, Prewarm: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,8 +81,23 @@ func TestPoolGoldens(t *testing.T) {
 			assert.NotContains(t, string(raw), "s3cret", "credentials never in spec.values")
 			sa, _, _ := unstructured.NestedString(release.Object, "spec", "serviceAccountName")
 			assert.Equal(t, DefaultTenantServiceAccount, sa, "the pool's Cluster API objects live in the org namespace: delivered as the tenant")
+			prewarm, hasPrewarm, _ := unstructured.NestedBool(release.Object, "spec", "values", "pool", "prewarm", "enabled")
+			assert.Equal(t, tc.pool.Prewarm, hasPrewarm && prewarm, "pool.prewarm.enabled exactly when asked for; no block otherwise")
 		})
 	}
+}
+
+// TestPoolRefusesPrewarmOnAWorkloadCluster: the chart fails the release when
+// pool.prewarm is set for a cluster other than the management cluster (the
+// placeholder Job runs where the release lives); the composer refuses it
+// first, naming the constraint, instead of landing a release that fails.
+func TestPoolRefusesPrewarmOnAWorkloadCluster(t *testing.T) {
+	_, err := Pool(wc1(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 1, Prewarm: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wc1 is a workload cluster")
+	assert.Contains(t, err.Error(), "re-run without prewarm")
+	_, err = Pool(own(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 1, Prewarm: true})
+	assert.NoError(t, err, "the installation's own pool takes prewarm")
 }
 
 // TestPoolWithoutTenantServiceAccount: an installation without the tenancy

@@ -1,0 +1,81 @@
+{
+  "cluster": "gazelle",
+  "namespace": "org-giantswarm",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "gazelle-gpu-l4",
+      "namespace": "org-giantswarm",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 1,
+      "readyReplicas": 1,
+      "instanceTypes": [
+        "g6.2xlarge",
+        "g6.xlarge"
+      ],
+      "accelerator": "nvidia-l4",
+      "sizes": [
+        {
+          "instanceType": "g6.xlarge",
+          "size": "xlarge",
+          "vcpu": 4,
+          "memoryGiB": 16,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 3,
+          "usableMemoryGiB": 11.9,
+          "pricePerHourUSD": 1.0064,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 32,
+          "gpus": 1,
+          "gpuMemoryGiB": 24,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 27.1,
+          "pricePerHourUSD": 1.22249,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
+      "ownerRelease": {
+        "name": "gazelle-gpu-l4",
+        "namespace": "org-giantswarm"
+      },
+      "phase": "ready",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-18T06:00:09Z",
+          "finishedAt": "2026-09-18T06:00:09Z",
+          "message": "Helm install succeeded for release org-giantswarm/gazelle-gpu-l4.v1 with chart gpu-node-pool@0.4.0"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-18T06:04:30Z",
+          "finishedAt": "2026-09-18T06:04:30Z"
+        },
+        {
+          "name": "nodes",
+          "state": "done",
+          "since": "2026-09-18T06:04:30Z",
+          "finishedAt": "2026-09-18T06:04:30Z",
+          "message": "1 node(s) ready (aws:///eu-central-1a/i-0a1b2c3d4e5f60011), 1 idle since 2026-09-18T06:04:30Z (ip-10-0-1-23.eu-central-1.compute.internal): delete_node_pool removes an idle node with the pool"
+        },
+        {
+          "name": "prewarm",
+          "state": "inProgress",
+          "since": "2026-09-18T06:04:41Z",
+          "message": "holding node ip-10-0-1-23.eu-central-1.compute.internal until the first workload preempts the placeholder or its hold ends"
+        }
+      ]
+    }
+  ]
+}

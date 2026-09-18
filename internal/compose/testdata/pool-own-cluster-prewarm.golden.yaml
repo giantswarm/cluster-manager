@@ -4,14 +4,14 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: gpu-node-pool
-    giantswarm.io/cluster: wc1
+    giantswarm.io/cluster: gazelle
     giantswarm.io/node-pool: gpu-l4
-  name: wc1-gpu-l4
-  namespace: org-acme
+  name: gazelle-gpu-l4
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
+    name: gazelle
     uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
 spec:
   interval: 10m
@@ -25,24 +25,24 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: cluster-manager
     app.kubernetes.io/name: gpu-node-pool
-    giantswarm.io/cluster: wc1
+    giantswarm.io/cluster: gazelle
     giantswarm.io/node-pool: gpu-l4
-  name: wc1-gpu-l4
-  namespace: org-acme
+  name: gazelle-gpu-l4
+  namespace: org-giantswarm
   ownerReferences:
   - apiVersion: cluster.x-k8s.io/v1beta1
     kind: Cluster
-    name: wc1
+    name: gazelle
     uid: 6f1c0c1e-8a4a-4c1e-9c3a-000000000001
 spec:
   chartRef:
     kind: OCIRepository
-    name: wc1-gpu-l4
+    name: gazelle-gpu-l4
   install:
     remediation:
       retries: 3
   interval: 10m
-  releaseName: wc1-gpu-l4
+  releaseName: gazelle-gpu-l4
   serviceAccountName: automation
   upgrade:
     remediation:
@@ -53,8 +53,8 @@ spec:
       cilium:
         ipamMode: kubernetes
       managementCluster: gazelle
-      name: wc1
-      organization: acme
+      name: gazelle
+      organization: giantswarm
       registryMirrors:
         gsoci.azurecr.io:
         - gsoci.azurecr.io
@@ -65,5 +65,7 @@ spec:
       maxSize:
         nvidia.com/gpu: "4"
       name: gpu-l4
+      prewarm:
+        enabled: true
     teleport:
       enabled: true

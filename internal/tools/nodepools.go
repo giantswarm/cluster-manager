@@ -71,7 +71,9 @@ type NodePool struct {
 	OwnerRelease *ReleaseRef `json:"ownerRelease"`
 	// Phase is where the pool stands: creating, ready, scaling, removing or
 	// failed; Steps are the steps behind it — the pool release Ready, the
-	// MachinePool ready, the nodes — each with its state and timestamps.
+	// MachinePool ready, the nodes — each with its state and timestamps, and
+	// for a pool created with prewarm the placeholder's step after them
+	// (informational: it never decides the phase).
 	Phase Phase  `json:"phase"`
 	Steps []Step `json:"steps"`
 	// Deleting: a delete_node_pool is under way; Pending are the teardown's

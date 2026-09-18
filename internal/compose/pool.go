@@ -20,7 +20,7 @@ const (
 	// the newest released chart. The pool release pins the chart exactly — a
 	// bootstrap change rolls GPU nodes under a served model, so bumps are
 	// explicit (bumblebee-plans#46 D3).
-	DefaultPoolChartVersion = "0.3.1"
+	DefaultPoolChartVersion = "0.4.0"
 	// ReleaseInterval is the reconciliation interval of the source and the
 	// release.
 	ReleaseInterval = "10m"
@@ -116,6 +116,14 @@ type PoolSpec struct {
 	MaxGPUs int
 	// ChartVersion is the exact chart pin; empty means DefaultPoolChartVersion.
 	ChartVersion string
+	// Prewarm launches the pool's first node with the release instead of
+	// with the first predictor: the chart's `pool.prewarm.enabled`, a
+	// one-shot placeholder Job holding one GPU at negative priority until the
+	// first workload preempts it. The Job runs in the release namespace on
+	// the installation, so the chart renders it only for the installation's
+	// own pool (cluster.name == cluster.managementCluster) and fails the
+	// release otherwise; Pool refuses it for a workload cluster instead.
+	Prewarm bool
 }
 
 // Validate checks the caller's part against the chart's contract.
@@ -135,6 +143,18 @@ func (p PoolSpec) Validate() error {
 	return nil
 }
 
+// validatePrewarm holds the chart's constraint on pool.prewarm: the
+// placeholder Job is created in the release namespace on the installation,
+// and the pool's nodes join c.Name — the same cluster only for the
+// installation's own pool. Refused, naming the constraint, rather than left
+// to the chart's render to fail the release.
+func (p PoolSpec) validatePrewarm(c Cluster) error {
+	if !p.Prewarm || c.Name == c.ManagementCluster {
+		return nil
+	}
+	return fmt.Errorf("prewarm: the placeholder Job runs in the release namespace on the installation (%s), where only the installation's own pool's nodes join; %s is a workload cluster, whose pool's first node launches with the first predictor — re-run without prewarm", c.ManagementCluster, c.Name)
+}
+
 // ReleaseName is the name of the pool's HelmRelease and OCIRepository, the
 // same `<cluster>-<pool>` the chart gives the MachinePool.
 func ReleaseName(cluster, pool string) string { return cluster + "-" + pool }
@@ -150,6 +170,9 @@ func ValuesSecretName(cluster, pool string) string { return ReleaseName(cluster,
 // ownerReference to the Cluster.
 func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.validatePrewarm(c); err != nil {
 		return nil, err
 	}
 	name := ReleaseName(c.Name, p.Name)
@@ -181,8 +204,10 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 
 // values is the chart's values for the pool: the snapshot of the cluster's
 // settings, the pins and the caller's shape. Chart defaults that the
-// snapshot does not override (minSize 0, volumes, consolidation, maxPods)
-// are left to the chart.
+// snapshot does not override (minSize 0, volumes and their throughput,
+// consolidation, maxPods, the placeholder's hold and image) are left to the
+// chart; the prewarm block is written only when the caller asks for it, so a
+// re-run without it removes the block.
 func values(c Cluster, p PoolSpec) map[string]any {
 	mirrors := map[string]any{}
 	for host, endpoints := range c.RegistryMirrors {
@@ -201,7 +226,7 @@ func values(c Cluster, p PoolSpec) map[string]any {
 	}
 	if c.Proxy.Enabled {
 		cluster["proxy"] = map[string]any{
-			"enabled":    true,
+			valueEnabled: true,
 			"httpProxy":  c.Proxy.HTTPProxy,
 			"httpsProxy": c.Proxy.HTTPSProxy,
 			"noProxy":    c.Proxy.NoProxy,
@@ -224,10 +249,13 @@ func values(c Cluster, p PoolSpec) map[string]any {
 		}
 		pool["sizes"] = sizes
 	}
+	if p.Prewarm {
+		pool["prewarm"] = map[string]any{valueEnabled: true}
+	}
 	return map[string]any{
 		"cluster":  cluster,
 		"pool":     pool,
-		"teleport": map[string]any{"enabled": c.Teleport},
+		"teleport": map[string]any{valueEnabled: c.Teleport},
 	}
 }
 

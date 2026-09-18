@@ -11,8 +11,9 @@ namespace, the control plane and infrastructure objects they reference, the
 cluster-scoped Giant Swarm Releases (the pool's pins; the control plane's
 Kubernetes version when the control plane object is not readable), the
 cluster's own values (the HelmRelease or App named like the cluster and its
-ConfigMap), the teleport join-token Secret's presence and the kubeconfig
-Secret's cluster section (apiserver and CA). The node-pool writes create,
+ConfigMap), the teleport join-token Secret's presence, the kubeconfig
+Secret's cluster section (apiserver and CA), and a pool release's prewarm
+placeholder (its Job and pod in the release's org- namespace). The node-pool writes create,
 update and delete the pool and operator releases' HelmRelease, OCIRepository
 and values Secret in org- namespaces, and the kserve backend ConfigMap in
 model-manager's namespace. The detection on the installation's own cluster
@@ -42,7 +43,10 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["nodes"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["nvidia.com"]
     resources: ["clusterpolicies"]
