@@ -498,6 +498,11 @@
                       ]
                     }
                   }
+                },
+                "config": {
+                  "core": {
+                    "sleepInterval": "10s"
+                  }
                 }
               }
             },

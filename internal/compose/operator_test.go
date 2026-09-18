@@ -90,6 +90,10 @@ func TestOperatorGoldens(t *testing.T) {
 			driver, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "driver", "enabled")
 			toolkit, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "toolkit", "enabled")
 			assert.Equal(t, tc.row, OperatorRow{Name: tc.row.Name, Driver: driver, Toolkit: toolkit})
+			sleep, _, _ := unstructured.NestedString(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "config", "core", "sleepInterval")
+			assert.Equal(t, NFDWorkerSleepInterval, sleep, "the worker polls every 10 s, pools or none: a fresh node is labelled within seconds, not upstream's minute")
+			config, _, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "config")
+			assert.Equal(t, map[string]any{"core": map[string]any{"sleepInterval": NFDWorkerSleepInterval}}, config, "nothing else of worker.config is set: the operator chart's PCI whitelist merges in")
 			affinity, hasAffinity, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "affinity")
 			if tc.pinned == nil {
 				assert.False(t, hasAffinity, "no pool pins the worker nowhere: the chart runs it everywhere, as upstream")

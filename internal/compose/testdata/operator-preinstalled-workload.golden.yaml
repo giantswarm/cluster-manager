@@ -66,5 +66,8 @@ spec:
                     operator: In
                     values:
                     - wc1-gpu-l4
+          config:
+            core:
+              sleepInterval: 10s
       toolkit:
         enabled: true
