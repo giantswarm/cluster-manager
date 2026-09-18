@@ -177,8 +177,8 @@ func TestListNodePoolsPrewarmCannotLaunch(t *testing.T) {
 	assert.Equal(t, []string{StepRelease, StepMachinePool, StepNodes, StepPrewarm}, names(pool.Steps))
 	assert.Equal(t, []string{StepDone, StepDone, StepInProgress, StepInProgress}, states(pool.Steps))
 	assert.Equal(t, "2026-09-18T02:26:37Z", pool.Steps[2].Since, "since Karpenter's last refusal")
-	assert.Equal(t, `2 NodeClaims could not launch, the last (gazelle-gpu-l40s-zgbdh) at 2026-09-18T02:26:37Z — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, pool.Steps[2].Message)
-	assert.Equal(t, "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a (the nodes step carries Karpenter's message)", pool.Steps[3].Message)
+	assert.Equal(t, `2 NodeClaims could not launch, the last (gazelle-gpu-l40s-zgbdh) at 2026-09-18T02:26:37Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge) in every zone the pool may use (eu-central-1a, eu-central-1b, eu-central-1c — the cluster's node-subnet zones; the pool has no pin) (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — `+wantNoZone, pool.Steps[2].Message)
+	assert.Equal(t, "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge) in every zone the pool may use (eu-central-1a, eu-central-1b, eu-central-1c — the cluster's node-subnet zones; the pool has no pin) (the nodes step carries Karpenter's message)", pool.Steps[3].Message)
 	assertGolden(t, "list_node_pools_prewarm_cannot_launch", pools)
 }
 
@@ -187,9 +187,12 @@ func TestListNodePoolsPrewarmCannotLaunch(t *testing.T) {
 // launch — AWS refused every size at once, Karpenter's event names the first
 // only — has its nodes step name every size of the pool and the pinned zone,
 // what pinned the pool (the claim, its volume) and the re-run that moves it
-// (zones naming a zone with capacity, whose claim the slice then mounts); a pool without a pin whose
-// event is uncut relays the zones AWS named as having the capacity and keeps
-// the plain remedy. The golden is the portal's row while capacity is short.
+// (zones naming a zone with capacity — the cluster's other node-subnet zones
+// as the candidates, whose claim the slice then mounts); a pool without a pin
+// refused with the whole nine-error answer has every size in every zone the
+// pool may use named, no zone AWS hinted at relayed (the same answer refused
+// each) and no zone advised (giantswarm/cluster-manager#75). The golden is the
+// portal's row while capacity is short.
 func TestListNodePoolsCannotLaunchPinned(t *testing.T) {
 	l := newLab(t, "installation.yaml")
 	l.add(t, l.installation, "cache-claim.yaml")
@@ -201,9 +204,9 @@ func TestListNodePoolsCannotLaunchPinned(t *testing.T) {
 	assert.Equal(t, "gazelle-bench-11", pinned.Name)
 	assert.Equal(t, PhaseScaling, pinned.Phase)
 	assert.Equal(t, StepInProgress, pinned.Steps[2].State)
-	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-11-5hpxb) at 2026-09-18T12:14:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — the pool is pinned to eu-central-1b — the model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives in eu-central-1b and the pool's slice mounts it: re-run create_node_pool on the pool with zones naming one zone with capacity — with the cache on its slice then mounts that zone's model cache claim (the one Bound there, else hf-cache-<zone>, created there and kept; the weights downloaded once more), with cache false it serves from the node's local disk; wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, pinned.Steps[2].Message)
+	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-11-5hpxb) at 2026-09-18T12:14:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b, the zone the pool is pinned to (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — the pool is pinned to eu-central-1b — the model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives in eu-central-1b and the pool's slice mounts it: re-run create_node_pool on the pool with zones naming one zone with capacity — not refused in this answer: eu-central-1a, eu-central-1c (the cluster's other node-subnet zones; capacity there is not promised) — with the cache on its slice then mounts that zone's model cache claim (the one Bound there, else hf-cache-<zone>, created there and kept; the weights downloaded once more), with cache false it serves from the node's local disk; wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, pinned.Steps[2].Message)
 	assert.Equal(t, "gazelle-bench-12", free.Name)
-	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-12-k2m4p) at 2026-09-18T12:30:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); AWS named eu-central-1a, eu-central-1c as having the capacity; Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, free.Steps[2].Message)
+	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-12-k2m4p) at 2026-09-18T12:30:47Z — `+wantEveryL40s+wantNoPin+` (InsufficientCapacityError); Karpenter: "`+nineFleetErrors+`"; it retries while a pod waits — `+wantNoZone, free.Steps[2].Message, "every size in every zone: no AWS hint relayed, no zone advised")
 	assertGolden(t, "list_node_pools_cannot_launch_pinned", pools)
 }
 
