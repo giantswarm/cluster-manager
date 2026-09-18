@@ -476,7 +476,7 @@ func (s *Service) operatorRelease(r operatorReads, t target, facts compose.Clust
 	if err != nil {
 		return operator, "", nil, &ErrRefused{Reason: err.Error()}
 	}
-	return operator, row.Name, compose.Operator(facts, row, pools), nil
+	return operator, row.Name, compose.Operator(facts, row, pools, compose.OperatorOptions{DCGMExporter: s.cfg.OperatorDCGMExporter}), nil
 }
 
 // existingBackend is model-manager's kserve backend document as it exists on

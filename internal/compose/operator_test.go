@@ -50,9 +50,11 @@ func TestDeriveOperatorRow(t *testing.T) {
 }
 
 // TestOperatorGoldens pins the `<cluster>-gpu-operator` release byte for
-// byte: the two rows on a workload cluster and the Flatcar row on the
-// installation's own cluster — every one delivered through the cluster's
-// kubeconfig Secret into its kube-system.
+// byte: the two rows on a workload cluster, the Flatcar row on the
+// installation's own cluster and with the DCGM exporter on — every one
+// delivered through the cluster's kubeconfig Secret into its kube-system,
+// running on a pool node the validator without its workload pods, the
+// device plugin and GPU feature discovery, and nothing else unless asked.
 func TestOperatorGoldens(t *testing.T) {
 	own := wc1()
 	own.Name, own.Namespace, own.Organization = "gazelle", "org-giantswarm", "giantswarm"
@@ -64,16 +66,18 @@ func TestOperatorGoldens(t *testing.T) {
 		// pinned are the machine-pool label values the worker's affinity
 		// selects; none renders no affinity.
 		pinned []any
+		opts   OperatorOptions
 	}{
-		{"flatcar-workload", wc1(), RowFlatcar, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}},
-		{"preinstalled-workload", wc1(), RowPreinstalled, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}},
-		{"flatcar-own-cluster", own, RowFlatcar, []string{"gpu-l4"}, []any{"gazelle-gpu-l4"}},
-		{"flatcar-two-pools", wc1(), RowFlatcar, []string{"gpu-t4", "gpu-l4", "gpu-t4"}, []any{"wc1-gpu-l4", "wc1-gpu-t4"}},
-		{"flatcar-no-pool", wc1(), RowFlatcar, nil, nil},
+		{"flatcar-workload", wc1(), RowFlatcar, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}, OperatorOptions{}},
+		{"preinstalled-workload", wc1(), RowPreinstalled, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}, OperatorOptions{}},
+		{"flatcar-own-cluster", own, RowFlatcar, []string{"gpu-l4"}, []any{"gazelle-gpu-l4"}, OperatorOptions{}},
+		{"flatcar-two-pools", wc1(), RowFlatcar, []string{"gpu-t4", "gpu-l4", "gpu-t4"}, []any{"wc1-gpu-l4", "wc1-gpu-t4"}, OperatorOptions{}},
+		{"flatcar-no-pool", wc1(), RowFlatcar, nil, nil, OperatorOptions{}},
+		{"flatcar-dcgm-exporter", wc1(), RowFlatcar, []string{"gpu-l4"}, []any{"wc1-gpu-l4"}, OperatorOptions{DCGMExporter: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			objs := Operator(tc.cluster, tc.row, tc.pools)
+			objs := Operator(tc.cluster, tc.row, tc.pools, tc.opts)
 			assertGolden(t, "operator-"+tc.name, objs)
 			require.Len(t, objs, 2)
 			source, release := objs[0], objs[1]
@@ -90,6 +94,22 @@ func TestOperatorGoldens(t *testing.T) {
 			driver, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "driver", "enabled")
 			toolkit, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "toolkit", "enabled")
 			assert.Equal(t, tc.row, OperatorRow{Name: tc.row.Name, Driver: driver, Toolkit: toolkit})
+			for _, component := range []string{"cuda", "plugin"} {
+				env, _, _ := unstructured.NestedSlice(release.Object, "spec", "values", OperatorValuesKey, "validator", component, "env")
+				assert.Equal(t, []any{map[string]any{"name": ValidatorWorkloadEnv, "value": "false"}}, env, component+"-validation starts no workload pod on the node")
+			}
+			for _, kept := range []string{"driver", "toolkit"} {
+				_, hasEnv, _ := unstructured.NestedSlice(release.Object, "spec", "values", OperatorValuesKey, "validator", kept, "env")
+				assert.False(t, hasEnv, kept+" validation stays the chart's: it proves the image's driver and CDI")
+			}
+			mig, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "migManager", valueEnabled)
+			assert.False(t, mig, "no MIG on the pool's accelerators: mig-manager off")
+			dcgm, _, _ := unstructured.NestedBool(release.Object, "spec", "values", OperatorValuesKey, "dcgmExporter", valueEnabled)
+			assert.Equal(t, tc.opts.DCGMExporter, dcgm, "the DCGM exporter runs only where the installation's observability scrapes it")
+			for _, kept := range []string{"gfd", "devicePlugin"} {
+				_, has, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, kept)
+				assert.False(t, has, kept+" keeps the chart's default: the device plugin advertises the GPU, model-manager reads GPU feature discovery's labels")
+			}
 			sleep, _, _ := unstructured.NestedString(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "config", "core", "sleepInterval")
 			assert.Equal(t, NFDWorkerSleepInterval, sleep, "the worker polls every 10 s, pools or none: a fresh node is labelled within seconds, not upstream's minute")
 			config, _, _ := unstructured.NestedMap(release.Object, "spec", "values", OperatorValuesKey, NFDValuesKey, "worker", "config")

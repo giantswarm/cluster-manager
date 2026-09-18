@@ -56,6 +56,7 @@ spec:
             {{- end }}
             - --tenant-service-account={{ .Values.flux.tenantServiceAccount }}
             - --models-certificate-issuer={{ .Values.serving.certificateIssuer }}
+            - --gpu-operator-dcgm-exporter={{ .Values.gpuOperator.dcgmExporter }}
             - --mcp-enabled={{ .Values.mcp.enabled }}
             - --mcp-path={{ .Values.mcp.path }}
             {{- if .Values.oauth.enabled }}

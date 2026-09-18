@@ -36,6 +36,7 @@ type serveOptions struct {
 	sliceChartVersion     string
 	tenantServiceAccount  string
 	certificateIssuer     string
+	operatorDCGMExporter  bool
 	applyBudget           time.Duration
 
 	mcpEnabled bool
@@ -79,6 +80,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.sliceChartVersion, "slice-chart-version", envOr("CLUSTER_MANAGER_SLICE_CHART_VERSION", ""), "Pin the <cluster>-agent-platform slice release's agent-platform chart to this exact version; empty pins the version the installation's own platform release runs, at least "+compose.MinSliceChartVersion+" (CLUSTER_MANAGER_SLICE_CHART_VERSION)")
 	f.StringVar(&o.tenantServiceAccount, "tenant-service-account", envOr("CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT", compose.DefaultTenantServiceAccount), "ServiceAccount in every org namespace the installation's Flux runs a composed release under when its objects live in that namespace (the pool release, the <cluster>-agent-platform slice release); the org's tenant ServiceAccount on Giant Swarm installations, empty renders none (CLUSTER_MANAGER_TENANT_SERVICE_ACCOUNT)")
 	f.StringVar(&o.certificateIssuer, "models-certificate-issuer", envOr("CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER", compose.DefaultCertificateIssuer), "cert-manager ClusterIssuer the <cluster>-agent-platform slice release asks for the models host's certificate when the platform's wildcard is not usable (a workload cluster; the own cluster when the platform's release names no gatewayApi.gateway.tls.secretName); empty composes none (CLUSTER_MANAGER_MODELS_CERTIFICATE_ISSUER)")
+	f.BoolVar(&o.operatorDCGMExporter, "gpu-operator-dcgm-exporter", envBool("CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER", false), "Run NVIDIA's DCGM exporter on the GPU pools' nodes through the composed <cluster>-gpu-operator release (its dcgmExporter.enabled), for an installation whose observability scrapes it; off by default — nothing scrapes it out of the box, and on a fresh pool node it is an image pull and a pod initialising DCGM on the GPU while the device plugin brings nvidia.com/gpu up (CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
 	f.DurationVar(&o.applyBudget, "apply-budget", envDuration("CLUSTER_MANAGER_APPLY_BUDGET", tools.DefaultApplyBudget), "How long a write call (create_node_pool, enable_model_serving, delete_node_pool, disable_model_serving) may take before it stops writing and answers with what it did, the rest pending for the re-run: the aggregator's deadline for an upstream tool call less the answer's way back; a deadline the request carries wins when earlier (CLUSTER_MANAGER_APPLY_BUDGET)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
@@ -124,7 +126,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			}
 			return target.Dynamic, nil
 		},
-		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, ApplyBudget: o.applyBudget},
+		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget},
 		// The platform's charts from their registry, anonymously: what the
 		// slice would install is read from there before it exists.
 		tools.WithChartReader(&registry.Client{HTTP: &http.Client{Timeout: 20 * time.Second}}),

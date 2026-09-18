@@ -90,6 +90,11 @@ type Config struct {
 	// release names no gatewayApi.gateway.tls.secretName):
 	// `letsencrypt-giantswarm` on Giant Swarm clusters; empty composes none.
 	CertificateIssuer string
+	// OperatorDCGMExporter runs NVIDIA's DCGM exporter on the GPU pools'
+	// nodes through the composed `<cluster>-gpu-operator` release, for an
+	// installation whose observability scrapes it; off by default
+	// (compose.OperatorOptions).
+	OperatorDCGMExporter bool
 	// ApplyBudget is how long a write call (create_node_pool,
 	// enable_model_serving, delete_node_pool, disable_model_serving) may
 	// take from its start before it stops writing and answers with what it
