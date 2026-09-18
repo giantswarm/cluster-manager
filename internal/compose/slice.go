@@ -142,6 +142,14 @@ type SliceSpec struct {
 	// (its TLS terminated at the fleet's edge, the wildcard in another
 	// namespace). Empty composes no issuer.
 	CertificateIssuer string
+	// NoCache serves without the model cache: the connectivity chart's
+	// `modelServing.cache.enabled: false`, so no cache claim is applied or
+	// mounted and every predictor downloads its weights into its pod's
+	// ephemeral storage (the node's local disk) at each start. A claim that
+	// exists is left as it is: the chart keeps it (helm.sh/resource-policy
+	// keep). The zero value keeps the chart's default, the cache on
+	// (giantswarm/cluster-manager#65).
+	NoCache bool
 }
 
 // SliceReleaseName names the slice release of a cluster.
@@ -316,6 +324,9 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 			set(selector, "modelServing", "gpuPool", "nodeSelector"),
 			set(selector, "modelServing", "serving", "nodeSelector"),
 		)
+	}
+	if s.NoCache {
+		steps = append(steps, set(false, "modelServing", "cache", "enabled"))
 	}
 	for _, err := range steps {
 		if err != nil {

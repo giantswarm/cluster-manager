@@ -112,7 +112,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { cpVersion = controlPlaneVersion(gctx, dyn, c); return nil })
-	g.Go(func() error { region = awsRegion(gctx, dyn, c); return nil })
+	g.Go(func() error { region = awsInfrastructure(gctx, dyn, c).region; return nil })
 	g.Go(func() (err error) {
 		pools, err = dyn.Resource(MachinePoolGVR).Namespace(c.GetNamespace()).List(gctx, metav1.ListOptions{
 			LabelSelector: LabelClusterName + "=" + c.GetName(),

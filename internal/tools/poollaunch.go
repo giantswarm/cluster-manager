@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
@@ -24,13 +26,25 @@ import (
 // by default, in the default namespace where the events of a cluster-scoped
 // object go; a refusal counts until Karpenter creates a claim after it (the
 // retry speaks for itself then).
+//
+// The event carries AWS's answer per size and zone, cut by Karpenter after
+// the first (giantswarm/cluster-manager#65): what it lacks is read from the
+// pool release — Karpenter gives a claim up for capacity only once every size
+// of the pool was refused in every zone it may use — and the way out points
+// at what decided where the launch was tried: the zones the pool is pinned
+// to, and the model cache claim when its zone is the pin.
 
 // The NodeClaim conditions that decide whether a node came: Launched (the
 // instance exists) and Registered (the node joined the cluster).
 var launchConditions = []string{"Launched", "Registered"}
 
 // Karpenter's event reasons for a claim it gave up on and deleted at once.
-var launchRefusalEvents = map[string]bool{"InsufficientCapacityError": true, "NodeClassNotReady": true}
+const (
+	reasonInsufficientCapacity = "InsufficientCapacityError"
+	reasonNodeClassNotReady    = "NodeClassNotReady"
+)
+
+var launchRefusalEvents = map[string]bool{reasonInsufficientCapacity: true, reasonNodeClassNotReady: true}
 
 const (
 	eventTypeWarning  = "Warning"
@@ -38,9 +52,78 @@ const (
 	kindNodeClaim     = "NodeClaim"
 )
 
-// capacityRefusal is the shape of AWS's answer in Karpenter's message: the
-// code, the instance type and the zone, once per size and zone refused.
-var capacityRefusal = regexp.MustCompile(`(\w+): We currently do not have sufficient (\S+) capacity in the Availability Zone you requested \(([^)]+)\)`)
+// The shapes of AWS's answer in Karpenter's message: the code, the instance
+// type and the zone, once per size and zone refused (capacityRefusal); and
+// the zones AWS names as having the capacity, when the message still carries
+// them (capacityElsewhere).
+var (
+	capacityRefusal   = regexp.MustCompile(`(\w+): We currently do not have sufficient (\S+) capacity in the Availability Zone you requested \(([^)]+)\)`)
+	capacityElsewhere = regexp.MustCompile(`by not specifying an Availability Zone in your request or choosing ([a-z0-9-]+(?:, [a-z0-9-]+)*)\.`)
+)
+
+// launchContext is what the pool release says about the node Karpenter
+// launches: the instance types of the pool's sizes, the zones its nodes are
+// pinned to (pool.zones), and the model cache claim on the cluster when the
+// pool is pinned — so the refusal names what the truncated message cannot,
+// and the remedy what decided where the launch was tried. Empty for a pool
+// without a release, or one that launches its nodes.
+type launchContext struct {
+	instanceTypes []string
+	zones         []string
+	claim         *detect.CacheClaim
+}
+
+// launchContext reads the context of a pool's refusals, only while it has
+// one: the sizes and zones from the release's values, the cache claim on the
+// cluster when the pool is pinned to zones.
+func (s *Service) launchContext(ctx context.Context, t target, release *unstructured.Unstructured, live *poolLive) launchContext {
+	if release == nil || live == nil || len(live.failures) == 0 {
+		return launchContext{}
+	}
+	lc := launchContext{zones: poolZones(release)}
+	accelerator, sizes := poolValues(release)
+	if shapes, err := compose.Shapes(accelerator, sizes); err == nil {
+		for _, shape := range shapes {
+			lc.instanceTypes = append(lc.instanceTypes, shape.InstanceType)
+		}
+	}
+	if len(lc.zones) > 0 {
+		lc.claim = s.cacheClaim(ctx, t)
+	}
+	return lc
+}
+
+// pinnedByClaim: the pool's one zone is the model cache claim's.
+func (lc launchContext) pinnedByClaim() bool {
+	return lc.claim != nil && lc.claim.Zone != "" && len(lc.zones) == 1 && lc.zones[0] == lc.claim.Zone
+}
+
+// remedy is the way around the refusal — shown, never chosen for the
+// person: wider sizes or another accelerator for a pool that may use every
+// zone; for a pool pinned by the model cache claim, the pin and its two
+// ways out; for a pool pinned by the zones named on create, other zones —
+// with cache false where the claim's zone is among the pinned ones.
+func (lc launchContext) remedy() string {
+	const widen = "wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+	switch {
+	case len(lc.zones) == 0:
+		return widen
+	case lc.pinnedByClaim():
+		return fmt.Sprintf("the pool is pinned to %s by the model cache claim %s (volume %s lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); %s", lc.zones[0], lc.claim, lc.claim.Volume, widen)
+	}
+	msg := fmt.Sprintf("the pool is pinned to %s by the zones named on create: re-run create_node_pool with zones naming a zone with capacity", strings.Join(lc.zones, ", "))
+	if lc.claim != nil && lc.claim.Zone != "" && slices.Contains(lc.zones, lc.claim.Zone) {
+		msg += fmt.Sprintf(" — the model cache claim %s lives in %s, so zones without it take cache false", lc.claim, lc.claim.Zone)
+	}
+	return msg + "; " + widen
+}
+
+// poolZones are the zones a pool release pins its nodes to (pool.zones);
+// none for no pin.
+func poolZones(hr *unstructured.Unstructured) []string {
+	zones, _, _ := unstructured.NestedStringSlice(hr.Object, "spec", "values", "pool", "zones")
+	return zones
+}
 
 // launchFailure is one node of the pool Karpenter could not launch.
 type launchFailure struct {
@@ -58,8 +141,11 @@ type launchFailure struct {
 // summary is the refusal in a line: the code, sizes and zones when
 // Karpenter's message carries AWS's capacity answer
 // (`InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a`), else
-// the reason.
-func (f launchFailure) summary() string {
+// the reason. Karpenter cuts the event after the first size and gives a
+// claim up for capacity only once every size of the pool was refused in
+// every zone it may use: the sizes the message lacks are the pool's, said
+// so, and the zones the pool's pin when it has one.
+func (f launchFailure) summary(lc launchContext) string {
 	var codes, sizes, zones []string
 	for _, m := range capacityRefusal.FindAllStringSubmatch(f.message, -1) {
 		codes, sizes, zones = appendNew(codes, m[1]), appendNew(sizes, m[2]), appendNew(zones, m[3])
@@ -67,7 +153,26 @@ func (f launchFailure) summary() string {
 	if len(codes) == 0 {
 		return f.reason
 	}
-	return strings.Join(codes, ", ") + " for " + strings.Join(sizes, ", ") + " in " + strings.Join(zones, ", ")
+	refused := strings.Join(sizes, ", ")
+	if f.reason == reasonInsufficientCapacity {
+		if len(lc.instanceTypes) > len(sizes) {
+			refused = "every size of the pool (" + strings.Join(lc.instanceTypes, ", ") + ")"
+		}
+		if len(lc.zones) > len(zones) {
+			zones = lc.zones
+		}
+	}
+	return strings.Join(codes, ", ") + " for " + refused + " in " + strings.Join(zones, ", ")
+}
+
+// elsewhere are the zones AWS named as having the capacity, when Karpenter's
+// message still carries them; none when it was cut before.
+func (f launchFailure) elsewhere() []string {
+	m := capacityElsewhere.FindStringSubmatch(f.message)
+	if m == nil {
+		return nil
+	}
+	return strings.Split(m[1], ", ")
 }
 
 // appendNew appends s unless list has it.
@@ -155,22 +260,27 @@ func trimMessage(claim, message string) string {
 }
 
 // launchFailureMessage words the refusals for the nodes step: how many
-// claims could not launch and the last one, the refusal in a line with
-// Karpenter's reason and message verbatim, and the way around it — the
-// refusal is shown, the person decides; no size or zone is ever chosen for
-// them. The pool's other claims, when it has any, follow.
-func launchFailureMessage(failures []launchFailure, launching, ready, terminating int) string {
+// claims could not launch and the last one, the refusal in a line — every
+// size refused, the zones tried, the zones AWS named as having capacity when
+// the message carries them — with Karpenter's reason and message verbatim,
+// and the way around it (launchContext.remedy) — the refusal is shown, the
+// person decides; no size or zone is ever chosen for them. The pool's other
+// claims, when it has any, follow.
+func launchFailureMessage(failures []launchFailure, launching, ready, terminating int, lc launchContext) string {
 	last := failures[len(failures)-1]
 	claims := "NodeClaim"
 	if len(failures) > 1 {
 		claims = "NodeClaims"
 	}
-	refusal := last.summary()
+	refusal := last.summary(lc)
 	if refusal != last.reason {
 		refusal += " (" + last.reason + ")"
 	}
-	msg := fmt.Sprintf("%d %s could not launch, the last (%s) at %s — %s; Karpenter: %q; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from",
-		len(failures), claims, last.claim, last.at, refusal, last.message)
+	if elsewhere := last.elsewhere(); len(elsewhere) > 0 {
+		refusal += "; AWS named " + strings.Join(elsewhere, ", ") + " as having the capacity"
+	}
+	msg := fmt.Sprintf("%d %s could not launch, the last (%s) at %s — %s; Karpenter: %q; it retries while a pod waits — %s",
+		len(failures), claims, last.claim, last.at, refusal, last.message, lc.remedy())
 	if launching+ready+terminating > 0 {
 		msg += fmt.Sprintf("; besides, %d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, terminating)
 	}

@@ -31,6 +31,10 @@ type ModelServingInput struct {
 	DryRun    bool
 	// Force (disable) removes the slice while models are still served.
 	Force bool
+	// Cache (enable) is whether the slice's predictors mount the serving
+	// namespace's model cache claim (false composes compose.SliceSpec.NoCache);
+	// nil keeps the default, the cache on.
+	Cache *bool
 }
 
 // SliceRelease is the `<cluster>-agent-platform` release as a write reports
@@ -84,12 +88,19 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool)
+	cache := in.Cache == nil || *in.Cache
+	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, !cache)
 	if err != nil {
 		return nil, err
 	}
 	if slice == nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("serving is already present on %s, provided by %s (%s): the slice release is composed only where nothing provides serving — nothing to do", c.GetName(), providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
+	}
+	// With the cache off the answer says what becomes of a claim that
+	// exists: read only then.
+	var claim *detect.CacheClaim
+	if !cache {
+		claim = s.cacheClaim(ctx, target)
 	}
 	instances, err := poolShapes(ctx, dyn, c.GetNamespace(), c.GetName(), pool)
 	if err != nil {
@@ -105,7 +116,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{},
-		Serving: serving, Slice: slice,
+		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, cache, claim),
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
 	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
@@ -216,7 +227,7 @@ func composesSlice(serving detect.Component) bool {
 // from the platform's inputs when none does — or when the one running is
 // cluster-manager's own, so the re-run is its update —, a refusal when the
 // cluster cannot be read.
-func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
+func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string, noCache bool) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
 	serving := r.serving
 	switch {
 	case serving.Status == detect.StatusUnknown:
@@ -225,7 +236,7 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 		return serving, nil, nil, nil
 	}
 	var err error
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: noCache}
 	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}

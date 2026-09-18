@@ -104,11 +104,11 @@ func (l *poolLive) readable() bool { return l.claimsErr == nil || l.nodesErr == 
 
 // refusal is Karpenter's last refusal to launch a node of the pool in a
 // line; "" while it launches them (or the cluster is not readable).
-func (l *poolLive) refusal() string {
+func (l *poolLive) refusal(lc launchContext) string {
 	if l == nil || len(l.failures) == 0 {
 		return ""
 	}
-	return l.failures[len(l.failures)-1].summary()
+	return l.failures[len(l.failures)-1].summary(lc)
 }
 
 // refused says whether a NodeClaim carries Karpenter's refusal: counted

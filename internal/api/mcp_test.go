@@ -113,6 +113,12 @@ func TestToolsListAndSchemas(t *testing.T) {
 		props := tool.InputSchema["properties"].(map[string]any)
 		assert.Equal(t, []any{"apply", "commit"}, props["mode"].(map[string]any)["enum"], "%s offers both modes in the schema", tool.Name)
 		assert.Equal(t, "apply", props["mode"].(map[string]any)["default"])
+		if tool.Name == ToolCreateNodePool {
+			assert.Equal(t, "array", props[argZones].(map[string]any)["type"], "zones is a list of the cluster's node-subnet zones")
+		}
+		if tool.Name == ToolCreateNodePool || tool.Name == ToolEnableModelServing {
+			assert.Equal(t, true, props[argCache].(map[string]any)["default"], "%s: the model cache is on unless said otherwise", tool.Name)
+		}
 	}
 	assert.Len(t, listed.Tools, len(ToolNames()))
 	for _, want := range ToolNames() {

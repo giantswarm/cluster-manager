@@ -83,6 +83,38 @@ func TestEnableModelServingWorkload(t *testing.T) {
 	assert.Equal(t, detect.ProviderClusterManager, wc1Cluster(t, l).Serving.Provider, "list_clusters: serving present through cluster-manager")
 }
 
+// TestEnableModelServingWithoutCache (giantswarm/cluster-manager#65): cache
+// false composes the slice with modelServing.cache.enabled false and the
+// answer says so, the existing claim named as left alone; a re-run with the
+// cache on writes nothing for it — the chart's default — and names the claim
+// the predictors mount.
+func TestEnableModelServingWithoutCache(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "cache-claim.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	off := false
+	in := serving("gazelle", true)
+	in.Cache = &off
+	out, err := svc.EnableModelServing(ctx, in)
+	require.NoError(t, err)
+	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
+	enabled, found, _ := unstructured.NestedBool(values, "modelServing", "cache", "enabled")
+	require.True(t, found)
+	assert.False(t, enabled)
+	require.NotNil(t, out.Cache)
+	assert.False(t, out.Cache.Enabled)
+	assert.Contains(t, out.Cache.Note, "the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing")
+
+	on, err := svc.EnableModelServing(ctx, serving("gazelle", true))
+	require.NoError(t, err)
+	values, _, _ = unstructured.NestedMap(on.Manifests[1], "spec", "values")
+	_, found, _ = unstructured.NestedBool(values, "modelServing", "cache", "enabled")
+	assert.False(t, found, "the cache on is the chart's default: nothing written")
+	assert.True(t, on.Cache.Enabled)
+	assert.Equal(t, "model-serving/hf-cache", on.Cache.Claim)
+}
+
 // TestCreateNodePoolUpdatesTheSliceInPlace: with the slice on wc1 from
 // enable_model_serving, a second pool makes create_node_pool update the one
 // release — its dry-run names the changed paths (the selector goes, and the
