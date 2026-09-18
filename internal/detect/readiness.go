@@ -125,6 +125,11 @@ type ServingReadiness struct {
 	// ModelsGateway is the Gateway listening on models.<domain>, null where
 	// the slice runs none (or the cluster cannot be read).
 	ModelsGateway *GatewayState `json:"modelsGateway"`
+	// CacheClaim is the serving namespace's model cache claim with the zone
+	// its volume is bound to — where every GPU pool created while it exists
+	// lands (filled in by the tools, which know the namespace and name);
+	// null when there is none or the cluster cannot be read.
+	CacheClaim *CacheClaim `json:"cacheClaim"`
 }
 
 // ControllerState is one KServe controller Deployment.

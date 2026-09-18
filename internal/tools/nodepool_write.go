@@ -72,7 +72,11 @@ type Refused struct {
 	// ones are free.
 	Idle   []string `json:"idle,omitempty"`
 	Models []string `json:"models"`
-	Hint   string   `json:"hint"`
+	// Unscheduled are the served models of model-manager's whose predictor
+	// runs on no node — Pending, waiting for a node of the pool — when
+	// they, and no busy node, refused the delete (giantswarm/cluster-manager#59).
+	Unscheduled []string `json:"unscheduled,omitempty"`
+	Hint        string   `json:"hint"`
 	// ReadFrom is what the guard judged from: `cluster` (the pool's
 	// NodeClaims and Nodes with the pods on them, read as the caller) or
 	// `machinePool` (the MachinePool's provider IDs, when the cluster cannot
@@ -166,6 +170,15 @@ type WriteResult struct {
 	Sizes     []compose.InstanceShape `json:"sizes,omitempty"`
 	PresetFit *PresetFit              `json:"presetFit,omitempty"`
 	Warnings  []string                `json:"warnings,omitempty"`
+	// Zones are the availability zones the pool's nodes are pinned to
+	// (create): the zone the serving namespace's model cache claim is bound
+	// to — one volume in one zone, which a node elsewhere strands a
+	// predictor mounting (giantswarm/cluster-manager#59). Empty for no pin;
+	// ZonesNote says in a sentence what was found and what it means, and
+	// CacheClaim is the claim as read (null for none).
+	Zones      []string           `json:"zones,omitempty"`
+	ZonesNote  string             `json:"zonesNote,omitempty"`
+	CacheClaim *detect.CacheClaim `json:"cacheClaim,omitempty"`
 	// Partial marks an apply that stopped writing so its answer arrives
 	// within the caller's deadline: the objects it did not reach are listed
 	// with action `pending`, and NextStep says what to do — re-run, the
@@ -221,10 +234,12 @@ func (a ObjectAction) String() string {
 // (giantswarm/cluster-manager#26). The answer lists the pool's sizes with what each leaves a
 // predictor and, where the cluster publishes serving presets, the smallest
 // size that hosts each — a preset no size hosts is a warning
-// (giantswarm/agent-platform#502). LLMInferenceServiceConfigs a serving layer
-// that went left terminating in the release namespace are healed before the
-// slice lands (giantswarm/cluster-manager#28). Every refusal comes before any
-// write.
+// (giantswarm/agent-platform#502). With a model cache claim bound in the
+// serving namespace the pool's nodes are pinned to its volume's zone
+// (compose.PoolSpec.Zones; zonePinFor) and the answer says so.
+// LLMInferenceServiceConfigs a serving layer that went left terminating in
+// the release namespace are healed before the slice lands
+// (giantswarm/cluster-manager#28). Every refusal comes before any write.
 //
 // The call answers within the aggregator's deadline for a tool call
 // (giantswarm/cluster-manager#34): everything it reads is read once,
@@ -262,6 +277,8 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if newer, err := versionNewer(facts.KubernetesVersion, strings.TrimPrefix(r.cpVersion, "v")); err == nil && newer {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the cluster's release pins Kubernetes %s but its control plane runs %s: a pool is never newer than the control plane — finish the cluster's upgrade first, then re-run", facts.KubernetesVersion, r.cpVersion)}
 	}
+	pin := zonePinFor(r.cache, target.Cluster)
+	in.Pool.Zones = pin.zones
 	objs, err := compose.Pool(facts, in.Pool)
 	if err != nil {
 		return nil, err
@@ -293,7 +310,8 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
-		Sizes:   compose.Priced(shapes, r.region), PresetFit: r.fit, Warnings: r.warnings,
+		Sizes:   compose.Priced(shapes, r.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
+		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim,
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
@@ -337,6 +355,9 @@ type poolReads struct {
 	warnings []string
 	// region is the cluster's AWS region, for the sizes' prices.
 	region compose.Region
+	// cache is the serving namespace's model cache claim on the target, the
+	// pool's zone pin; nil for none.
+	cache *detect.CacheClaim
 }
 
 // readPool reads the pool's inputs concurrently: the cluster's facts, its
@@ -384,6 +405,11 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	g.Go(func() error {
 		defer timed(gctx, "region")()
 		r.region = awsRegion(gctx, dyn, c)
+		return nil
+	})
+	g.Go(func() error {
+		defer timed(gctx, "cache claim")()
+		r.cache = s.readCacheClaim(gctx, t)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
@@ -725,7 +751,10 @@ func checkMode(mode string) error {
 // eight minutes after the node was gone (giantswarm/cluster-manager#49). The
 // refusal names the busy nodes with what holds them and the models served on
 // the cluster — read from the serving objects directly, so a predictor still
-// Pending counts too — with the fix, and says what it read from.
+// Pending counts too — with the fix, and says what it read from. With no
+// busy node the served models decide alone (waitingGuard): one whose
+// predictor runs on no node waits for a node of the pool, and the delete is
+// refused naming it (giantswarm/cluster-manager#59).
 func (s *Service) nodesGuard(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, pool string, t target) ([]*poolNode, error) {
 	ns := c.GetNamespace()
 	mp, err := dyn.Resource(MachinePoolGVR).Namespace(ns).Get(ctx, pool, metav1.GetOptions{})
@@ -752,6 +781,9 @@ func (s *Service) nodesGuard(ctx context.Context, dyn dynamic.Interface, c *unst
 	}
 	idle := live.idle()
 	if len(busy) == 0 {
+		if err := s.waitingGuard(ctx, t, pool, idle); err != nil {
+			return nil, err
+		}
 		return idle, nil
 	}
 	clause, models := servedModelsClause(ctx, t, true)

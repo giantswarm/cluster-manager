@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
@@ -530,4 +531,176 @@ func sizeNames(shapes []compose.InstanceShape) []string {
 		out = append(out, s.Size)
 	}
 	return out
+}
+
+// TestCreateNodePoolFollowsTheCacheZone (giantswarm/cluster-manager#59): with
+// the serving namespace's model cache claim Bound, the pool release carries
+// pool.zones with the volume's zone and the answer names the pin, the claim
+// and its volume — on the installation's own pool and on a workload
+// cluster's, whose claim is read on the cluster as the caller. Without a
+// claim the values carry no zones block and the answer says nothing of it.
+func TestCreateNodePoolFollowsTheCacheZone(t *testing.T) {
+	ctx := context.Background()
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "prewarm.yaml")
+	l.add(t, l.installation, "cache-claim.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	in := l4("gazelle", "gpu-l40s", true)
+	in.Pool.Accelerator, in.Pool.Sizes, in.Pool.MaxGPUs, in.Pool.Prewarm = "nvidia-l40s", []string{"2xlarge", "4xlarge"}, 1, true
+	out, err := svc.CreateNodePool(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"eu-central-1b"}, out.Zones)
+	assert.Equal(t, "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives there, and a node launched in another zone strands a predictor mounting it Pending; remove the cache claim to lift the pin (it costs the cached weights and compiled graphs), or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step", out.ZonesNote)
+	assert.Equal(t, &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}, out.CacheClaim)
+	assert.Empty(t, out.Warnings, "a pin is not a warning")
+	zones, found, _ := unstructured.NestedStringSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
+	require.True(t, found, "the pool release carries pool.zones")
+	assert.Equal(t, []string{"eu-central-1b"}, zones)
+	assertGolden(t, "create_node_pool_cache_zone", out)
+
+	// The workload cluster's claim lives on the workload cluster.
+	l.add(t, l.targets[wc1APIServer], "cache-claim.yaml")
+	out, err = svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"eu-central-1b"}, out.Zones, "read on wc1 as the caller")
+	zones, _, _ = unstructured.NestedStringSlice(poolManifest(t, out, "wc1-gpu-l4"), "spec", "values", "pool", "zones")
+	assert.Equal(t, []string{"eu-central-1b"}, zones)
+
+	// No claim on wc2: no pin, no note, no block.
+	out, err = svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	assert.Nil(t, out.Zones)
+	assert.Empty(t, out.ZonesNote)
+	assert.Nil(t, out.CacheClaim)
+	_, found, _ = unstructured.NestedSlice(poolManifest(t, out, "wc2-gpu-l4b"), "spec", "values", "pool", "zones")
+	assert.False(t, found, "without a claim the values carry no zones block")
+}
+
+// TestCreateNodePoolCacheClaimWithoutAZone (giantswarm/cluster-manager#59): a
+// claim that is not Bound, or whose volume names no zone, pins nothing and
+// the answer says what was found; a claim or volume that cannot be read as
+// the caller pins nothing and is a warning naming why — never a guessed
+// zone, never a silent absence.
+func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
+	ctx := context.Background()
+	forbidden := func(resource, name string) k8stesting.ReactionFunc {
+		return func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("User \"alice\" cannot get resource \""+resource+"\" in API group \"\""))
+		}
+	}
+	cases := []struct {
+		name    string
+		prepare func(t *testing.T, l *lab)
+		note    string
+		warning string
+	}{
+		{"pending claim", func(t *testing.T, l *lab) {
+			pvc, err := l.installation.Resource(detect.PersistentVolumeClaimGVR).Namespace("model-serving").Get(ctx, "hf-cache", metav1.GetOptions{})
+			require.NoError(t, err)
+			unstructured.RemoveNestedField(pvc.Object, "spec", "volumeName")
+			require.NoError(t, unstructured.SetNestedField(pvc.Object, "Pending", "status", "phase"))
+			_, err = l.installation.Resource(detect.PersistentVolumeClaimGVR).Namespace("model-serving").Update(ctx, pvc, metav1.UpdateOptions{})
+			require.NoError(t, err)
+		}, "the model cache claim model-serving/hf-cache on gazelle is Pending, bound to no volume yet: the pool's nodes are not pinned to a zone — the first predictor mounting the cache binds it to its node's zone, and every pool created after that follows it", ""},
+		{"volume without a zone", func(t *testing.T, l *lab) {
+			pv, err := l.installation.Resource(detect.PersistentVolumeGVR).Get(ctx, "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", metav1.GetOptions{})
+			require.NoError(t, err)
+			unstructured.RemoveNestedField(pv.Object, "spec", "nodeAffinity")
+			_, err = l.installation.Resource(detect.PersistentVolumeGVR).Update(ctx, pv, metav1.UpdateOptions{})
+			require.NoError(t, err)
+		}, "the model cache claim model-serving/hf-cache on gazelle is bound to volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80, whose node affinity names no zone: the pool's nodes are not pinned — a volume every zone reaches strands no predictor", ""},
+		{"volume not readable", func(t *testing.T, l *lab) {
+			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "persistentvolumes", forbidden("persistentvolumes", "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80"))
+		}, "", "the model cache claim model-serving/hf-cache on gazelle cannot be read as you (get PersistentVolume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 of claim model-serving/hf-cache: persistentvolumes \"pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80\" is forbidden: User \"alice\" cannot get resource \"persistentvolumes\" in API group \"\"): the pool's nodes are not pinned to the cache's zone — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or remove the claim (it costs the cached weights)"},
+		{"claim not readable", func(t *testing.T, l *lab) {
+			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "persistentvolumeclaims", forbidden("persistentvolumeclaims", "hf-cache"))
+		}, "", "the model cache claim model-serving/hf-cache on gazelle cannot be read as you (get PersistentVolumeClaim model-serving/hf-cache: persistentvolumeclaims \"hf-cache\" is forbidden: User \"alice\" cannot get resource \"persistentvolumeclaims\" in API group \"\"): the pool's nodes are not pinned to the cache's zone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLab(t, "installation.yaml")
+			l.add(t, l.installation, "prewarm.yaml")
+			l.add(t, l.installation, "cache-claim.yaml")
+			tc.prepare(t, l)
+			svc := l.service(Config{Installation: "gazelle"})
+			in := l4("gazelle", "gpu-l40s", true)
+			in.Pool.Accelerator, in.Pool.Prewarm = "nvidia-l40s", true
+			out, err := svc.CreateNodePool(ctx, in)
+			require.NoError(t, err)
+			assert.Nil(t, out.Zones, "no pin")
+			_, found, _ := unstructured.NestedSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
+			assert.False(t, found, "no zones block")
+			require.NotNil(t, out.CacheClaim, "the claim as read is in the answer")
+			if tc.note != "" {
+				assert.Equal(t, tc.note, out.ZonesNote)
+				assert.Empty(t, out.Warnings)
+			}
+			if tc.warning != "" {
+				assert.Empty(t, out.ZonesNote)
+				require.Len(t, out.Warnings, 1)
+				assert.Contains(t, out.Warnings[0], tc.warning)
+				assert.NotEmpty(t, out.CacheClaim.Error)
+			}
+		})
+	}
+}
+
+// poolManifest is the pool's HelmRelease among a create's manifests.
+func poolManifest(t *testing.T, out *WriteResult, name string) map[string]any {
+	t.Helper()
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == name {
+			return m
+		}
+	}
+	t.Fatalf("no HelmRelease %s among the manifests", name)
+	return nil
+}
+
+// TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode
+// (giantswarm/cluster-manager#59): the pool's nodes are idle, yet a model
+// model-manager serves has its predictor Pending on no node — waiting for a
+// node of the pool. The delete is refused naming the model and its pod, the
+// idle nodes beside; the structured refusal lists it under unscheduled with
+// no busy node. A hand-made InferenceService Pending too is not the
+// platform's and does not count. Without a pod yet the model counts still.
+// Pods not readable as the caller are a refusal: what cannot be seen cannot
+// be judged idle. Force deletes regardless.
+func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
+	ctx := context.Background()
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply}
+	lab := newLab(t, "installation.yaml").target(t, wc1APIServer, "wc1-waiting.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
+
+	_, err := svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g runs no busy node on wc1, but 1 served model(s) wait for a node of the pool: LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct): pod model-serving/llama-3-8b-kserve-6649fb66c8-xnkd2 Pending on no node — removing the pool strands them (with the cluster's last pool the serving slice, its controller and the backend go too, and the serving object is left behind with a finalizer nothing clears) — unload them first (model-manager's unload_model) and re-run, or pass force to delete the pool regardless; 2 idle node(s) (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2) go with the pool once the models are unloaded")
+	assert.Equal(t, &Refused{
+		Nodes:       []string{},
+		Idle:        []string{"wc1-gpu-a10g-node-1", "wc1-gpu-a10g-node-2"},
+		Models:      []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
+		Unscheduled: []string{"LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
+		Hint:        refusedHint,
+		ReadFrom:    readFromCluster,
+	}, refusedBlock(t, err), "no busy node; the hand-made InferenceService is listed among the served models but does not refuse")
+	assert.Len(t, poolClaims(t, lab, "wc1-gpu-a10g"), 2, "nothing was written")
+
+	// The controller has not created the predictor's pod yet: the model
+	// counts all the same.
+	require.NoError(t, lab.targets[wc1APIServer].Resource(detect.PodsGVR).Namespace("model-serving").Delete(ctx, "llama-3-8b-kserve-6649fb66c8-xnkd2", metav1.DeleteOptions{}))
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct): no predictor pod yet")
+
+	// Pods not readable: refused, with the way out.
+	fakeTarget(t, lab, wc1APIServer).PrependReactor("list", detect.PodsGVR.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() != "model-serving" {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("User \"alice\" cannot list resource \"pods\" in API group \"\" in the namespace \"model-serving\""))
+	})
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "node pool wc1-gpu-a10g runs no busy node on wc1, but whether a served model waits for one cannot be told (list the pods of model-serving: pods is forbidden: User \"alice\" cannot list resource \"pods\" in API group \"\" in the namespace \"model-serving\"): a predictor Pending for a node of the pool would be stranded by the delete — re-run once you may list the pods of model-serving, or pass force to delete the pool regardless")
+
+	forced, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no model")
 }

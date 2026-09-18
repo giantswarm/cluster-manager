@@ -24,7 +24,8 @@
           "registered": false
         },
         "presets": null,
-        "modelsGateway": null
+        "modelsGateway": null,
+        "cacheClaim": null
       }
     },
     "poolReleases": [
@@ -70,7 +71,8 @@
         "presets": {
           "count": 3
         },
-        "modelsGateway": null
+        "modelsGateway": null,
+        "cacheClaim": null
       }
     },
     "poolReleases": [
@@ -108,7 +110,14 @@
           "registered": false
         },
         "presets": null,
-        "modelsGateway": null
+        "modelsGateway": null,
+        "cacheClaim": {
+          "namespace": "model-serving",
+          "name": "hf-cache",
+          "phase": "Bound",
+          "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+          "zone": "eu-central-1b"
+        }
       }
     },
     "poolReleases": [],

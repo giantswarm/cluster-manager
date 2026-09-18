@@ -69,6 +69,11 @@ type Config struct {
 	// ServingNamespace is where the InferenceServices go on a serving
 	// cluster (the backend document's target.servingNamespace).
 	ServingNamespace string
+	// CacheClaimName names the model cache claim in the serving namespace
+	// (the connectivity chart's `modelServing.cache.pvc.name`): the
+	// PersistentVolumeClaim whose volume's zone a new pool's nodes are pinned
+	// to, and list_clusters names. Empty is DefaultCacheClaimName.
+	CacheClaimName string
 	// SliceChartVersion, when set, pins the slice release's agent-platform
 	// chart as given instead of the version the installation's platform
 	// release runs — for a lab running an unreleased chart, or a test.
@@ -99,11 +104,22 @@ type Config struct {
 // call at about ten seconds; two of them are the answer's.
 const DefaultApplyBudget = 8 * time.Second
 
+// DefaultCacheClaimName is the connectivity chart's default name of the
+// model cache claim.
+const DefaultCacheClaimName = "hf-cache"
+
 func (c Config) applyBudget() time.Duration {
 	if c.ApplyBudget == 0 {
 		return DefaultApplyBudget
 	}
 	return c.ApplyBudget
+}
+
+func (c Config) cacheClaimName() string {
+	if c.CacheClaimName == "" {
+		return DefaultCacheClaimName
+	}
+	return c.CacheClaimName
 }
 
 // Service implements the tools.

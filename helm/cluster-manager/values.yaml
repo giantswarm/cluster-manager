@@ -46,6 +46,12 @@ serving:
   # -- Namespace on a serving cluster where the InferenceServices go, named
   # as `target.servingNamespace` in the registered `kserve` backend.
   namespace: model-serving
+  # -- Name of the model cache `PersistentVolumeClaim` in the serving namespace
+  # (the connectivity chart's `modelServing.cache.pvc.name`). The claim outlives
+  # the pool and is one volume bound in one zone: `create_node_pool` pins a
+  # pool's nodes to that zone (the gpu-node-pool chart's `pool.zones`) and
+  # `list_clusters` names the claim and its zone under serving readiness.
+  cacheClaim: hf-cache
   # -- Exact `agent-platform` chart version the `<cluster>-agent-platform`
   # slice release pins. Empty pins the version the installation's own
   # platform release runs (at least 4.27.0, the first chart that places the

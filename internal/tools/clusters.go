@@ -156,8 +156,12 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 	// target reads finished last (giantswarm/cluster-manager#41).
 	var backend detect.BackendState
 	g.Go(func() error { backend = s.backendState(gctx, dyn, c.GetName()); return nil })
+	// The cache claim likewise: the tools know its namespace and name.
+	var cache *detect.CacheClaim
+	g.Go(func() error { cache = s.cacheClaim(gctx, target); return nil })
 	_ = g.Wait()
 	serving.Readiness.Backend = backend
+	serving.Readiness.CacheClaim = cache
 	return Cluster{
 		Name:           c.GetName(),
 		Namespace:      c.GetNamespace(),

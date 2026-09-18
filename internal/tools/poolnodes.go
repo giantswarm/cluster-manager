@@ -27,16 +27,9 @@ import (
 // stayed in it for eight minutes and kept the delete refused — and removes
 // the idle NodeClaims itself; list_node_pools names the idle nodes.
 
-// What KServe puts on a predictor's pods: the InferenceService's label on its
-// predictor, the LLMInferenceService's part-of on its workload.
-const (
-	labelKServeInferenceService = "serving.kserve.io/inferenceservice"
-	labelPartOf                 = "app.kubernetes.io/part-of"
-	partOfLLMISVC               = "llminferenceservice"
-	// kindDaemonSet owns the pods that run on every node of the pool by
-	// design: the device plugin, GPU feature discovery, the fleet's agents.
-	kindDaemonSet = "DaemonSet"
-)
+// kindDaemonSet owns the pods that run on every node of the pool by design:
+// the device plugin, GPU feature discovery, the fleet's agents.
+const kindDaemonSet = "DaemonSet"
 
 // poolNode is one node of the pool: its NodeClaim, its Node (nil while the
 // claim is launching), and what holds it.
@@ -333,8 +326,7 @@ func holder(pod *unstructured.Unstructured, node string) (string, bool) {
 		}
 		return fmt.Sprintf("%s (%d %s)", name, gpus, unit), true
 	}
-	labels := pod.GetLabels()
-	if labels[labelKServeInferenceService] != "" || labels[labelPartOf] == partOfLLMISVC {
+	if _, _, predictor := detect.PredictorOf(pod); predictor {
 		return name + " (KServe predictor)", true
 	}
 	return "", false
