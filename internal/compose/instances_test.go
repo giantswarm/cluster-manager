@@ -35,7 +35,8 @@ func TestShapesCoverTheChart(t *testing.T) {
 			assert.Equal(t, s.InstanceStoreDisks*s.InstanceStoreDiskGB, s.InstanceStoreGB, s.InstanceType)
 		}
 	}
-	assert.Len(t, instanceStores, len(familySizes["g6"])+len(familySizes["g6e"])+len(familySizes["g5"])+len(familySizes["g4dn"]), "the store table names every size once")
+	assert.PanicsWithValue(t, "instance stores: 7 listed for a family of 8 sizes", func() { gFamily(4, false, g4dnStores) }, "a stores list short of the family's sizes stops the package, never a size without a store")
+	assert.PanicsWithValue(t, "instance stores: 8 listed for a family of 7 sizes", func() { gFamily(4, true, g6Stores) }, "and one too long is caught as well")
 	_, err := Shapes("nvidia-l4", []string{"xlarge", "xlage"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `size "xlage": not a size of the g6 family (nvidia-l4); the sizes are xlarge, 2xlarge, 4xlarge, 8xlarge, 12xlarge, 16xlarge, 24xlarge, 48xlarge`)
@@ -59,7 +60,7 @@ func TestShapeUsable(t *testing.T) {
 	l40s, err := Shapes("nvidia-l40s", []string{"xlarge", "8xlarge"})
 	require.NoError(t, err)
 	assert.Equal(t, InstanceShape{InstanceType: "g6e.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 48, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 27.1}, l40s[0])
-	assert.Equal(t, instanceStore{2, 450}, instanceStores[l40s[1].InstanceType])
+	assert.Equal(t, []int{900, 2, 450}, []int{l40s[1].InstanceStoreGB, l40s[1].InstanceStoreDisks, l40s[1].InstanceStoreDiskGB}, "g6e.8xlarge: two devices of 450 GB, like the g6")
 	a10g, err := Shapes("nvidia-a10g", []string{"8xlarge"})
 	require.NoError(t, err)
 	assert.Equal(t, 900, a10g[0].InstanceStoreDiskGB, "one device of 900 GB")

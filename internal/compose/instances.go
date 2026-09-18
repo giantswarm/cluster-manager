@@ -27,52 +27,62 @@ var (
 	// g6.12xlarge 48 / 192 / 4, g6e.xlarge 4 / 32 / 1 L40S, g4dn.metal
 	// 96 / 384 / 8 T4.
 	familySizes = map[string][]nominal{
-		"g6":   gFamily(4, false),
-		"g5":   gFamily(4, false),
-		"g6e":  gFamily(8, false),
-		"g4dn": gFamily(4, true),
+		"g6":   gFamily(4, false, g6Stores),
+		"g5":   gFamily(4, false, g5Stores),
+		"g6e":  gFamily(8, false, g6eStores),
+		"g4dn": gFamily(4, true, g4dnStores),
 	}
 	// gSizes are the sizes of the G families: one GPU up to 8xlarge and on
 	// 16xlarge, four on 12xlarge and 24xlarge, eight on 48xlarge (metal).
-	gSizes = []nominal{{"xlarge", 4, 0, 1}, {"2xlarge", 8, 0, 1}, {"4xlarge", 16, 0, 1}, {"8xlarge", 32, 0, 1}, {"12xlarge", 48, 0, 4}, {"16xlarge", 64, 0, 1}, {"24xlarge", 96, 0, 4}, {"48xlarge", 192, 0, 8}}
-	// instanceStores is the local NVMe instance store of every size of the
-	// curated families as AWS lists it (`aws ec2 describe-instance-types`,
-	// InstanceStorageInfo, read 2026-09-18): the devices and the GB of each.
-	// Every size has one, which is what lets gpu-node-pool keep a pool
-	// node's /var/lib on it (0.7.0, `pool.volumes.libSource: instance-store`)
-	// without refusing a size; the chart formats the first device, so a size
-	// with two gives /var/lib one of them.
-	instanceStores = map[string]instanceStore{
-		"g6.xlarge": {1, 250}, "g6.2xlarge": {1, 450}, "g6.4xlarge": {1, 600}, "g6.8xlarge": {2, 450},
-		"g6.12xlarge": {4, 940}, "g6.16xlarge": {2, 940}, "g6.24xlarge": {4, 940}, "g6.48xlarge": {8, 940},
-		"g6e.xlarge": {1, 250}, "g6e.2xlarge": {1, 450}, "g6e.4xlarge": {1, 600}, "g6e.8xlarge": {2, 450},
-		"g6e.12xlarge": {2, 1900}, "g6e.16xlarge": {2, 950}, "g6e.24xlarge": {2, 1900}, "g6e.48xlarge": {4, 1900},
-		"g5.xlarge": {1, 250}, "g5.2xlarge": {1, 450}, "g5.4xlarge": {1, 600}, "g5.8xlarge": {1, 900},
-		"g5.12xlarge": {1, 3800}, "g5.16xlarge": {1, 1900}, "g5.24xlarge": {1, 3800}, "g5.48xlarge": {2, 3800},
-		"g4dn.xlarge": {1, 125}, "g4dn.2xlarge": {1, 225}, "g4dn.4xlarge": {1, 225}, "g4dn.8xlarge": {1, 900},
-		"g4dn.12xlarge": {1, 900}, "g4dn.16xlarge": {1, 900}, "g4dn.metal": {2, 900},
-	}
+	gSizes = []gSize{{"xlarge", 4, 1}, {"2xlarge", 8, 1}, {"4xlarge", 16, 1}, {"8xlarge", 32, 1}, {"12xlarge", 48, 4}, {"16xlarge", 64, 1}, {"24xlarge", 96, 4}, {"48xlarge", 192, 8}}
+	// The local NVMe instance store of each family's sizes, in the family's
+	// order (gSizes; g4dn without 24xlarge and ending in metal), as AWS
+	// lists it (`aws ec2 describe-instance-types`, InstanceStorageInfo, read
+	// 2026-09-18): devices × GB. Every size has one, which is what lets
+	// gpu-node-pool keep a pool node's /var/lib on it (0.7.0,
+	// `pool.volumes.libSource: instance-store`) without refusing a size; the
+	// chart formats the first device, so a size with two gives /var/lib one
+	// of them — 450 GB of a g6 or g6e 8xlarge's 2 × 450.
+	g6Stores   = []instanceStore{{1, 250}, {1, 450}, {1, 600}, {2, 450}, {4, 940}, {2, 940}, {4, 940}, {8, 940}}
+	g6eStores  = []instanceStore{{1, 250}, {1, 450}, {1, 600}, {2, 450}, {2, 1900}, {2, 950}, {2, 1900}, {4, 1900}}
+	g5Stores   = []instanceStore{{1, 250}, {1, 450}, {1, 600}, {1, 900}, {1, 3800}, {1, 1900}, {1, 3800}, {2, 3800}}
+	g4dnStores = []instanceStore{{1, 125}, {1, 225}, {1, 225}, {1, 900}, {1, 900}, {1, 900}, {2, 900}}
 )
+
+// gSize is one size as the G families share it: its name, vCPU and GPUs.
+type gSize struct {
+	size       string
+	vcpu, gpus int
+}
 
 // instanceStore is one size's local NVMe: disks devices of diskGB each.
 type instanceStore struct{ disks, diskGB int }
 
-// gFamily fills gSizes' memory from the family's GiB per vCPU. metal is the
-// g4dn shape: no 24xlarge, and a 96 vCPU / 8 GPU bare-metal size in place of
-// the 48xlarge.
-func gFamily(gibPerVCPU int, metal bool) []nominal {
-	out := make([]nominal, 0, len(gSizes))
-	for _, n := range gSizes {
+// gFamily builds a family's nominal sizes from gSizes: the memory from the
+// family's GiB per vCPU, the instance store from stores, in the family's
+// order. metal is the g4dn shape: no 24xlarge, and a 96 vCPU / 8 GPU
+// bare-metal size in place of the 48xlarge. A stores list that does not
+// match the family's sizes one to one is a programming error and stops the
+// package from initialising.
+func gFamily(gibPerVCPU int, metal bool, stores []instanceStore) []nominal {
+	sizes := make([]gSize, 0, len(gSizes))
+	for _, g := range gSizes {
 		if metal {
-			switch n.size {
+			switch g.size {
 			case "24xlarge":
 				continue
 			case "48xlarge":
-				n = nominal{"metal", 96, 0, 8}
+				g = gSize{"metal", 96, 8}
 			}
 		}
-		n.gib = n.vcpu * gibPerVCPU
-		out = append(out, n)
+		sizes = append(sizes, g)
+	}
+	if len(stores) != len(sizes) {
+		panic(fmt.Sprintf("instance stores: %d listed for a family of %d sizes", len(stores), len(sizes)))
+	}
+	out := make([]nominal, 0, len(sizes))
+	for i, g := range sizes {
+		out = append(out, nominal{size: g.size, vcpu: g.vcpu, gib: g.vcpu * gibPerVCPU, gpus: g.gpus, store: stores[i]})
 	}
 	return out
 }
@@ -92,10 +102,11 @@ const (
 	daemonSetGiB          = 1.5
 )
 
-// nominal is one size as AWS lists it.
+// nominal is one size as AWS lists it, its instance store included.
 type nominal struct {
 	size            string
 	vcpu, gib, gpus int
+	store           instanceStore
 }
 
 // InstanceShape is one size of a pool's family: the node as AWS lists it and
@@ -137,11 +148,10 @@ type InstanceShape struct {
 }
 
 func newShape(family string, n nominal) InstanceShape {
-	store := instanceStores[family+"."+n.size]
 	return InstanceShape{
 		InstanceType: family + "." + n.size, Size: n.size,
 		VCPU: n.vcpu, MemoryGiB: n.gib, GPUs: n.gpus, GPUMemoryGiB: gpuMemoryGiB[family],
-		InstanceStoreGB: store.disks * store.diskGB, InstanceStoreDisks: store.disks, InstanceStoreDiskGB: store.diskGB,
+		InstanceStoreGB: n.store.disks * n.store.diskGB, InstanceStoreDisks: n.store.disks, InstanceStoreDiskGB: n.store.diskGB,
 		UsableVCPU:      round1(float64(n.vcpu) - kubeletReservedVCPU - daemonSetVCPU),
 		UsableMemoryGiB: round1(float64(n.gib)*(1-hypervisorMemoryShare) - kubeletReservedGiB - daemonSetGiB),
 	}
