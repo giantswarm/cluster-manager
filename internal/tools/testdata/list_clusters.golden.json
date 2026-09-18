@@ -37,6 +37,10 @@
         "ready": true
       }
     ],
+    "zones": [
+      "eu-central-1a",
+      "eu-central-1b"
+    ],
     "commitTarget": null
   },
   {
@@ -85,6 +89,8 @@
         "ready": null
       }
     ],
+    "zones": [],
+    "zonesNote": "AWSCluster org-acme/wc2 lists no node subnet (spec.network.subnets tagged giantswarm.io/role: nodes)",
     "commitTarget": null
   },
   {
@@ -126,6 +132,11 @@
       }
     },
     "poolReleases": [],
+    "zones": [
+      "eu-central-1a",
+      "eu-central-1b",
+      "eu-central-1c"
+    ],
     "commitTarget": null
   }
 ]

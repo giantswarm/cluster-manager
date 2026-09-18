@@ -1,0 +1,585 @@
+{
+  "cluster": "gazelle",
+  "namespace": "org-giantswarm",
+  "pool": "gpu-l40s",
+  "mode": "apply",
+  "dryRun": true,
+  "chartVersion": "0.7.1",
+  "kubernetesVersion": "1.31.4",
+  "controlPlaneVersion": "v1.31.4",
+  "machineImage": "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
+  "objects": [
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "gazelle-gpu-l40s",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "gazelle-gpu-l40s",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "gazelle-agent-platform",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "gazelle-agent-platform",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "gazelle-gpu-operator",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "gazelle-gpu-operator",
+      "namespace": "org-giantswarm",
+      "action": "would-create"
+    }
+  ],
+  "manifests": [
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-node-pool",
+          "giantswarm.io/cluster": "gazelle",
+          "giantswarm.io/node-pool": "gpu-l40s"
+        },
+        "name": "gazelle-gpu-l40s",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "tag": "0.7.1"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-node-pool",
+          "giantswarm.io/cluster": "gazelle",
+          "giantswarm.io/node-pool": "gpu-l40s"
+        },
+        "name": "gazelle-gpu-l40s",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "gazelle-gpu-l40s"
+        },
+        "install": {
+          "disableWaitForJobs": true,
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "releaseName": "gazelle-gpu-l40s",
+        "serviceAccountName": "automation",
+        "uninstall": {
+          "disableWait": true
+        },
+        "upgrade": {
+          "disableWaitForJobs": true,
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "values": {
+          "cluster": {
+            "baseDomain": "gazelle.example.io",
+            "cilium": {
+              "ipamMode": "kubernetes"
+            },
+            "managementCluster": "gazelle",
+            "name": "gazelle",
+            "organization": "giantswarm",
+            "registryMirrors": {
+              "gsoci.azurecr.io": [
+                "gsoci.azurecr.io"
+              ]
+            }
+          },
+          "pool": {
+            "accelerator": "nvidia-l40s",
+            "kubernetesVersion": "1.31.4",
+            "machineImage": "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
+            "maxSize": {
+              "nvidia.com/gpu": "1"
+            },
+            "name": "gpu-l40s",
+            "sizes": [
+              "2xlarge",
+              "4xlarge"
+            ],
+            "zones": [
+              "eu-central-1b"
+            ]
+          },
+          "teleport": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "agent-platform",
+          "giantswarm.io/cluster": "gazelle"
+        },
+        "name": "gazelle-agent-platform",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "tag": "4.27.2"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "agent-platform",
+          "giantswarm.io/cluster": "gazelle"
+        },
+        "name": "gazelle-agent-platform",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "gazelle-agent-platform"
+        },
+        "install": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "releaseName": "gazelle-agent-platform",
+        "serviceAccountName": "automation",
+        "upgrade": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "values": {
+          "components": {
+            "agent-manager": {
+              "enabled": false
+            },
+            "agent-platform-mcps": {
+              "enabled": false
+            },
+            "agentgateway": {
+              "enabled": false
+            },
+            "backstage": {
+              "enabled": false
+            },
+            "dicebear": {
+              "enabled": false
+            },
+            "flux": {
+              "enabled": false
+            },
+            "kagent": {
+              "enabled": false
+            },
+            "kagent-crds": {
+              "enabled": false
+            },
+            "klaus-gateway": {
+              "enabled": false
+            },
+            "kserve-crd": {
+              "enabled": true
+            },
+            "kserve-llmisvc-crd": {
+              "enabled": true
+            },
+            "kserve-llmisvc-resources": {
+              "enabled": true
+            },
+            "kserve-resources": {
+              "enabled": true
+            },
+            "kserve-runtime-configs": {
+              "enabled": true
+            },
+            "mcp-kubernetes": {
+              "enabled": false
+            },
+            "model-manager": {
+              "enabled": false
+            },
+            "modelServing": {
+              "enabled": true
+            },
+            "muster": {
+              "enabled": false
+            },
+            "substrate": {
+              "enabled": false
+            },
+            "substrate-crds": {
+              "enabled": false
+            },
+            "valkey": {
+              "enabled": false
+            }
+          },
+          "gateway": {
+            "jwksEgress": {
+              "enabled": true,
+              "namespace": "giantswarm",
+              "port": 5556
+            }
+          },
+          "gatewayApi": {
+            "gateway": {
+              "tls": {
+                "secretName": "gazelle-wildcard-tls"
+              }
+            }
+          },
+          "gitops": {
+            "target": {
+              "kubeConfig": {
+                "secretRef": {
+                  "name": "gazelle-kubeconfig"
+                }
+              }
+            }
+          },
+          "global": {
+            "domain": "gazelle.example.io",
+            "identity": {
+              "clientId": "dex-k8s-authenticator",
+              "existingSecret": "agent-platform-identity",
+              "issuerUrl": "https://dex.gazelle.example.io"
+            }
+          },
+          "modelServing": {
+            "modelsGateway": {
+              "enabled": true,
+              "jwtAuthentication": {
+                "jwks": {
+                  "host": "dex.giantswarm.svc.cluster.local",
+                  "port": 5556
+                }
+              }
+            },
+            "serving": {
+              "runtimeClassName": "nvidia"
+            }
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-giantswarm\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "agent-platform.giantswarm.io/model-backend": "true",
+          "agent-platform.giantswarm.io/model-backend-source": "cluster-manager",
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "giantswarm.io/cluster": "gazelle"
+        },
+        "name": "model-backend-kserve",
+        "namespace": "agent-platform"
+      }
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-operator",
+          "giantswarm.io/cluster": "gazelle"
+        },
+        "name": "gazelle-gpu-operator",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "semver": "1.x"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-operator"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "gpu-operator",
+          "giantswarm.io/cluster": "gazelle"
+        },
+        "name": "gazelle-gpu-operator",
+        "namespace": "org-giantswarm"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "gazelle-gpu-operator"
+        },
+        "install": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "kubeConfig": {
+          "secretRef": {
+            "name": "gazelle-kubeconfig"
+          }
+        },
+        "releaseName": "gpu-operator",
+        "storageNamespace": "kube-system",
+        "targetNamespace": "kube-system",
+        "upgrade": {
+          "crds": "CreateReplace",
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "values": {
+          "gpu-operator": {
+            "daemonsets": {
+              "tolerations": [
+                {
+                  "effect": "NoSchedule",
+                  "key": "nvidia.com/gpu",
+                  "operator": "Exists"
+                },
+                {
+                  "key": "node.cluster.x-k8s.io/uninitialized",
+                  "operator": "Exists"
+                },
+                {
+                  "key": "ebs.csi.aws.com/agent-not-ready",
+                  "operator": "Exists"
+                }
+              ]
+            },
+            "dcgmExporter": {
+              "enabled": false
+            },
+            "driver": {
+              "enabled": false
+            },
+            "migManager": {
+              "enabled": false
+            },
+            "node-feature-discovery": {
+              "worker": {
+                "affinity": {
+                  "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                      "nodeSelectorTerms": [
+                        {
+                          "matchExpressions": [
+                            {
+                              "key": "giantswarm.io/machine-pool",
+                              "operator": "In",
+                              "values": [
+                                "gazelle-gpu-l4",
+                                "gazelle-gpu-l40s"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "config": {
+                  "core": {
+                    "sleepInterval": "10s"
+                  }
+                },
+                "tolerations": [
+                  {
+                    "effect": "NoSchedule",
+                    "key": "node-role.kubernetes.io/control-plane",
+                    "operator": "Equal",
+                    "value": ""
+                  },
+                  {
+                    "effect": "NoSchedule",
+                    "key": "nvidia.com/gpu",
+                    "operator": "Exists"
+                  },
+                  {
+                    "key": "node.cluster.x-k8s.io/uninitialized",
+                    "operator": "Exists"
+                  },
+                  {
+                    "key": "ebs.csi.aws.com/agent-not-ready",
+                    "operator": "Exists"
+                  }
+                ]
+              }
+            },
+            "toolkit": {
+              "enabled": false
+            },
+            "validator": {
+              "cuda": {
+                "env": [
+                  {
+                    "name": "WITH_WORKLOAD",
+                    "value": "false"
+                  }
+                ]
+              },
+              "plugin": {
+                "env": [
+                  {
+                    "name": "WITH_WORKLOAD",
+                    "value": "false"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "gpuOperator": {
+    "status": "absent"
+  },
+  "operatorRow": "flatcar",
+  "serving": {
+    "status": "absent"
+  },
+  "slice": {
+    "name": "gazelle-agent-platform",
+    "namespace": "org-giantswarm",
+    "chartVersion": "4.27.2",
+    "domain": "gazelle.example.io",
+    "modelsHost": "models.gazelle.example.io",
+    "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"
+  },
+  "backend": {
+    "kind": "kserve",
+    "namespace": "agent-platform",
+    "name": "model-backend-kserve",
+    "target": "local"
+  },
+  "sizes": [
+    {
+      "instanceType": "g6e.2xlarge",
+      "size": "2xlarge",
+      "vcpu": 8,
+      "memoryGiB": 64,
+      "gpus": 1,
+      "gpuMemoryGiB": 48,
+      "instanceStoreGB": 450,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 450,
+      "usableVcpu": 7,
+      "usableMemoryGiB": 57.5,
+      "pricePerHourUSD": 2.8035,
+      "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+      "priceAsOf": "2026-09-17"
+    },
+    {
+      "instanceType": "g6e.4xlarge",
+      "size": "4xlarge",
+      "vcpu": 16,
+      "memoryGiB": 128,
+      "gpus": 1,
+      "gpuMemoryGiB": 48,
+      "instanceStoreGB": 600,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 600,
+      "usableVcpu": 15,
+      "usableMemoryGiB": 118.3,
+      "pricePerHourUSD": 3.75651,
+      "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+      "priceAsOf": "2026-09-17"
+    }
+  ],
+  "presetFit": {
+    "note": "no serving preset is published on gazelle yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each"
+  },
+  "zones": [
+    "eu-central-1b"
+  ],
+  "zonesNote": "nodes pinned to eu-central-1b, of eu-central-1a, eu-central-1b named on create: the model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) is Bound there, and a predictor mounting it runs nowhere else — the pool follows its cache, and a node in eu-central-1a would only strand a predictor Pending or hold a placeholder it cannot use; pass cache false to run across eu-central-1a, eu-central-1b without the cache, or name one of eu-central-1a alone to serve from it with its own claim (hf-cache-\u003czone\u003e, created there and kept)",
+  "cacheClaim": {
+    "namespace": "model-serving",
+    "name": "hf-cache",
+    "phase": "Bound",
+    "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+    "zone": "eu-central-1b"
+  },
+  "cacheClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b"
+    }
+  ],
+  "cache": {
+    "enabled": true,
+    "claim": "model-serving/hf-cache",
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — Bound in eu-central-1b (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), kept by the connectivity chart: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
+  }
+}

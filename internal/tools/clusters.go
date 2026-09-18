@@ -37,6 +37,12 @@ type Cluster struct {
 	// PoolReleases are the GPU pool releases (HelmReleases of the
 	// gpu-node-pool chart) of the cluster.
 	PoolReleases []PoolRelease `json:"poolReleases"`
+	// Zones are the availability zones of the cluster's node subnets — the
+	// zones a pool's nodes may come up in, the ones create_node_pool's zones
+	// are checked against (giantswarm/cluster-manager#79); empty with
+	// ZonesNote saying why they cannot be read.
+	Zones     []string `json:"zones"`
+	ZonesNote string   `json:"zonesNote,omitempty"`
 	// CommitTarget is the git repository and directory owning the cluster
 	// (from its Flux provenance), null when the cluster has none or commit
 	// mode is not available.
@@ -160,6 +166,10 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 	// name. Null when they cannot be read as the caller.
 	var claims cacheClaims
 	g.Go(func() error { claims = s.readCacheClaims(gctx, target); return nil })
+	// The node subnets' zones, from the AWSCluster: what a pool may be
+	// pinned to, for a caller to offer as choices.
+	var infra awsInfra
+	g.Go(func() error { infra = awsInfrastructure(gctx, dyn, c); return nil })
 	_ = g.Wait()
 	serving.Readiness.Backend = backend
 	serving.Readiness.CacheClaims = claims.claims
@@ -172,6 +182,8 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 		GPUOperator:    operator,
 		Serving:        serving,
 		PoolReleases:   pools,
+		Zones:          infra.zonesList(),
+		ZonesNote:      infra.zonesReason,
 		// TODO(giantswarm/giantswarm#37637, commit mode): repository and
 		// path from the Flux provenance of the cluster's owning object.
 		CommitTarget: nil,
