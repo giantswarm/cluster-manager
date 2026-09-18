@@ -54,13 +54,22 @@ spec:
   values:
     gpu-operator:
       dcgmExporter:
-        enabled: false
+        enabled: true
       driver:
         enabled: false
       migManager:
         enabled: false
       node-feature-discovery:
         worker:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: giantswarm.io/machine-pool
+                    operator: In
+                    values:
+                    - wc1-gpu-l4
           config:
             core:
               sleepInterval: 10s

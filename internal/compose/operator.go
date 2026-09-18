@@ -42,6 +42,13 @@ const (
 	// maps.
 	NFDWorkerSleepInterval = "10s"
 
+	// ValidatorWorkloadEnv is the operator validator's `WITH_WORKLOAD`
+	// (its `--with-workload` flag, default true): whether a component's
+	// validation starts a workload pod on the node beside the validation
+	// itself. The release sets it to "false" for the cuda and plugin
+	// validations — see operandValues.
+	ValidatorWorkloadEnv = "WITH_WORKLOAD"
+
 	// LabelDriverDeploy is NVIDIA's node label for a pre-installed driver:
 	// any value but `true` (the convention is `pre-installed`) tells the
 	// operator not to deploy the driver.
@@ -70,6 +77,16 @@ var (
 	RowFlatcar      = OperatorRow{Name: "flatcar", Driver: false, Toolkit: false}
 	RowPreinstalled = OperatorRow{Name: "pre-installed", Driver: false, Toolkit: true}
 )
+
+// OperatorOptions is the installation's say over the operands the release
+// runs beyond the table's row: cluster-manager's `--gpu-operator-dcgm-exporter`
+// (the chart's `gpuOperator.dcgmExporter`).
+type OperatorOptions struct {
+	// DCGMExporter runs NVIDIA's DCGM exporter on the pool's nodes
+	// (`dcgmExporter.enabled`), for an installation whose observability
+	// scrapes it; off by default — see operandValues.
+	DCGMExporter bool
+}
 
 // Node is what the table reads of one node of the target cluster.
 type Node struct {
@@ -140,11 +157,13 @@ func OperatorReleaseName(cluster string) string { return cluster + OperatorRelea
 // kube-system of the target through the cluster's kubeconfig Secret — the
 // installation's own cluster included, whose Secret points at the same API
 // server (see Delivery in compose.go) — configured from the table's row,
-// with Node Feature Discovery's worker pinned to the cluster's GPU pools
-// (pools: the pool names within the cluster; see PoolAffinity) and polling
-// every NFDWorkerSleepInterval. The objects carry the fleet's labels and, in
-// apply mode, an ownerReference to the Cluster.
-func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstructured {
+// running on a pool node only the operands a single-GPU serving pool uses
+// (see operandValues; opts is the installation's say), with Node Feature
+// Discovery's worker pinned to the cluster's GPU pools (pools: the pool
+// names within the cluster; see PoolAffinity) and polling every
+// NFDWorkerSleepInterval. The objects carry the fleet's labels and, in apply
+// mode, an ownerReference to the Cluster.
+func Operator(c Cluster, row OperatorRow, pools []string, opts OperatorOptions) []*unstructured.Unstructured {
 	name := OperatorReleaseName(c.Name)
 	meta := objectMeta(c, map[string]any{
 		LabelChartName: OperatorChart,
@@ -156,16 +175,58 @@ func Operator(c Cluster, row OperatorRow, pools []string) []*unstructured.Unstru
 	if affinity := PoolAffinity(c, pools); affinity != nil {
 		worker["affinity"] = affinity
 	}
-	values := map[string]any{
-		"driver":     map[string]any{valueEnabled: row.Driver},
-		"toolkit":    map[string]any{valueEnabled: row.Toolkit},
-		NFDValuesKey: map[string]any{"worker": worker},
-	}
+	values := operandValues(opts)
+	values["driver"] = map[string]any{valueEnabled: row.Driver}
+	values["toolkit"] = map[string]any{valueEnabled: row.Toolkit}
+	values[NFDValuesKey] = map[string]any{"worker": worker}
 	spec := helmReleaseSpec(OperatorChart, true, map[string]any{OperatorValuesKey: values})
 	spec["chartRef"] = map[string]any{"kind": "OCIRepository", "name": name}
 	spec["targetNamespace"], spec["storageNamespace"] = OperatorNamespace, OperatorNamespace
 	deliverThroughKubeconfig(spec, c.Name)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}
+}
+
+// operandValues are the operator chart's switches for what the operator
+// rolls onto a pool node beyond the row's driver and toolkit. A single-GPU
+// serving pool node needs the validator's driver and toolkit validations
+// (what proves the machine image's driver and CDI), the device plugin (what
+// advertises `nvidia.com/gpu`) and GPU feature discovery (model-manager
+// reads its `nvidia.com/gpu.count`, `.memory` and `.product` labels for its
+// node budget); the device plugin and GPU feature discovery start once the
+// toolkit validation has written `toolkit-ready`, and the node advertises
+// the GPU once the plugin has registered. Everything else the operator
+// chart's defaults (v26.7.0) put on the same fresh node, in parallel, each a
+// pod on a node that has nothing cached, is off:
+//
+//   - the validator's workload pods: the validator's `--with-workload`
+//     defaults to true and the cuda-validation init container carries no
+//     `WITH_WORKLOAD`, so every fresh node runs a `nvidia-cuda-validator-*`
+//     pod (`vectorAdd`) beside the device plugin's start; the
+//     plugin-validation container carries "false" upstream, pinned here so
+//     the release says what runs. The driver and toolkit validations stay.
+//   - mig-manager (`migManager.enabled`): the pool's accelerators (L4, L40S,
+//     A10G, T4) have no MIG, and the operator schedules mig-manager on
+//     MIG-capable GPUs only (`nvidia.com/mig.capable=true`, or an A100, H100
+//     or A30 product label) — off says so and spares the DaemonSet.
+//   - the DCGM exporter (`dcgmExporter.enabled`): nothing scrapes it out of
+//     the box — not the operator chart (`dcgmExporter.serviceMonitor.enabled`
+//     is false), the platform chart or the observability stack; a cluster
+//     that wants GPU metrics adds a ServiceMonitor by hand — and it was an
+//     image pull and a pod initialising DCGM on the GPU while the device
+//     plugin brought `nvidia.com/gpu` up. opts.DCGMExporter turns it on for
+//     an installation whose observability scrapes it.
+//
+// On an installation, node Ready to `nvidia.com/gpu` allocatable measured
+// 67 and 75 s with the chart's defaults (giantswarm/cluster-manager#63).
+func operandValues(opts OperatorOptions) map[string]any {
+	noWorkload := func() map[string]any {
+		return map[string]any{"env": []any{map[string]any{"name": ValidatorWorkloadEnv, "value": "false"}}}
+	}
+	return map[string]any{
+		"validator":    map[string]any{"cuda": noWorkload(), "plugin": noWorkload()},
+		"migManager":   map[string]any{valueEnabled: false},
+		"dcgmExporter": map[string]any{valueEnabled: opts.DCGMExporter},
+	}
 }
 
 // PoolAffinity is the node affinity that keeps a DaemonSet on the nodes of

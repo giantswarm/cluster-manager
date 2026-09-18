@@ -68,6 +68,16 @@ serving:
   # connectivity chart then refuses a models Gateway without a certificate.
   certificateIssuer: letsencrypt-giantswarm
 
+gpuOperator:
+  # -- Run NVIDIA's DCGM exporter on the GPU pools' nodes through the composed
+  # `<cluster>-gpu-operator` release (its `dcgmExporter.enabled`), for an
+  # installation whose observability scrapes it (a ServiceMonitor on the
+  # `nvidia-dcgm-exporter` Service in `kube-system`). Off by default: nothing
+  # scrapes the exporter out of the box, and on a fresh pool node it is an image
+  # pull and a pod initialising DCGM on the GPU while the device plugin brings
+  # `nvidia.com/gpu` up.
+  dcgmExporter: false
+
 flux:
   # -- ServiceAccount in every org namespace the installation's Flux runs a
   # composed release under when the release's objects live in that namespace:

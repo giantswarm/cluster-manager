@@ -474,7 +474,13 @@
         },
         "values": {
           "gpu-operator": {
+            "dcgmExporter": {
+              "enabled": false
+            },
             "driver": {
+              "enabled": false
+            },
+            "migManager": {
               "enabled": false
             },
             "node-feature-discovery": {
@@ -508,6 +514,24 @@
             },
             "toolkit": {
               "enabled": false
+            },
+            "validator": {
+              "cuda": {
+                "env": [
+                  {
+                    "name": "WITH_WORKLOAD",
+                    "value": "false"
+                  }
+                ]
+              },
+              "plugin": {
+                "env": [
+                  {
+                    "name": "WITH_WORKLOAD",
+                    "value": "false"
+                  }
+                ]
+              }
             }
           }
         }

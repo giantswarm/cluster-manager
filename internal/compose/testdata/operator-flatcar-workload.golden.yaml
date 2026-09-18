@@ -53,7 +53,11 @@ spec:
       retries: 3
   values:
     gpu-operator:
+      dcgmExporter:
+        enabled: false
       driver:
+        enabled: false
+      migManager:
         enabled: false
       node-feature-discovery:
         worker:
@@ -71,3 +75,12 @@ spec:
               sleepInterval: 10s
       toolkit:
         enabled: false
+      validator:
+        cuda:
+          env:
+          - name: WITH_WORKLOAD
+            value: "false"
+        plugin:
+          env:
+          - name: WITH_WORKLOAD
+            value: "false"
