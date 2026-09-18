@@ -21,7 +21,11 @@ spec:
     name: gazelle
 ---
 # The installation's own cluster runs in Frankfurt: its pool sizes carry the
-# table's price.
+# table's price. Its node subnets — the private ones cluster-aws tags
+# giantswarm.io/role: nodes, which the gpu-node-pool chart's EC2NodeClass
+# selects — lie in three zones: the zones a pool may be pinned to
+# (giantswarm/cluster-manager#65). The public subnets and a pod subnet are not
+# node subnets.
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
 kind: AWSCluster
 metadata:
@@ -29,6 +33,36 @@ metadata:
   namespace: org-giantswarm
 spec:
   region: eu-central-1
+  network:
+    subnets:
+      - id: gazelle-subnet-private-eu-central-1a
+        availabilityZone: eu-central-1a
+        cidrBlock: 10.0.0.0/20
+        isPublic: false
+        tags:
+          giantswarm.io/role: nodes
+      - id: gazelle-subnet-private-eu-central-1b
+        availabilityZone: eu-central-1b
+        cidrBlock: 10.0.16.0/20
+        isPublic: false
+        tags:
+          giantswarm.io/role: nodes
+      - id: gazelle-subnet-private-eu-central-1c
+        availabilityZone: eu-central-1c
+        cidrBlock: 10.0.32.0/20
+        isPublic: false
+        tags:
+          giantswarm.io/role: nodes
+      - id: gazelle-subnet-public-eu-central-1a
+        availabilityZone: eu-central-1a
+        cidrBlock: 10.0.48.0/24
+        isPublic: true
+      - id: gazelle-subnet-secondary-eu-central-1a
+        availabilityZone: eu-central-1a
+        cidrBlock: 10.1.0.0/16
+        isPublic: false
+        tags:
+          sigs.k8s.io/cluster-api-provider-aws/association: secondary
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -58,6 +92,7 @@ spec:
     kind: AWSCluster
     name: wc1
 ---
+# wc1's node subnets lie in two zones.
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
 kind: AWSCluster
 metadata:
@@ -65,6 +100,20 @@ metadata:
   namespace: org-acme
 spec:
   region: eu-central-1
+  network:
+    subnets:
+      - id: wc1-subnet-private-eu-central-1a
+        availabilityZone: eu-central-1a
+        cidrBlock: 10.2.0.0/20
+        isPublic: false
+        tags:
+          giantswarm.io/role: nodes
+      - id: wc1-subnet-private-eu-central-1b
+        availabilityZone: eu-central-1b
+        cidrBlock: 10.2.16.0/20
+        isPublic: false
+        tags:
+          giantswarm.io/role: nodes
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane

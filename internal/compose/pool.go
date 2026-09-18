@@ -143,11 +143,13 @@ type PoolSpec struct {
 	// Zones pins the pool's nodes to availability zones: the chart's
 	// `pool.zones`, a `topology.kubernetes.io/zone In [...]` requirement on
 	// the Karpenter NodePool, so every node — prewarm placeholder and
-	// workload alike — comes up there. create_node_pool sets it to the zone
-	// of the serving namespace's kept model cache claim: one EBS volume,
-	// bound in one zone by the first predictor, which a node in another zone
-	// strands the predictor mounting it (giantswarm/cluster-manager#59). Nil
-	// writes no zones block: the chart's default constrains nothing.
+	// workload alike — comes up there. create_node_pool sets it to the zones
+	// the caller names, judged against the serving namespace's kept model
+	// cache claim — one EBS volume, bound in one zone by the first predictor,
+	// which a node in another zone strands the predictor mounting it
+	// (giantswarm/cluster-manager#59, #65) — or, with none named, to the
+	// claim's zone. Nil writes no zones block: the chart's default constrains
+	// nothing.
 	Zones []string
 }
 

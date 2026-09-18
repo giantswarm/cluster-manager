@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // The pool's claims and events as the tests fake them.
@@ -92,23 +94,50 @@ func TestLaunchFailures(t *testing.T) {
 
 // TestLaunchFailureSummary: AWS's capacity answer in Karpenter's message is
 // read into the code, the sizes and the zones refused; any other refusal is
-// its reason.
+// its reason. Karpenter cuts the event after the first size and gives a claim
+// up for capacity only once every size was refused in every zone of the pool
+// (giantswarm/cluster-manager#65): with the pool's context the sizes the
+// message lacks are the pool's, said so, and the zones the pool's pin.
 func TestLaunchFailureSummary(t *testing.T) {
+	l40s := []string{"g6e.2xlarge", "g6e.4xlarge", "g6e.8xlarge"}
+	twoSizes := "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a).; InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1c).; InsufficientInstanceCapacity: We currently do not have sufficient g6e.xlarge capacity in the Availability Zone you requested (eu-central-1a)."
 	cases := []struct {
 		name    string
 		failure launchFailure
+		lc      launchContext
 		want    string
 	}{
-		{"one size, one zone", launchFailure{reason: "InsufficientCapacityError", message: iceMessage}, "InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a"},
-		{"two sizes, two zones, each once", launchFailure{reason: "InsufficientCapacityError", message: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1a).; InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1c).; InsufficientInstanceCapacity: We currently do not have sufficient g6e.xlarge capacity in the Availability Zone you requested (eu-central-1a)."},
-			"InsufficientInstanceCapacity for g6e.2xlarge, g6e.xlarge in eu-central-1a, eu-central-1c"},
-		{"no capacity answer: the reason", launchFailure{reason: "LaunchFailed", message: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."}, "LaunchFailed"},
+		{"one size, one zone", launchFailure{reason: "InsufficientCapacityError", message: iceMessage}, launchContext{}, "InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a"},
+		{"two sizes, two zones, each once", launchFailure{reason: "InsufficientCapacityError", message: twoSizes}, launchContext{}, "InsufficientInstanceCapacity for g6e.2xlarge, g6e.xlarge in eu-central-1a, eu-central-1c"},
+		{"no capacity answer: the reason", launchFailure{reason: "LaunchFailed", message: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."}, launchContext{}, "LaunchFailed"},
+		{"the event cut after the first size: every size of the pool, the pinned zone", launchFailure{reason: "InsufficientCapacityError", message: iceMessage}, launchContext{instanceTypes: l40s, zones: []string{"eu-central-1a", "eu-central-1b"}}, "InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1a, eu-central-1b"},
+		{"the message names every size itself", launchFailure{reason: "InsufficientCapacityError", message: twoSizes}, launchContext{instanceTypes: []string{"g6e.xlarge", "g6e.2xlarge"}}, "InsufficientInstanceCapacity for g6e.2xlarge, g6e.xlarge in eu-central-1a, eu-central-1c"},
+		{"another reason keeps the message's sizes", launchFailure{reason: "LaunchFailed", message: iceMessage}, launchContext{instanceTypes: l40s, zones: []string{"eu-central-1b"}}, "InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, tc.failure.summary())
+			assert.Equal(t, tc.want, tc.failure.summary(tc.lc))
 		})
 	}
+}
+
+// TestLaunchContextRemedy: the way around a refusal points at what decided
+// where the launch was tried (giantswarm/cluster-manager#65) — the model
+// cache claim's pin with its two ways out, the zones named on create with
+// cache false where the claim lives among them, or nothing pinned.
+func TestLaunchContextRemedy(t *testing.T) {
+	claim := &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-1", Zone: "eu-central-1b"}
+	const widen = "wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+	assert.Equal(t, widen, launchContext{}.remedy())
+	assert.Equal(t, widen, launchContext{claim: claim}.remedy(), "a claim pins nothing while the pool names no zones")
+	assert.Equal(t, "the pool is pinned to eu-central-1b by the model cache claim model-serving/hf-cache (volume pvc-1 lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); "+widen,
+		launchContext{zones: []string{"eu-central-1b"}, claim: claim}.remedy())
+	assert.Equal(t, "the pool is pinned to eu-central-1a by the zones named on create: re-run create_node_pool with zones naming a zone with capacity; "+widen,
+		launchContext{zones: []string{"eu-central-1a"}, claim: claim}.remedy(), "the claim's zone is not among the pool's: the pool serves without the cache")
+	assert.Equal(t, "the pool is pinned to eu-central-1a, eu-central-1b by the zones named on create: re-run create_node_pool with zones naming a zone with capacity — the model cache claim model-serving/hf-cache lives in eu-central-1b, so zones without it take cache false; "+widen,
+		launchContext{zones: []string{"eu-central-1a", "eu-central-1b"}, claim: claim}.remedy())
+	assert.Equal(t, []string{"eu-central-1a", "eu-central-1c"}, launchFailure{message: "You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c."}.elsewhere())
+	assert.Nil(t, launchFailure{message: iceMessage}.elsewhere(), "cut before AWS's list")
 }
 
 // TestLaunchFailureMessage words the nodes step: the count and the last
@@ -120,9 +149,9 @@ func TestLaunchFailureMessage(t *testing.T) {
 		{claim: "mc-gpu-l40s-zgbdh", reason: "InsufficientCapacityError", at: "2026-09-18T06:03:37Z", message: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1c)."},
 	}
 	assert.Equal(t, `2 NodeClaims could not launch, the last (mc-gpu-l40s-zgbdh) at 2026-09-18T06:03:37Z — InsufficientInstanceCapacity for g6e.2xlarge in eu-central-1c (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1c)."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`,
-		launchFailureMessage(failures, 0, 0, 0))
+		launchFailureMessage(failures, 0, 0, 0, launchContext{}))
 	assert.Equal(t, `1 NodeClaim could not launch, the last (mc-gpu-l40s-k9d2m) at 2026-09-18T06:10:04Z — LaunchFailed; Karpenter: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from; besides, 0 NodeClaim(s) launching, 1 ready, 0 terminating`,
-		launchFailureMessage([]launchFailure{{claim: "mc-gpu-l40s-k9d2m", reason: "LaunchFailed", at: "2026-09-18T06:10:04Z", message: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."}}, 0, 1, 0),
+		launchFailureMessage([]launchFailure{{claim: "mc-gpu-l40s-k9d2m", reason: "LaunchFailed", at: "2026-09-18T06:10:04Z", message: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."}}, 0, 1, 0, launchContext{}),
 		"a second node refused beside a ready one")
 }
 
@@ -141,15 +170,15 @@ func TestNodesStepWithARefusedClaim(t *testing.T) {
 	live := &poolLive{nodes: []*poolNode{{claim: refused}}}
 	live.failures = launchFailures("mc-gpu-l40s", live.claims(), nil)
 
-	st := nodesStep(mp, nil, live, true, true)
+	st := nodesStep(mp, nil, live, true, true, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T06:10:04Z", st.Since, "since Karpenter's refusal")
 	assert.Equal(t, `1 NodeClaim could not launch, the last (mc-gpu-l40s-k9d2m) at 2026-09-18T06:10:04Z — LaunchFailed; Karpenter: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, st.Message)
-	assert.Equal(t, "LaunchFailed", live.refusal())
+	assert.Equal(t, "LaunchFailed", live.refusal(launchContext{}))
 
 	without := &poolLive{}
-	assert.Equal(t, StepDone, nodesStep(mp, nil, without, true, true).State, "no claim, no refusal: scale-to-zero")
-	assert.Empty(t, without.refusal())
+	assert.Equal(t, StepDone, nodesStep(mp, nil, without, true, true, launchContext{}).State, "no claim, no refusal: scale-to-zero")
+	assert.Empty(t, without.refusal(launchContext{}))
 	var none *poolLive
-	assert.Empty(t, none.refusal(), "an unreadable cluster refuses nothing")
+	assert.Empty(t, none.refusal(launchContext{}), "an unreadable cluster refuses nothing")
 }

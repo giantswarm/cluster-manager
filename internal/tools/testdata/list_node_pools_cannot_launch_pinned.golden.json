@@ -1,0 +1,161 @@
+{
+  "cluster": "gazelle",
+  "namespace": "org-giantswarm",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "gazelle-bench-11",
+      "namespace": "org-giantswarm",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l40s",
+      "sizes": [
+        {
+          "instanceType": "g6e.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 2.8035,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6e.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 128,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 118.3,
+          "pricePerHourUSD": 3.75651,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6e.8xlarge",
+          "size": "8xlarge",
+          "vcpu": 32,
+          "memoryGiB": 256,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 31,
+          "usableMemoryGiB": 239.9,
+          "pricePerHourUSD": 5.66252,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
+      "ownerRelease": {
+        "name": "gazelle-bench-11",
+        "namespace": "org-giantswarm"
+      },
+      "phase": "scaling",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-18T12:14:22Z",
+          "finishedAt": "2026-09-18T12:14:22Z",
+          "message": "Helm install succeeded for release org-giantswarm/gazelle-bench-11.v1 with chart gpu-node-pool@0.5.0"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-18T12:14:35Z",
+          "finishedAt": "2026-09-18T12:14:35Z"
+        },
+        {
+          "name": "nodes",
+          "state": "inProgress",
+          "since": "2026-09-18T12:14:47Z",
+          "message": "1 NodeClaim could not launch, the last (gazelle-bench-11-5hpxb) at 2026-09-18T12:14:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); Karpenter: \"creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla...\"; it retries while a pod waits — the pool is pinned to eu-central-1b by the model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+        }
+      ]
+    },
+    {
+      "name": "gazelle-bench-12",
+      "namespace": "org-giantswarm",
+      "version": "v1.31.4",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l40s",
+      "sizes": [
+        {
+          "instanceType": "g6e.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 2.8035,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6e.4xlarge",
+          "size": "4xlarge",
+          "vcpu": 16,
+          "memoryGiB": 128,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 15,
+          "usableMemoryGiB": 118.3,
+          "pricePerHourUSD": 3.75651,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        },
+        {
+          "instanceType": "g6e.8xlarge",
+          "size": "8xlarge",
+          "vcpu": 32,
+          "memoryGiB": 256,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 31,
+          "usableMemoryGiB": 239.9,
+          "pricePerHourUSD": 5.66252,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
+      "ownerRelease": {
+        "name": "gazelle-bench-12",
+        "namespace": "org-giantswarm"
+      },
+      "phase": "scaling",
+      "steps": [
+        {
+          "name": "release",
+          "state": "done",
+          "since": "2026-09-18T12:30:22Z",
+          "finishedAt": "2026-09-18T12:30:22Z",
+          "message": "Helm install succeeded for release org-giantswarm/gazelle-bench-12.v1 with chart gpu-node-pool@0.5.0"
+        },
+        {
+          "name": "machinePool",
+          "state": "done",
+          "since": "2026-09-18T12:30:35Z",
+          "finishedAt": "2026-09-18T12:30:35Z"
+        },
+        {
+          "name": "nodes",
+          "state": "inProgress",
+          "since": "2026-09-18T12:30:47Z",
+          "message": "1 NodeClaim could not launch, the last (gazelle-bench-12-k2m4p) at 2026-09-18T12:30:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); AWS named eu-central-1a, eu-central-1c as having the capacity; Karpenter: \"creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c.\"; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from"
+        }
+      ]
+    }
+  ]
+}

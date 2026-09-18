@@ -182,6 +182,31 @@ func TestListNodePoolsPrewarmCannotLaunch(t *testing.T) {
 	assertGolden(t, "list_node_pools_prewarm_cannot_launch", pools)
 }
 
+// TestListNodePoolsCannotLaunchPinned (giantswarm/cluster-manager#65): a pool
+// of three sizes pinned to the model cache claim's zone that Karpenter cannot
+// launch — AWS refused every size at once, Karpenter's event names the first
+// only — has its nodes step name every size of the pool and the pinned zone,
+// what pinned the pool (the claim, its volume) and the re-run that moves it
+// (zones with cache false, or removing the claim); a pool without a pin whose
+// event is uncut relays the zones AWS named as having the capacity and keeps
+// the plain remedy. The golden is the portal's row while capacity is short.
+func TestListNodePoolsCannotLaunchPinned(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "cache-claim.yaml")
+	l.add(t, l.installation, "cannot-launch-pinned.yaml")
+	pools, err := l.service(Config{Installation: "gazelle"}).ListNodePools(context.Background(), "gazelle", "")
+	require.NoError(t, err)
+	require.Len(t, pools.NodePools, 2)
+	pinned, free := pools.NodePools[0], pools.NodePools[1]
+	assert.Equal(t, "gazelle-bench-11", pinned.Name)
+	assert.Equal(t, PhaseScaling, pinned.Phase)
+	assert.Equal(t, StepInProgress, pinned.Steps[2].State)
+	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-11-5hpxb) at 2026-09-18T12:14:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."; it retries while a pod waits — the pool is pinned to eu-central-1b by the model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 lives there): re-run create_node_pool on the pool with zones naming a zone with capacity and cache false — this pool's slice then serves without the cache, the weights in the pod's ephemeral storage —, or remove the claim (it costs the cached weights and compiled graphs); wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, pinned.Steps[2].Message)
+	assert.Equal(t, "gazelle-bench-12", free.Name)
+	assert.Equal(t, `1 NodeClaim could not launch, the last (gazelle-bench-12-k2m4p) at 2026-09-18T12:30:47Z — InsufficientInstanceCapacity for every size of the pool (g6e.2xlarge, g6e.4xlarge, g6e.8xlarge) in eu-central-1b (InsufficientCapacityError); AWS named eu-central-1a, eu-central-1c as having the capacity; Karpenter: "creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, free.Steps[2].Message)
+	assertGolden(t, "list_node_pools_cannot_launch_pinned", pools)
+}
+
 // TestPrewarmStep words every state of the placeholder from its Job and pod.
 func TestPrewarmStep(t *testing.T) {
 	job := func(status map[string]any) *unstructured.Unstructured {
@@ -316,14 +341,14 @@ func TestNodesStepNamesTerminatingNodes(t *testing.T) {
 	launching := fakeClaim("mc-gpu-l40s-n3wb1", "2026-09-18T03:37:00Z")
 
 	live := &poolLive{nodes: []*poolNode{{claim: registered, node: node}, {claim: unregistered}, {claim: launching}}}
-	st := nodesStep(mp, nil, live, true, true)
+	st := nodesStep(mp, nil, live, true, true, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:37:00Z", st.Since, "since the latest event among the claims: the launching one's creation")
 	assert.Equal(t, "1 NodeClaim(s) launching, 0 ready, 2 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z, mc-gpu-l40s-x7k2p terminating since 2026-09-18T03:31:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message,
 		"the registered node by its Node's name, the unregistered by its claim's, each since its deletion")
 
 	only := &poolLive{nodes: []*poolNode{{claim: registered, node: node}}}
-	st = nodesStep(mp, nil, only, true, true)
+	st = nodesStep(mp, nil, only, true, true, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:36:08Z", st.Since, "since the NodeClaim's deletion")
 	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message)

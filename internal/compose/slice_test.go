@@ -24,8 +24,10 @@ func platform() PlatformInputs {
 // where the platform's TLS is terminated at the fleet's edge and its release
 // names no wildcard (a Certificate of the models host from the fleet's
 // ClusterIssuer instead), onto a workload cluster with a pool (agentgateway
-// on, the pool's label as node selector, the issuer's Certificate), and onto
-// a workload cluster without a pool (enable_model_serving before any pool).
+// on, the pool's label as node selector, the issuer's Certificate), onto a
+// workload cluster without a pool (enable_model_serving before any pool), and
+// the own cluster's slice without the model cache (modelServing.cache.enabled
+// false, giantswarm/cluster-manager#65).
 func TestSliceGoldens(t *testing.T) {
 	own := wc1()
 	own.Name, own.Namespace, own.Organization, own.UID = "gazelle", "org-giantswarm", "giantswarm", "6f1c0c1e-8a4a-4c1e-9c3a-000000000000"
@@ -41,6 +43,7 @@ func TestSliceGoldens(t *testing.T) {
 		{"own-cluster-edge-tls", own, SliceSpec{OwnCluster: true, Platform: edge, Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "gazelle.example.io"},
 		{"workload", wc1(), SliceSpec{Platform: platform(), Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
 		{"workload-no-pool", wc1(), SliceSpec{Platform: platform(), CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
+		{"own-cluster-no-cache", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l40s", CertificateIssuer: DefaultCertificateIssuer, NoCache: true}, "gazelle.example.io"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +111,11 @@ func TestSliceGoldens(t *testing.T) {
 				assert.Equal(t, map[string]any{LabelMachinePool: tc.cluster.Name + "-" + tc.spec.Pool}, selector)
 				serving, _, _ := unstructured.NestedMap(values, "modelServing", "serving", "nodeSelector")
 				assert.Equal(t, selector, serving, "the same selector on the route the pinned chart honours")
+			}
+			cacheOn, hasCache, _ := unstructured.NestedBool(values, "modelServing", "cache", "enabled")
+			assert.Equal(t, tc.spec.NoCache, hasCache, "modelServing.cache.enabled is written only to switch the cache off; otherwise the chart's default, the cache on, stands (giantswarm/cluster-manager#65)")
+			if hasCache {
+				assert.False(t, cacheOn)
 			}
 			assert.False(t, OtherSliceOn(values), "the serving slice alone")
 		})

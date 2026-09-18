@@ -1,0 +1,194 @@
+# The installation's own cluster with a pool of three L40S sizes pinned to
+# the model cache claim's zone (pool.zones from cache-claim.yaml's volume,
+# giantswarm/cluster-manager#59) whose node Karpenter cannot launch
+# (giantswarm/cluster-manager#65), added to installation.yaml and
+# cache-claim.yaml: AWS refused all three sizes in the pinned zone at once
+# and named the zones that had the capacity, and Karpenter's event carries
+# the first size only, cut before AWS's list — the pool's sizes and zones say
+# the rest. A second pool of the same shape, not pinned, is refused the same
+# way with the event uncut: the zones AWS named are relayed.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/name: cluster-aws
+    giantswarm.io/cluster: gazelle
+spec:
+  chart:
+    spec:
+      chart: cluster-aws
+      version: 4.2.0
+  values:
+    global:
+      managementCluster: gazelle
+      connectivity:
+        baseDomain: gazelle.example.io
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle-bench-11
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T12:14:20Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: gazelle
+    giantswarm.io/node-pool: bench-11
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: gazelle-bench-11
+  values:
+    pool:
+      accelerator: nvidia-l40s
+      sizes: [2xlarge, 4xlarge, 8xlarge]
+      zones: [eu-central-1b]
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      message: Helm install succeeded for release org-giantswarm/gazelle-bench-11.v1 with chart gpu-node-pool@0.5.0
+      lastTransitionTime: "2026-09-18T12:14:22Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: gazelle-bench-11
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: gazelle-bench-11
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T12:14:30Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: gazelle
+    helm.toolkit.fluxcd.io/name: gazelle-bench-11
+    helm.toolkit.fluxcd.io/namespace: org-giantswarm
+spec:
+  clusterName: gazelle
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-18T12:14:35Z"
+---
+# Karpenter's refusal as its event recorder writes it: three fleet errors,
+# one per size, cut after the first.
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-bench-11-5hpxb.18d6647a2c1e9f01
+  namespace: default
+  creationTimestamp: "2026-09-18T12:14:47Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-bench-11-5hpxb
+  uid: 7c0d1e2f-3a4b-4c5d-8e6f-000000000011
+reason: InsufficientCapacityError
+type: Warning
+count: 1
+firstTimestamp: "2026-09-18T12:14:47Z"
+lastTimestamp: "2026-09-18T12:14:47Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: "NodeClaim gazelle-bench-11-5hpxb event: creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xla..."
+---
+# The second pool: the same sizes, no pin, the event uncut.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle-bench-12
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T12:30:20Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: gazelle
+    giantswarm.io/node-pool: bench-12
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: gazelle-bench-12
+  values:
+    pool:
+      accelerator: nvidia-l40s
+      sizes: [2xlarge, 4xlarge, 8xlarge]
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      message: Helm install succeeded for release org-giantswarm/gazelle-bench-12.v1 with chart gpu-node-pool@0.5.0
+      lastTransitionTime: "2026-09-18T12:30:22Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: gazelle-bench-12
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: gazelle-bench-12
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T12:30:30Z"
+  labels:
+    cluster.x-k8s.io/cluster-name: gazelle
+    helm.toolkit.fluxcd.io/name: gazelle-bench-12
+    helm.toolkit.fluxcd.io/namespace: org-giantswarm
+spec:
+  clusterName: gazelle
+  replicas: 0
+  template:
+    spec:
+      version: v1.31.4
+status:
+  replicas: 0
+  readyReplicas: 0
+  infrastructureReady: true
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-09-18T12:30:35Z"
+---
+apiVersion: v1
+kind: Event
+metadata:
+  name: gazelle-bench-12-k2m4p.18d6657b3d2fa012
+  namespace: default
+  creationTimestamp: "2026-09-18T12:30:47Z"
+involvedObject:
+  apiVersion: karpenter.sh/v1
+  kind: NodeClaim
+  name: gazelle-bench-12-k2m4p
+  uid: 7c0d1e2f-3a4b-4c5d-8e6f-000000000012
+reason: InsufficientCapacityError
+type: Warning
+count: 1
+firstTimestamp: "2026-09-18T12:30:47Z"
+lastTimestamp: "2026-09-18T12:30:47Z"
+source:
+  component: karpenter
+reportingComponent: karpenter
+message: "NodeClaim gazelle-bench-12-k2m4p event: creating instance, insufficient capacity, with fleet error(s), InsufficientInstanceCapacity: We currently do not have sufficient g6e.2xlarge capacity in the Availability Zone you requested (eu-central-1b). Our system will be working on provisioning additional capacity. You can currently get g6e.2xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1c."

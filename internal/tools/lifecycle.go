@@ -107,6 +107,10 @@ type poolState struct {
 	// prewarm is the placeholder of a pool whose release carries
 	// pool.prewarm.enabled; nil for a pool without the option.
 	prewarm *prewarmState
+	// launch is what the release says about the nodes Karpenter refused to
+	// launch — sizes, zones, the cache claim behind a pin —; empty while it
+	// launches them.
+	launch launchContext
 }
 
 // prewarmState is the placeholder's Job and pod as read from the release
@@ -192,6 +196,7 @@ func (s *Service) readPoolState(ctx context.Context, dyn dynamic.Interface, c *u
 		})
 	}
 	_ = g.Wait()
+	r.launch = s.launchContext(ctx, t, r.release, r.live)
 	return r
 }
 
@@ -256,10 +261,10 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	if r.mp != nil && r.mp.GetDeletionTimestamp() != nil {
 		removing = true
 	}
-	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release)))
+	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release), r.launch))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
-		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal()))
+		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal(r.launch)))
 	}
 	if removing {
 		return PhaseRemoving, steps, true, r.pending
@@ -448,7 +453,7 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 // cluster no longer has is said so, its list lags by minutes
 // (giantswarm/cluster-manager#49); any other pool's nodes carry the
 // cluster's workloads and are never idle in that sense.
-func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool bool) Step {
+func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool bool, lc launchContext) Step {
 	st := Step{Name: StepNodes, State: StepPending}
 	if mp == nil {
 		return st
@@ -487,7 +492,7 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	case live != nil && len(live.failures) > 0:
 		st.State = StepInProgress
 		st.Since = live.failures[len(live.failures)-1].at
-		st.Message = launchFailureMessage(live.failures, launching, ready, len(terminating))
+		st.Message = launchFailureMessage(live.failures, launching, ready, len(terminating), lc)
 	case launching > 0 || len(terminating) > 0:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, len(terminating))
