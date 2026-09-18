@@ -35,7 +35,7 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1.31.4", out.KubernetesVersion, "from the Release CR")
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
-	assert.Equal(t, "flatcar-stable-4081.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
+	assert.Equal(t, "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
 	assert.Equal(t, compose.DefaultPoolChartVersion, out.ChartVersion)
 	require.Len(t, out.Objects, 8, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the slice's OCIRepository and HelmRelease; the backend ConfigMap")
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
@@ -216,6 +216,23 @@ func TestCreateNodePoolRefusals(t *testing.T) {
 	skew := newLab(t, "skew.yaml").service(Config{Installation: "gazelle"})
 	_, err = skew.CreateNodePool(ctx, l4("wc3", "gpu-l4", true))
 	assertRefused(t, err, "never newer than the control plane")
+}
+
+// TestCreateNodePoolRefusesAFlatcarWithoutTheDriverExtension
+// (giantswarm/cluster-manager#66): wc4's release pins Flatcar 4230.2.1, older
+// than the first release shipping the nvidia-drivers system extension a
+// pool node of the pinned chart takes its driver from. The apply is refused
+// naming the version and the way out, and nothing is written.
+func TestCreateNodePoolRefusesAFlatcarWithoutTheDriverExtension(t *testing.T) {
+	ctx := context.Background()
+	lab := newLab(t, "old-flatcar.yaml")
+	_, err := lab.service(Config{Installation: "gazelle"}).CreateNodePool(ctx, l4("wc4", "gpu-l4", false))
+	assertRefused(t, err, "pins Flatcar 4230.2.1")
+	assert.Contains(t, err.Error(), "needs a cluster release with Flatcar "+compose.MinSysextFlatcarVersion+" or newer")
+	for _, gvr := range []schema.GroupVersionResource{compose.OCIRepositoryGVR, HelmReleaseGVR} {
+		_, err := lab.installation.Resource(gvr).Namespace("org-acme").Get(ctx, "wc4-gpu-l4", metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "%s: nothing written before the refusal", gvr.Resource)
+	}
 }
 
 // TestDeleteNodePool: refused while the pool runs nodes — named, with the
