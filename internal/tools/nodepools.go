@@ -61,9 +61,10 @@ type NodePool struct {
 	// Accelerator is the accelerator of the owning pool release's values,
 	// empty when the pool has no release or the release names none. Sizes
 	// are the release's sizes (the chart's default when it names none) as
-	// create_node_pool answers them — the node as AWS lists it, what it
-	// leaves a predictor, its on-demand price per hour in the cluster's
-	// region (giantswarm/cluster-manager#44); empty without a release.
+	// create_node_pool answers them — the node as AWS lists it, its instance
+	// store, what it leaves a predictor, its on-demand price per hour in the
+	// cluster's region (giantswarm/cluster-manager#44); empty without a
+	// release.
 	Accelerator string                  `json:"accelerator,omitempty"`
 	Sizes       []compose.InstanceShape `json:"sizes,omitempty"`
 	// OwnerRelease is the HelmRelease that applied the pool (Flux's labels),

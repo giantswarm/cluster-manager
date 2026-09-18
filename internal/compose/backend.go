@@ -56,6 +56,31 @@ type BackendTarget struct {
 	DiscoveryNamespace string
 }
 
+// documentShape is one size as model-manager's backend document declares it
+// (spec.kserve.gpuPool.instances[]): the node as AWS lists it and what it
+// leaves a predictor. model-manager reads the document strictly — a key it
+// does not declare fails the parse and with it the fit check — so the
+// shape's other fields (the price, the instance store) are the answer's and
+// are never written here.
+type documentShape struct {
+	InstanceType    string  `json:"instanceType"`
+	Size            string  `json:"size"`
+	VCPU            int     `json:"vcpu"`
+	MemoryGiB       int     `json:"memoryGiB"`
+	GPUs            int     `json:"gpus"`
+	GPUMemoryGiB    int     `json:"gpuMemoryGiB"`
+	UsableVCPU      float64 `json:"usableVcpu"`
+	UsableMemoryGiB float64 `json:"usableMemoryGiB"`
+}
+
+func documentShapes(shapes []InstanceShape) []documentShape {
+	out := make([]documentShape, 0, len(shapes))
+	for _, s := range shapes {
+		out = append(out, documentShape{s.InstanceType, s.Size, s.VCPU, s.MemoryGiB, s.GPUs, s.GPUMemoryGiB, s.UsableVCPU, s.UsableMemoryGiB})
+	}
+	return out
+}
+
 // KServeBackend renders the kserve backend document into model-manager's
 // namespace, labelled with the cluster it registers so the last pool's
 // deletion finds it. instances are the shapes of the GPU pool the predictors
@@ -82,7 +107,7 @@ func KServeBackend(namespace string, t BackendTarget, instances []InstanceShape)
 		kserve["discovery"] = map[string]any{"namespace": t.DiscoveryNamespace}
 	}
 	if len(instances) > 0 {
-		kserve["gpuPool"] = map[string]any{"instances": instances}
+		kserve["gpuPool"] = map[string]any{"instances": documentShapes(instances)}
 	}
 	doc := map[string]any{
 		"apiVersion": BackendAPIVersion,

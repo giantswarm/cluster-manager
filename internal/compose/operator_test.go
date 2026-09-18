@@ -169,6 +169,9 @@ func TestKServeBackendGoldens(t *testing.T) {
 				return
 			}
 			assert.Contains(t, doc, "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.2xlarge\n", "the pinned pool's shapes in the pool's order, keyed as model-manager's spec.kserve.gpuPool.instances[] declares them")
+			for _, key := range []string{"instanceStore", "price"} {
+				assert.NotContains(t, doc, key, "model-manager parses the document strictly: the answer's fields it does not declare are never written")
+			}
 			assert.NotContains(t, doc, "taint", "the taint and the node selector stay the discovery ConfigMap's")
 		})
 	}

@@ -4,7 +4,7 @@
   "pool": "gpu-l40s",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.6.0",
+  "chartVersion": "0.7.0",
   "kubernetesVersion": "1.31.4",
   "controlPlaneVersion": "v1.31.4",
   "machineImage": "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
@@ -76,7 +76,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "0.6.0"
+          "tag": "0.7.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }
@@ -493,6 +493,9 @@
       "memoryGiB": 64,
       "gpus": 1,
       "gpuMemoryGiB": 48,
+      "instanceStoreGB": 450,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 450,
       "usableVcpu": 7,
       "usableMemoryGiB": 57.5,
       "pricePerHourUSD": 2.8035,
@@ -506,6 +509,9 @@
       "memoryGiB": 128,
       "gpus": 1,
       "gpuMemoryGiB": 48,
+      "instanceStoreGB": 600,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 600,
       "usableVcpu": 15,
       "usableMemoryGiB": 118.3,
       "pricePerHourUSD": 3.75651,

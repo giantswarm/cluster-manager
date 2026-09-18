@@ -35,7 +35,27 @@ var (
 	// gSizes are the sizes of the G families: one GPU up to 8xlarge and on
 	// 16xlarge, four on 12xlarge and 24xlarge, eight on 48xlarge (metal).
 	gSizes = []nominal{{"xlarge", 4, 0, 1}, {"2xlarge", 8, 0, 1}, {"4xlarge", 16, 0, 1}, {"8xlarge", 32, 0, 1}, {"12xlarge", 48, 0, 4}, {"16xlarge", 64, 0, 1}, {"24xlarge", 96, 0, 4}, {"48xlarge", 192, 0, 8}}
+	// instanceStores is the local NVMe instance store of every size of the
+	// curated families as AWS lists it (`aws ec2 describe-instance-types`,
+	// InstanceStorageInfo, read 2026-09-18): the devices and the GB of each.
+	// Every size has one, which is what lets gpu-node-pool keep a pool
+	// node's /var/lib on it (0.7.0, `pool.volumes.libSource: instance-store`)
+	// without refusing a size; the chart formats the first device, so a size
+	// with two gives /var/lib one of them.
+	instanceStores = map[string]instanceStore{
+		"g6.xlarge": {1, 250}, "g6.2xlarge": {1, 450}, "g6.4xlarge": {1, 600}, "g6.8xlarge": {2, 450},
+		"g6.12xlarge": {4, 940}, "g6.16xlarge": {2, 940}, "g6.24xlarge": {4, 940}, "g6.48xlarge": {8, 940},
+		"g6e.xlarge": {1, 250}, "g6e.2xlarge": {1, 450}, "g6e.4xlarge": {1, 600}, "g6e.8xlarge": {2, 450},
+		"g6e.12xlarge": {2, 1900}, "g6e.16xlarge": {2, 950}, "g6e.24xlarge": {2, 1900}, "g6e.48xlarge": {4, 1900},
+		"g5.xlarge": {1, 250}, "g5.2xlarge": {1, 450}, "g5.4xlarge": {1, 600}, "g5.8xlarge": {1, 900},
+		"g5.12xlarge": {1, 3800}, "g5.16xlarge": {1, 1900}, "g5.24xlarge": {1, 3800}, "g5.48xlarge": {2, 3800},
+		"g4dn.xlarge": {1, 125}, "g4dn.2xlarge": {1, 225}, "g4dn.4xlarge": {1, 225}, "g4dn.8xlarge": {1, 900},
+		"g4dn.12xlarge": {1, 900}, "g4dn.16xlarge": {1, 900}, "g4dn.metal": {2, 900},
+	}
 )
+
+// instanceStore is one size's local NVMe: disks devices of diskGB each.
+type instanceStore struct{ disks, diskGB int }
 
 // gFamily fills gSizes' memory from the family's GiB per vCPU. metal is the
 // g4dn shape: no 24xlarge, and a 96 vCPU / 8 GPU bare-metal size in place of
@@ -90,6 +110,17 @@ type InstanceShape struct {
 	GPUs         int    `json:"gpus"`
 	// GPUMemoryGiB is the memory of one GPU.
 	GPUMemoryGiB int `json:"gpuMemoryGiB"`
+	// InstanceStoreGB is the node's local NVMe instance store as AWS lists
+	// it, InstanceStoreDisks devices of InstanceStoreDiskGB each — local to
+	// the host, included in the price, gone with the node. From gpu-node-pool
+	// 0.7.0 a pool node's /var/lib (containerd's image unpacks, the kubelet's
+	// directories, the pods' emptyDirs and writable layers) is the first
+	// device, so InstanceStoreDiskGB is what a node of the size gives its
+	// pods as ephemeral storage: 250 GB on a g6.xlarge, 450 of a g6.8xlarge's
+	// 2 × 450.
+	InstanceStoreGB     int `json:"instanceStoreGB"`
+	InstanceStoreDisks  int `json:"instanceStoreDisks"`
+	InstanceStoreDiskGB int `json:"instanceStoreDiskGB"`
 	// UsableVCPU and UsableMemoryGiB are what a predictor may request on a
 	// node of this size once the kubelet's reservations and the fleet's
 	// daemonsets have theirs — an estimate of the fleet's shape.
@@ -106,9 +137,11 @@ type InstanceShape struct {
 }
 
 func newShape(family string, n nominal) InstanceShape {
+	store := instanceStores[family+"."+n.size]
 	return InstanceShape{
 		InstanceType: family + "." + n.size, Size: n.size,
 		VCPU: n.vcpu, MemoryGiB: n.gib, GPUs: n.gpus, GPUMemoryGiB: gpuMemoryGiB[family],
+		InstanceStoreGB: store.disks * store.diskGB, InstanceStoreDisks: store.disks, InstanceStoreDiskGB: store.diskGB,
 		UsableVCPU:      round1(float64(n.vcpu) - kubeletReservedVCPU - daemonSetVCPU),
 		UsableMemoryGiB: round1(float64(n.gib)*(1-hypervisorMemoryShare) - kubeletReservedGiB - daemonSetGiB),
 	}

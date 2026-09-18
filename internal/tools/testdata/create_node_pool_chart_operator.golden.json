@@ -4,7 +4,7 @@
   "pool": "gpu-l4",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.6.0",
+  "chartVersion": "0.7.0",
   "kubernetesVersion": "1.31.4",
   "controlPlaneVersion": "v1.31.4",
   "machineImage": "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
@@ -63,7 +63,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "0.6.0"
+          "tag": "0.7.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }
@@ -229,6 +229,9 @@
       "memoryGiB": 16,
       "gpus": 1,
       "gpuMemoryGiB": 24,
+      "instanceStoreGB": 250,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 250,
       "usableVcpu": 3,
       "usableMemoryGiB": 11.9,
       "pricePerHourUSD": 1.0064,
@@ -242,6 +245,9 @@
       "memoryGiB": 32,
       "gpus": 1,
       "gpuMemoryGiB": 24,
+      "instanceStoreGB": 450,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 450,
       "usableVcpu": 7,
       "usableMemoryGiB": 27.1,
       "pricePerHourUSD": 1.22249,
@@ -255,6 +261,9 @@
       "memoryGiB": 64,
       "gpus": 1,
       "gpuMemoryGiB": 24,
+      "instanceStoreGB": 600,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 600,
       "usableVcpu": 15,
       "usableMemoryGiB": 57.5,
       "pricePerHourUSD": 1.65466,

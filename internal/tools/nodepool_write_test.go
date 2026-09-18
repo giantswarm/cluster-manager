@@ -402,7 +402,7 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 	out, err := svc.CreateNodePool(ctx, narrow)
 	require.NoError(t, err)
 	require.Len(t, out.Sizes, 1)
-	assert.Equal(t, compose.InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, UsableVCPU: 3, UsableMemoryGiB: 11.9,
+	assert.Equal(t, compose.InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 11.9,
 		PriceNote: "no on-demand price: AWS lists no on-demand g6.xlarge in EU (Ireland) (eu-west-1) — the size is not offered there"}, out.Sizes[0], "wc2 runs in Ireland, where AWS offers no g6: no price, and why")
 	require.NotNil(t, out.PresetFit)
 	assert.Equal(t, PresetOriginPublished, out.PresetFit.Origin)
