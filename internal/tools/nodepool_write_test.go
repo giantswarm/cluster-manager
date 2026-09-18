@@ -567,12 +567,15 @@ func TestCreateNodePoolFollowsTheCacheZone(t *testing.T) {
 	out, err := svc.CreateNodePool(ctx, in)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"eu-central-1b"}, out.Zones)
-	assert.Equal(t, "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — with cache false, so this pool's slice serves without the cache —, or remove the cache claim to lift the pin (it costs the cached weights and compiled graphs), or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step", out.ZonesNote)
+	assert.Equal(t, "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — its slice then mounts that zone's claim (hf-cache-<zone>, created there and kept; the weights downloaded once more) —, or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step", out.ZonesNote)
 	require.NotNil(t, out.Cache, "the slice was composed: the answer says the cache is on")
 	assert.True(t, out.Cache.Enabled)
 	assert.Equal(t, "model-serving/hf-cache", out.Cache.Claim)
 	assert.Equal(t, &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}, out.CacheClaim)
+	assert.Equal(t, []*detect.CacheClaim{out.CacheClaim}, out.CacheClaims, "every claim of the namespace, as read")
 	assert.Empty(t, out.Warnings, "a pin is not a warning")
+	_, found, _ := unstructured.NestedString(poolManifest(t, out, "gazelle-agent-platform"), "spec", "values", "modelServing", "cache", "pvc", "name")
+	assert.False(t, found, "the one claim of before is the chart's default: nothing written for it")
 	zones, found, _ := unstructured.NestedStringSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
 	require.True(t, found, "the pool release carries pool.zones")
 	assert.Equal(t, []string{"eu-central-1b"}, zones)
@@ -592,17 +595,21 @@ func TestCreateNodePoolFollowsTheCacheZone(t *testing.T) {
 	assert.Nil(t, out.Zones)
 	assert.Empty(t, out.ZonesNote)
 	assert.Nil(t, out.CacheClaim)
+	assert.Equal(t, []*detect.CacheClaim{}, out.CacheClaims, "readable, none: an empty list")
 	_, found, _ = unstructured.NestedSlice(poolManifest(t, out, "wc2-gpu-l4b"), "spec", "values", "pool", "zones")
 	assert.False(t, found, "without a claim the values carry no zones block")
 }
 
-// TestCreateNodePoolZones (giantswarm/cluster-manager#65): the person decides
-// where the pool runs. Zones named on create pin the pool and the answer
-// says whose the pin is; the claim's zone among them pins nothing further;
-// the claim's zone outside them is a structured refusal naming the zone and
-// the ways out; a zone the cluster has no node subnet in is refused naming
-// the zones it has; a cluster whose node subnets cannot be read refuses every
-// zone; without a claim the zones stand alone.
+// TestCreateNodePoolZones (giantswarm/cluster-manager#65, #71): the person
+// decides where the pool runs, and the zone brings its own cache. The one
+// zone named on create pins the pool and its slice mounts the zone's claim:
+// the claim Bound there (the one of before, in its zone), else the claim
+// named after the zone, created by the chart — the slice release carrying
+// modelServing.cache.pvc.name; several zones with the cache on are a
+// structured refusal, as are several claims without zones; a zone the
+// cluster has no node subnet in is refused naming the zones it has; a
+// cluster whose node subnets cannot be read refuses every zone; without a
+// claim the zone stands alone and gets its claim.
 func TestCreateNodePoolZones(t *testing.T) {
 	ctx := context.Background()
 	l := newLab(t, "installation.yaml")
@@ -615,26 +622,50 @@ func TestCreateNodePoolZones(t *testing.T) {
 		return in
 	}
 
-	t.Run("the claim's zone among the named ones", func(t *testing.T) {
-		out, err := svc.CreateNodePool(ctx, pool("eu-central-1a", "eu-central-1b"))
+	sliceClaim := func(t *testing.T, out *WriteResult) (string, bool) {
+		t.Helper()
+		name, found, _ := unstructured.NestedString(poolManifest(t, out, "gazelle-agent-platform"), "spec", "values", "modelServing", "cache", "pvc", "name")
+		return name, found
+	}
+
+	t.Run("the zone the claim is Bound in: the slice mounts it", func(t *testing.T) {
+		out, err := svc.CreateNodePool(ctx, pool("eu-central-1b"))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"eu-central-1a", "eu-central-1b"}, out.Zones)
-		assert.Equal(t, "nodes pinned to eu-central-1a, eu-central-1b, the zones named on create; the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives in eu-central-1b, one of them — a predictor mounting it needs its node there", out.ZonesNote)
+		assert.Equal(t, []string{"eu-central-1b"}, out.Zones)
+		assert.Equal(t, "nodes pinned to eu-central-1b, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), Bound there — the weights and compiled graphs of the models served from it are kept, and a predictor mounting it needs its node in eu-central-1b", out.ZonesNote)
 		assert.Empty(t, out.Warnings)
 		zones, _, _ := unstructured.NestedStringSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
-		assert.Equal(t, []string{"eu-central-1a", "eu-central-1b"}, zones, "the pool release carries the person's zones")
+		assert.Equal(t, []string{"eu-central-1b"}, zones, "the pool release carries the person's zone")
 		assert.True(t, out.Cache.Enabled)
+		assert.Equal(t, "model-serving/hf-cache", out.Cache.Claim, "the one claim of before is the zone's: reused, not doubled")
+		assert.Equal(t, "eu-central-1b", out.CacheClaim.Zone)
+		_, found := sliceClaim(t, out)
+		assert.False(t, found, "the chart's default name: nothing written")
 		assertGolden(t, "create_node_pool_zones", out)
 	})
-	t.Run("the claim's zone outside them: refused, structured", func(t *testing.T) {
-		_, err := svc.CreateNodePool(ctx, pool("eu-central-1a"))
-		assertRefused(t, err, "zones eu-central-1a: the model cache claim model-serving/hf-cache on gazelle is bound to volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b, outside them — a pool node launched in eu-central-1a cannot mount the cache, and every predictor mounting it sits Pending (`didn't match PersistentVolume's node affinity`); name eu-central-1b among the zones, or pass cache false, so this pool's slice serves without the cache — the weights land in the predictor pod's ephemeral storage and the claim is left as it is, or remove the claim (it costs the cached weights and compiled graphs)")
+	t.Run("another zone: the zone's own claim, created by the chart", func(t *testing.T) {
+		out, err := svc.CreateNodePool(ctx, pool("eu-central-1a"))
+		require.NoError(t, err, "the claim of another zone binds nothing here (giantswarm/cluster-manager#71)")
+		assert.Equal(t, []string{"eu-central-1a"}, out.Zones)
+		assert.Equal(t, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, which does not exist yet: the connectivity chart creates it, the first predictor of the pool binds it to a volume in eu-central-1a, and it is kept when the pool goes — a later pool in eu-central-1a reuses it; the other claims — model-serving/hf-cache (Bound in eu-central-1b) — are left as they are, each its zone's", out.ZonesNote)
+		assert.Empty(t, out.Warnings)
+		assert.Equal(t, "model-serving/hf-cache-eu-central-1a", out.Cache.Claim)
+		assert.Equal(t, "the predictors mount the model cache claim model-serving/hf-cache-eu-central-1a — it does not exist yet: the connectivity chart creates it and keeps it, and the first predictor binds it to a volume in its node's zone: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on", out.Cache.Note)
+		assert.Nil(t, out.CacheClaim, "the zone's claim does not exist yet")
+		assert.Len(t, out.CacheClaims, 1, "the one claim of before, as read")
+		name, found := sliceClaim(t, out)
+		require.True(t, found, "the slice release names the zone's claim")
+		assert.Equal(t, "hf-cache-eu-central-1a", name)
+		assertGolden(t, "create_node_pool_zone_claim", out)
+	})
+	t.Run("several zones with the cache on: refused, structured", func(t *testing.T) {
+		_, err := svc.CreateNodePool(ctx, pool("eu-central-1a", "eu-central-1b"))
+		assertRefused(t, err, "zones eu-central-1a, eu-central-1b with the cache on: a model cache claim is one volume in one zone, and the pool's slice mounts one claim — a predictor launched outside the claim's zone sits Pending (`didn't match PersistentVolume's node affinity`); name one zone — the slice then mounts that zone's model cache claim (the one Bound there, else hf-cache-<zone>, which the connectivity chart creates and keeps), or pass cache false, so this pool's slice serves without the cache across the zones — the weights land in each predictor pod's ephemeral storage")
 		refused := refusedBlock(t, err)
 		require.NotNil(t, refused.CacheZone, "the portal renders the refusal without parsing prose")
-		assert.Equal(t, "eu-central-1b", refused.CacheZone.ClaimZone)
-		assert.Equal(t, []string{"eu-central-1a"}, refused.CacheZone.Zones)
-		assert.Equal(t, "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", refused.CacheZone.Claim.Volume)
-		assert.Len(t, refused.CacheZone.Remedies, 3)
+		assert.Nil(t, refused.CacheZone.Claim, "no claim is at fault: the zones are")
+		assert.Equal(t, []string{"eu-central-1a", "eu-central-1b"}, refused.CacheZone.Zones)
+		assert.Len(t, refused.CacheZone.Remedies, 2)
 		assert.Equal(t, readFromCluster, refused.ReadFrom)
 		assert.Empty(t, refused.Nodes)
 		assert.Empty(t, refused.Models)
@@ -643,14 +674,57 @@ func TestCreateNodePoolZones(t *testing.T) {
 		_, err := svc.CreateNodePool(ctx, pool("eu-central-1b", "eu-west-1a"))
 		assertRefused(t, err, "zones eu-west-1a: cluster gazelle has no node subnet there — its node subnets are in eu-central-1a, eu-central-1b, eu-central-1c, and a pool's nodes come up in those; name zones among them")
 	})
-	t.Run("no claim on the cluster: the zones stand alone", func(t *testing.T) {
+	t.Run("no claim on the cluster: the zone stands alone and gets its claim", func(t *testing.T) {
 		in := l4("wc1", "gpu-l4", true)
 		in.Pool.Zones = []string{"eu-central-1a"}
 		out, err := svc.CreateNodePool(ctx, in)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"eu-central-1a"}, out.Zones)
-		assert.Equal(t, "nodes pinned to eu-central-1a, the zones named on create; wc1 has no model cache claim, so nothing else constrains them", out.ZonesNote)
+		assert.Equal(t, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, which does not exist yet: the connectivity chart creates it, the first predictor of the pool binds it to a volume in eu-central-1a, and it is kept when the pool goes — a later pool in eu-central-1a reuses it", out.ZonesNote)
 		assert.Nil(t, out.CacheClaim)
+		assert.Equal(t, []*detect.CacheClaim{}, out.CacheClaims)
+		assert.Equal(t, "model-serving/hf-cache-eu-central-1a", out.Cache.Claim)
+	})
+	t.Run("a claim per zone: no zones is refused naming them, a zone mounts its own", func(t *testing.T) {
+		l.add(t, l.installation, "cache-claim-zone.yaml")
+		_, err := svc.CreateNodePool(ctx, pool())
+		assertRefused(t, err, "model-serving on gazelle has several model cache claims — model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a): a pool's slice mounts one, the claim of the zone the pool runs in, and without zones none is chosen for you; name zones with the one zone the pool runs in — the slice then mounts that zone's claim (the one Bound there, else hf-cache-<zone>, which the connectivity chart creates and keeps), or pass cache false, so this pool's slice serves without the cache — the weights land in each predictor pod's ephemeral storage, and the claims are left as they are")
+		refused := refusedBlock(t, err)
+		require.NotNil(t, refused.CacheClaims, "the portal renders the refusal without parsing prose")
+		assert.Len(t, refused.CacheClaims.Claims, 2)
+		assert.Equal(t, "eu-central-1a", refused.CacheClaims.Claims[1].Zone)
+		assert.Len(t, refused.CacheClaims.Remedies, 2)
+		assert.Nil(t, refused.CacheZone)
+
+		out, err := svc.CreateNodePool(ctx, pool("eu-central-1a"))
+		require.NoError(t, err)
+		assert.Equal(t, "model-serving/hf-cache-eu-central-1a", out.Cache.Claim, "the zone's claim, Bound there")
+		assert.Equal(t, "eu-central-1a", out.CacheClaim.Zone)
+		assert.Equal(t, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a (volume pvc-0c2f4a1e-1a1a-4a1a-9a1a-000000000a1a), Bound there — the weights and compiled graphs of the models served from it are kept, and a predictor mounting it needs its node in eu-central-1a; the other claims — model-serving/hf-cache (Bound in eu-central-1b) — are left as they are, each its zone's", out.ZonesNote)
+		assert.Len(t, out.CacheClaims, 2)
+		name, found := sliceClaim(t, out)
+		require.True(t, found)
+		assert.Equal(t, "hf-cache-eu-central-1a", name)
+
+		out, err = svc.CreateNodePool(ctx, pool("eu-central-1b"))
+		require.NoError(t, err)
+		assert.Equal(t, "model-serving/hf-cache", out.Cache.Claim, "the other zone's claim, the one of before")
+
+		off := false
+		in := pool("eu-central-1a", "eu-central-1c")
+		in.Cache = &off
+		out, err = svc.CreateNodePool(ctx, in)
+		require.NoError(t, err, "several zones without the cache: nothing is mounted, so nothing pins")
+		assert.Equal(t, "nodes pinned to eu-central-1a, eu-central-1c, the zones named on create; this pool's slice serves without the model cache (cache false): no predictor mounts the claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) on gazelle, so their zones pin nothing and they are left as they are", out.ZonesNote)
+		assert.Contains(t, out.Cache.Note, "the existing claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) are left as they are — Helm keeps them — and pin nothing")
+
+		clusters, err := svc.ListClusters(ctx)
+		require.NoError(t, err)
+		for _, c := range clusters.Clusters {
+			if c.Name == "gazelle" {
+				assert.Len(t, c.Serving.Readiness.CacheClaims, 2, "list_clusters names every claim with its zone and phase")
+			}
+		}
 	})
 	t.Run("the node subnets cannot be read: every zone refused, naming why", func(t *testing.T) {
 		in := l4("wc2", "gpu-l4b", true)
@@ -661,46 +735,95 @@ func TestCreateNodePoolZones(t *testing.T) {
 }
 
 // TestZonePinForChoice words every case of the caller's choice against the
-// claim (giantswarm/cluster-manager#65): the cache off pins nothing from the
-// claim whatever its state; zones with a claim that is Pending, names no
-// zone or cannot be read carry the finding beside the pin; the claim's zone
-// outside the zones is the refusal.
+// claims (giantswarm/cluster-manager#65, #71): the cache off pins nothing
+// from a claim whatever its state, and allows several zones; one zone with
+// the cache on mounts the zone's claim — the one Bound there (the claim
+// named after the zone first, else the one of before), else the claim named
+// after the zone, not existing yet, Pending, naming no zone or not readable,
+// each said beside the pin; no zones lets the one claim decide; several
+// zones, several claims and a zone's claim Bound elsewhere are the refusals.
 func TestZonePinForChoice(t *testing.T) {
-	claim := func(phase, volume, zone, err string) *detect.CacheClaim {
-		return &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: phase, Volume: volume, Zone: zone, Error: err}
+	claim := func(name, phase, volume, zone, err string) *detect.CacheClaim {
+		return &detect.CacheClaim{Namespace: "model-serving", Name: name, Phase: phase, Volume: volume, Zone: zone, Error: err}
 	}
-	bound, pending, noZone, unreadable := claim("Bound", "pvc-1", "eu-central-1b", ""), claim("Pending", "", "", ""), claim("Bound", "pvc-1", "", ""), claim("", "", "", "forbidden")
-	zones := []string{"eu-central-1a"}
+	read := func(claims ...*detect.CacheClaim) cacheClaims {
+		return cacheClaims{namespace: "model-serving", base: "hf-cache", claims: claims}
+	}
+	bound := claim("hf-cache", "Bound", "pvc-1", "eu-central-1b", "")
+	pending := claim("hf-cache", "Pending", "", "", "")
+	noZone := claim("hf-cache", "Bound", "pvc-1", "", "")
+	unreadable := claim("hf-cache", "Bound", "pvc-1", "", "forbidden")
+	zoneA := claim("hf-cache-eu-central-1a", "Bound", "pvc-a", "eu-central-1a", "")
+	zoneAPending := claim("hf-cache-eu-central-1a", "Pending", "", "", "")
+	zoneANoZone := claim("hf-cache-eu-central-1a", "Bound", "pvc-a", "", "")
+	zoneAUnreadable := claim("hf-cache-eu-central-1a", "Bound", "pvc-a", "", "forbidden")
+	zoneB := claim("hf-cache-eu-central-1b", "Bound", "pvc-b", "eu-central-1b", "")
+	unlisted := cacheClaims{namespace: "model-serving", base: "hf-cache", err: "forbidden"}
+	a, b, ab := []string{"eu-central-1a"}, []string{"eu-central-1b"}, []string{"eu-central-1a", "eu-central-1b"}
+	on := func(zones ...string) zoneChoice { return zoneChoice{zones: zones, cache: true} }
+	off := func(zones ...string) zoneChoice { return zoneChoice{zones: zones} }
 	cases := []struct {
-		name    string
-		claim   *detect.CacheClaim
-		choice  zoneChoice
-		zones   []string
-		note    string
-		warning string
+		name      string
+		read      cacheClaims
+		choice    zoneChoice
+		zones     []string
+		claimName string
+		claim     *detect.CacheClaim
+		note      string
+		warning   string
 	}{
-		{"cache off, no zones, a bound claim", bound, zoneChoice{}, nil, "the pool's nodes are not pinned to a zone; this pool's slice serves without the model cache (cache false): no predictor mounts the claim model-serving/hf-cache on mc, so its zone pins nothing and the claim is left as it is", ""},
-		{"cache off, zones, no claim", nil, zoneChoice{zones: zones}, zones, "nodes pinned to eu-central-1a, the zones named on create; this pool's slice serves without the model cache (cache false), so no zone follows from a claim", ""},
-		{"cache off, an unreadable claim is no warning", unreadable, zoneChoice{zones: zones}, zones, "nodes pinned to eu-central-1a, the zones named on create; this pool's slice serves without the model cache (cache false): no predictor mounts the claim model-serving/hf-cache on mc, so its zone pins nothing and the claim is left as it is", ""},
-		{"zones, a pending claim", pending, zoneChoice{zones: zones, cache: true}, zones, "nodes pinned to eu-central-1a, the zones named on create; the model cache claim model-serving/hf-cache on mc is Pending, bound to no volume yet — the first predictor mounting the cache binds it to its node's zone, one of these, and every pool created after that follows it", ""},
-		{"zones, a volume without a zone", noZone, zoneChoice{zones: zones, cache: true}, zones, "nodes pinned to eu-central-1a, the zones named on create; the model cache claim model-serving/hf-cache on mc is bound to volume pvc-1, whose node affinity names no zone — a volume every zone reaches strands no predictor", ""},
-		{"zones, an unreadable claim", unreadable, zoneChoice{zones: zones, cache: true}, zones, "nodes pinned to eu-central-1a, the zones named on create", "the model cache claim model-serving/hf-cache on mc cannot be read as you (forbidden): whether its volume lies in eu-central-1a cannot be told — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or pass cache false so this pool's slice serves without it"},
-		{"no zones, cache on: the claim's zone (giantswarm/cluster-manager#59)", bound, zoneChoice{cache: true}, []string{"eu-central-1b"}, "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-1) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — with cache false, so this pool's slice serves without the cache —, or remove the cache claim to lift the pin (it costs the cached weights and compiled graphs), or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step", ""},
-		{"no zones, cache on, no claim", nil, zoneChoice{cache: true}, nil, "", ""},
+		{"cache off, no zones, a bound claim", read(bound), off(), nil, "", nil, "the pool's nodes are not pinned to a zone; this pool's slice serves without the model cache (cache false): no predictor mounts the claim model-serving/hf-cache on mc, so its zone pins nothing and the claim is left as it is", ""},
+		{"cache off, two zones, no claim", read(), off(ab...), ab, "", nil, "nodes pinned to eu-central-1a, eu-central-1b, the zones named on create; this pool's slice serves without the model cache (cache false), so no zone follows from a claim", ""},
+		{"cache off, the claims not listable is no warning", unlisted, off(a...), a, "", nil, "nodes pinned to eu-central-1a, the zones named on create; this pool's slice serves without the model cache (cache false), so no zone follows from a claim", ""},
+		{"cache off, two claims", read(bound, zoneA), off(), nil, "", nil, "the pool's nodes are not pinned to a zone; this pool's slice serves without the model cache (cache false): no predictor mounts the claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) on mc, so their zones pin nothing and they are left as they are", ""},
+		{"one zone, no claim: the zone's claim, to be created", read(), on(a...), a, "hf-cache-eu-central-1a", nil, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, which does not exist yet: the connectivity chart creates it, the first predictor of the pool binds it to a volume in eu-central-1a, and it is kept when the pool goes — a later pool in eu-central-1a reuses it", ""},
+		{"one zone, the claim of before elsewhere: the zone's own, the other left", read(bound), on(a...), a, "hf-cache-eu-central-1a", nil, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, which does not exist yet: the connectivity chart creates it, the first predictor of the pool binds it to a volume in eu-central-1a, and it is kept when the pool goes — a later pool in eu-central-1a reuses it; the other claims — model-serving/hf-cache (Bound in eu-central-1b) — are left as they are, each its zone's", ""},
+		{"one zone, the claim of before Bound there: reused", read(bound), on(b...), b, "hf-cache", bound, "nodes pinned to eu-central-1b, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache (volume pvc-1), Bound there — the weights and compiled graphs of the models served from it are kept, and a predictor mounting it needs its node in eu-central-1b", ""},
+		{"one zone, two claims Bound there: the one named after the zone", read(bound, zoneB), on(b...), b, "hf-cache-eu-central-1b", zoneB, "nodes pinned to eu-central-1b, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1b (volume pvc-b), Bound there — the weights and compiled graphs of the models served from it are kept, and a predictor mounting it needs its node in eu-central-1b; the other claims — model-serving/hf-cache (Bound in eu-central-1b) — are left as they are, each its zone's", ""},
+		{"one zone, its claim Pending", read(zoneAPending), on(a...), a, "hf-cache-eu-central-1a", zoneAPending, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, Pending and bound to no volume yet — the first predictor mounting it binds it to a volume in eu-central-1a, and a later pool there reuses it", ""},
+		{"one zone, its claim's volume without a zone", read(zoneANoZone), on(a...), a, "hf-cache-eu-central-1a", zoneANoZone, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the model cache claim model-serving/hf-cache-eu-central-1a, bound to volume pvc-a, whose node affinity names no zone — a volume every zone reaches strands no predictor", ""},
+		{"one zone, its claim not readable", read(zoneAUnreadable), on(a...), a, "hf-cache-eu-central-1a", zoneAUnreadable, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a", "the model cache claim model-serving/hf-cache-eu-central-1a on mc cannot be read as you (forbidden): whether its volume lies in eu-central-1a cannot be told — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or pass cache false so this pool's slice serves without it"},
+		{"one zone, the claims not listable", unlisted, on(a...), a, "hf-cache-eu-central-1a", nil, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a", "the model cache claims of model-serving on mc cannot be read as you (forbidden): whether a claim is Bound in eu-central-1a, and which, cannot be told — the slice mounts model-serving/hf-cache-eu-central-1a, the claim named after the zone, which the connectivity chart creates where it does not exist; re-run once you may list the claims, or pass cache false so this pool's slice serves without one"},
+		{"no zones, cache on: the one claim's zone (giantswarm/cluster-manager#59)", read(bound), on(), b, "hf-cache", bound, "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-1) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — its slice then mounts that zone's claim (hf-cache-<zone>, created there and kept; the weights downloaded once more) —, or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step", ""},
+		{"no zones, cache on, the one claim a zone's", read(zoneA), on(), a, "hf-cache-eu-central-1a", zoneA, "nodes pinned to eu-central-1a: the model cache (claim model-serving/hf-cache-eu-central-1a, volume pvc-a) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — its slice then mounts that zone's claim (hf-cache-<zone>, created there and kept; the weights downloaded once more) —, or pick an accelerator offered in eu-central-1a — a family not offered there fails its launch, named in list_node_pools' nodes step", ""},
+		{"no zones, cache on, a pending claim", read(pending), on(), nil, "hf-cache", pending, "the model cache claim model-serving/hf-cache on mc is Pending, bound to no volume yet: the pool's nodes are not pinned to a zone — the first predictor mounting the cache binds it to its node's zone, and every pool created after that without zones follows it", ""},
+		{"no zones, cache on, a volume without a zone", read(noZone), on(), nil, "hf-cache", noZone, "the model cache claim model-serving/hf-cache on mc is bound to volume pvc-1, whose node affinity names no zone: the pool's nodes are not pinned — a volume every zone reaches strands no predictor", ""},
+		{"no zones, cache on, an unreadable claim", read(unreadable), on(), nil, "hf-cache", unreadable, "", "the model cache claim model-serving/hf-cache on mc cannot be read as you (forbidden): the pool's nodes are not pinned to the cache's zone — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or name zones on create so the slice mounts that zone's claim"},
+		{"no zones, cache on, the claims not listable", unlisted, on(), nil, "hf-cache", nil, "", "the model cache claims of model-serving on mc cannot be read as you (forbidden): the pool's nodes are not pinned to a cache's zone, and the slice mounts model-serving/hf-cache — a cache claim is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may list the claims and their volumes, or name zones on create so the slice mounts that zone's claim"},
+		{"no zones, cache on, no claim", read(), on(), nil, "hf-cache", nil, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pin, err := zonePinFor(tc.claim, "mc", tc.choice)
+			pin, err := zonePinFor(tc.read, "mc", tc.choice)
 			require.NoError(t, err)
 			assert.Equal(t, tc.zones, pin.zones)
+			assert.Equal(t, tc.claimName, pin.claimName, "the claim the slice mounts")
+			assert.Equal(t, tc.claim, pin.claim, "the claim as read travels with the pin")
 			assert.Equal(t, tc.note, pin.note)
 			assert.Equal(t, tc.warning, pin.warning)
-			assert.Equal(t, tc.claim, pin.claim, "the claim as read travels with the pin")
+			assert.Equal(t, tc.choice.cache, pin.sliceCache().on)
 		})
 	}
-	_, err := zonePinFor(bound, "mc", zoneChoice{zones: zones, cache: true})
-	require.Error(t, err, "the claim's zone outside the zones")
-	assert.Equal(t, []string{"name eu-central-1b among the zones", "pass cache false, so this pool's slice serves without the cache — the weights land in the predictor pod's ephemeral storage and the claim is left as it is", "remove the claim (it costs the cached weights and compiled graphs)"}, refusedBlock(t, err).CacheZone.Remedies)
+
+	_, err := zonePinFor(read(bound), "mc", on(ab...))
+	require.Error(t, err, "several zones with the cache on")
+	refused := refusedBlock(t, err)
+	assert.Nil(t, refused.CacheZone.Claim)
+	assert.Equal(t, ab, refused.CacheZone.Zones)
+	assert.Equal(t, []string{"name one zone — the slice then mounts that zone's model cache claim (the one Bound there, else hf-cache-<zone>, which the connectivity chart creates and keeps)", "pass cache false, so this pool's slice serves without the cache across the zones — the weights land in each predictor pod's ephemeral storage"}, refused.CacheZone.Remedies)
+
+	_, err = zonePinFor(read(bound, zoneA), "mc", on())
+	require.Error(t, err, "several claims without zones")
+	assert.Equal(t, []*detect.CacheClaim{bound, zoneA}, refusedBlock(t, err).CacheClaims.Claims)
+
+	elsewhere := claim("hf-cache-eu-central-1a", "Bound", "pvc-x", "eu-central-1b", "")
+	_, err = zonePinFor(read(elsewhere), "mc", on(a...))
+	require.Error(t, err, "the zone's claim Bound elsewhere")
+	assertRefused(t, err, "zones eu-central-1a: the model cache claim model-serving/hf-cache-eu-central-1a on mc, the zone's by name, is bound to volume pvc-x in eu-central-1b, outside it — a pool node launched in eu-central-1a cannot mount the cache, and every predictor mounting it sits Pending (`didn't match PersistentVolume's node affinity`); name eu-central-1b as the zone, or pass cache false, so this pool's slice serves without the cache — the weights land in the predictor pod's ephemeral storage and the claim is left as it is, or remove the claim (it costs the cached weights and compiled graphs)")
+	refused = refusedBlock(t, err)
+	assert.Equal(t, "eu-central-1b", refused.CacheZone.ClaimZone)
+	assert.Equal(t, elsewhere, refused.CacheZone.Claim)
+	assert.Len(t, refused.CacheZone.Remedies, 3)
 }
 
 // TestCreateNodePoolWithoutCache (giantswarm/cluster-manager#65): cache false
@@ -724,8 +847,10 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 	require.NotNil(t, out.Cache)
 	assert.False(t, out.Cache.Enabled)
 	assert.Empty(t, out.Cache.Claim)
-	assert.Equal(t, "modelServing.cache.enabled false on the slice release: no claim model-serving/hf-cache is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing", out.Cache.Note)
-	assert.Equal(t, "eu-central-1b", out.CacheClaim.Zone, "the claim as read stays in the answer")
+	assert.Equal(t, "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing", out.Cache.Note)
+	assert.Nil(t, out.CacheClaim, "no claim is mounted")
+	require.Len(t, out.CacheClaims, 1, "the claims as read stay in the answer")
+	assert.Equal(t, "eu-central-1b", out.CacheClaims[0].Zone)
 	enabled, found, _ := unstructured.NestedBool(poolManifest(t, out, "gazelle-agent-platform"), "spec", "values", "modelServing", "cache", "enabled")
 	require.True(t, found, "the slice release switches the cache off")
 	assert.False(t, enabled)
@@ -766,14 +891,14 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 
 // TestCreateNodePoolCacheClaimWithoutAZone (giantswarm/cluster-manager#59): a
 // claim that is not Bound, or whose volume names no zone, pins nothing and
-// the answer says what was found; a claim or volume that cannot be read as
-// the caller pins nothing and is a warning naming why — never a guessed
-// zone, never a silent absence.
+// the answer says what was found; a volume that cannot be read as the
+// caller, or the claims that cannot be listed, pin nothing and are a warning
+// naming why — never a guessed zone, never a silent absence.
 func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
 	ctx := context.Background()
-	forbidden := func(resource, name string) k8stesting.ReactionFunc {
+	forbidden := func(verb, resource, name string) k8stesting.ReactionFunc {
 		return func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("User \"alice\" cannot get resource \""+resource+"\" in API group \"\""))
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("User \"alice\" cannot "+verb+" resource \""+resource+"\" in API group \"\""))
 		}
 	}
 	cases := []struct {
@@ -781,6 +906,8 @@ func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
 		prepare func(t *testing.T, l *lab)
 		note    string
 		warning string
+		// unlisted: the claims themselves could not be read, so none is in the answer.
+		unlisted bool
 	}{
 		{"pending claim", func(t *testing.T, l *lab) {
 			pvc, err := l.installation.Resource(detect.PersistentVolumeClaimGVR).Namespace("model-serving").Get(ctx, "hf-cache", metav1.GetOptions{})
@@ -789,20 +916,20 @@ func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
 			require.NoError(t, unstructured.SetNestedField(pvc.Object, "Pending", "status", "phase"))
 			_, err = l.installation.Resource(detect.PersistentVolumeClaimGVR).Namespace("model-serving").Update(ctx, pvc, metav1.UpdateOptions{})
 			require.NoError(t, err)
-		}, "the model cache claim model-serving/hf-cache on gazelle is Pending, bound to no volume yet: the pool's nodes are not pinned to a zone — the first predictor mounting the cache binds it to its node's zone, and every pool created after that follows it", ""},
+		}, "the model cache claim model-serving/hf-cache on gazelle is Pending, bound to no volume yet: the pool's nodes are not pinned to a zone — the first predictor mounting the cache binds it to its node's zone, and every pool created after that without zones follows it", "", false},
 		{"volume without a zone", func(t *testing.T, l *lab) {
 			pv, err := l.installation.Resource(detect.PersistentVolumeGVR).Get(ctx, "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", metav1.GetOptions{})
 			require.NoError(t, err)
 			unstructured.RemoveNestedField(pv.Object, "spec", "nodeAffinity")
 			_, err = l.installation.Resource(detect.PersistentVolumeGVR).Update(ctx, pv, metav1.UpdateOptions{})
 			require.NoError(t, err)
-		}, "the model cache claim model-serving/hf-cache on gazelle is bound to volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80, whose node affinity names no zone: the pool's nodes are not pinned — a volume every zone reaches strands no predictor", ""},
+		}, "the model cache claim model-serving/hf-cache on gazelle is bound to volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80, whose node affinity names no zone: the pool's nodes are not pinned — a volume every zone reaches strands no predictor", "", false},
 		{"volume not readable", func(t *testing.T, l *lab) {
-			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "persistentvolumes", forbidden("persistentvolumes", "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80"))
-		}, "", "the model cache claim model-serving/hf-cache on gazelle cannot be read as you (get PersistentVolume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 of claim model-serving/hf-cache: persistentvolumes \"pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80\" is forbidden: User \"alice\" cannot get resource \"persistentvolumes\" in API group \"\"): the pool's nodes are not pinned to the cache's zone — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or remove the claim (it costs the cached weights)"},
-		{"claim not readable", func(t *testing.T, l *lab) {
-			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "persistentvolumeclaims", forbidden("persistentvolumeclaims", "hf-cache"))
-		}, "", "the model cache claim model-serving/hf-cache on gazelle cannot be read as you (get PersistentVolumeClaim model-serving/hf-cache: persistentvolumeclaims \"hf-cache\" is forbidden: User \"alice\" cannot get resource \"persistentvolumeclaims\" in API group \"\"): the pool's nodes are not pinned to the cache's zone"},
+			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "persistentvolumes", forbidden("get", "persistentvolumes", "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80"))
+		}, "", "the model cache claim model-serving/hf-cache on gazelle cannot be read as you (get PersistentVolume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 of claim model-serving/hf-cache: persistentvolumes \"pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80\" is forbidden: User \"alice\" cannot get resource \"persistentvolumes\" in API group \"\"): the pool's nodes are not pinned to the cache's zone — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or name zones on create so the slice mounts that zone's claim", false},
+		{"claims not listable", func(t *testing.T, l *lab) {
+			l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "persistentvolumeclaims", forbidden("list", "persistentvolumeclaims", ""))
+		}, "", "the model cache claims of model-serving on gazelle cannot be read as you (list PersistentVolumeClaims in model-serving: persistentvolumeclaims is forbidden: User \"alice\" cannot list resource \"persistentvolumeclaims\" in API group \"\"): the pool's nodes are not pinned to a cache's zone, and the slice mounts model-serving/hf-cache", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -818,7 +945,13 @@ func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
 			assert.Nil(t, out.Zones, "no pin")
 			_, found, _ := unstructured.NestedSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
 			assert.False(t, found, "no zones block")
-			require.NotNil(t, out.CacheClaim, "the claim as read is in the answer")
+			assert.Equal(t, "model-serving/hf-cache", out.Cache.Claim, "the slice mounts the one claim of the namespace, or the base name")
+			if tc.unlisted {
+				assert.Nil(t, out.CacheClaim, "nothing was read")
+				assert.Nil(t, out.CacheClaims, "null, not empty: the claims could not be read")
+			} else {
+				require.NotNil(t, out.CacheClaim, "the claim as read is in the answer")
+			}
 			if tc.note != "" {
 				assert.Equal(t, tc.note, out.ZonesNote)
 				assert.Empty(t, out.Warnings)
@@ -827,7 +960,9 @@ func TestCreateNodePoolCacheClaimWithoutAZone(t *testing.T) {
 				assert.Empty(t, out.ZonesNote)
 				require.Len(t, out.Warnings, 1)
 				assert.Contains(t, out.Warnings[0], tc.warning)
-				assert.NotEmpty(t, out.CacheClaim.Error)
+				if !tc.unlisted {
+					assert.NotEmpty(t, out.CacheClaim.Error)
+				}
 			}
 		})
 	}

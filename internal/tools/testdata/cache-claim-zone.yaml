@@ -1,0 +1,52 @@
+# A second model cache claim in the serving namespace, the claim of one zone
+# (giantswarm/cluster-manager#71): created by the connectivity chart for a
+# pool created with zones [eu-central-1a] and the cache on, Bound by the
+# pool's first predictor to a volume there. With the one claim of before
+# (cache-claim.yaml, Bound in eu-central-1b) the namespace holds a claim per
+# zone: a pool without zones is refused, a pool in either zone mounts its own.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hf-cache-eu-central-1a
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/component: model-serving
+    app.kubernetes.io/name: agent-platform-connectivity
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: agent-platform-connectivity-hf-cache
+  volumeName: pvc-0c2f4a1e-1a1a-4a1a-9a1a-000000000a1a
+  resources:
+    requests:
+      storage: 500Gi
+status:
+  phase: Bound
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pvc-0c2f4a1e-1a1a-4a1a-9a1a-000000000a1a
+spec:
+  capacity:
+    storage: 500Gi
+  csi:
+    driver: ebs.csi.aws.com
+    volumeHandle: vol-0a1b2c3d4e5f60002
+  claimRef:
+    kind: PersistentVolumeClaim
+    name: hf-cache-eu-central-1a
+    namespace: model-serving
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values: [eu-central-1a]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: agent-platform-connectivity-hf-cache
+status:
+  phase: Bound

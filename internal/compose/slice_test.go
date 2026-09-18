@@ -27,7 +27,9 @@ func platform() PlatformInputs {
 // on, the pool's label as node selector, the issuer's Certificate), onto a
 // workload cluster without a pool (enable_model_serving before any pool), and
 // the own cluster's slice without the model cache (modelServing.cache.enabled
-// false, giantswarm/cluster-manager#65).
+// false, giantswarm/cluster-manager#65), and the own cluster's slice mounting
+// the claim of the pool's zone (modelServing.cache.pvc.name,
+// giantswarm/cluster-manager#71).
 func TestSliceGoldens(t *testing.T) {
 	own := wc1()
 	own.Name, own.Namespace, own.Organization, own.UID = "gazelle", "org-giantswarm", "giantswarm", "6f1c0c1e-8a4a-4c1e-9c3a-000000000000"
@@ -44,6 +46,7 @@ func TestSliceGoldens(t *testing.T) {
 		{"workload", wc1(), SliceSpec{Platform: platform(), Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
 		{"workload-no-pool", wc1(), SliceSpec{Platform: platform(), CertificateIssuer: DefaultCertificateIssuer}, "wc1.acme.example.io"},
 		{"own-cluster-no-cache", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l40s", CertificateIssuer: DefaultCertificateIssuer, NoCache: true}, "gazelle.example.io"},
+		{"own-cluster-zone-claim", own, SliceSpec{OwnCluster: true, Platform: platform(), Pool: "gpu-l40s", CertificateIssuer: DefaultCertificateIssuer, CacheClaim: "hf-cache-eu-central-1a"}, "gazelle.example.io"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,8 +120,29 @@ func TestSliceGoldens(t *testing.T) {
 			if hasCache {
 				assert.False(t, cacheOn)
 			}
+			claim, hasClaim, _ := unstructured.NestedString(values, "modelServing", "cache", "pvc", "name")
+			assert.Equal(t, tc.spec.CacheClaim != "" && !tc.spec.NoCache, hasClaim, "modelServing.cache.pvc.name is written only for a claim other than the chart's default, and never with the cache off (giantswarm/cluster-manager#71)")
+			if hasClaim {
+				assert.Equal(t, tc.spec.CacheClaim, claim)
+			}
 			assert.False(t, OtherSliceOn(values), "the serving slice alone")
 		})
+	}
+}
+
+// TestSliceCacheClaimDefault (giantswarm/cluster-manager#71): the chart's
+// default claim name writes nothing — the values of a slice mounting
+// `hf-cache` do not change —, and with the cache off no claim name is
+// written, since none is mounted.
+func TestSliceCacheClaimDefault(t *testing.T) {
+	for _, spec := range []SliceSpec{
+		{Platform: platform(), CacheClaim: DefaultCacheClaimName},
+		{Platform: platform(), CacheClaim: "hf-cache-eu-central-1a", NoCache: true},
+	} {
+		values, err := SliceValues(wc1(), spec)
+		require.NoError(t, err)
+		_, found, _ := unstructured.NestedString(values, "modelServing", "cache", "pvc", "name")
+		assert.False(t, found, "%+v", spec)
 	}
 }
 

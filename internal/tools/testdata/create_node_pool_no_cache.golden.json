@@ -526,15 +526,17 @@
     "eu-central-1a"
   ],
   "zonesNote": "nodes pinned to eu-central-1a, the zones named on create; this pool's slice serves without the model cache (cache false): no predictor mounts the claim model-serving/hf-cache on gazelle, so its zone pins nothing and the claim is left as it is",
-  "cacheClaim": {
-    "namespace": "model-serving",
-    "name": "hf-cache",
-    "phase": "Bound",
-    "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
-    "zone": "eu-central-1b"
-  },
+  "cacheClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b"
+    }
+  ],
   "cache": {
     "enabled": false,
-    "note": "modelServing.cache.enabled false on the slice release: no claim model-serving/hf-cache is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing"
+    "note": "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing"
   }
 }

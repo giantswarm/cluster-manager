@@ -525,7 +525,7 @@
   "zones": [
     "eu-central-1b"
   ],
-  "zonesNote": "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — with cache false, so this pool's slice serves without the cache —, or remove the cache claim to lift the pin (it costs the cached weights and compiled graphs), or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step",
+  "zonesNote": "nodes pinned to eu-central-1b: the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives there, and a node launched in another zone strands a predictor mounting it Pending; name zones on create to run the pool elsewhere — its slice then mounts that zone's claim (hf-cache-\u003czone\u003e, created there and kept; the weights downloaded once more) —, or pick an accelerator offered in eu-central-1b — a family not offered there fails its launch, named in list_node_pools' nodes step",
   "cacheClaim": {
     "namespace": "model-serving",
     "name": "hf-cache",
@@ -533,9 +533,18 @@
     "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
     "zone": "eu-central-1b"
   },
+  "cacheClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b"
+    }
+  ],
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache (the connectivity chart applies it where it does not exist, and keeps it): the weights and compiled graphs of every served model are kept there, and a pool created while the claim is Bound follows its zone"
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — Bound in eu-central-1b (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), kept by the connectivity chart: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
   }
 }

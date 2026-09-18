@@ -62,26 +62,27 @@ func isCommentOnly(doc string) bool {
 
 // listKinds registers every resource the tools and the detection list.
 var listKinds = map[schema.GroupVersionResource]string{
-	ClusterGVR:                 "ClusterList",
-	MachinePoolGVR:             "MachinePoolList",
-	HelmReleaseGVR:             "HelmReleaseList",
-	ReleaseGVR:                 "ReleaseList",
-	compose.OCIRepositoryGVR:   "OCIRepositoryList",
-	compose.SecretGVR:          "SecretList",
-	ConfigMapGVR:               "ConfigMapList",
-	AppGVR:                     "AppList",
-	detect.NodesGVR:            "NodeList",
-	detect.PodsGVR:             "PodList",
-	detect.DeploymentGVR:       "DeploymentList",
-	detect.ClusterPolicyGVR:    "ClusterPolicyList",
-	detect.InferenceServiceGVR: "InferenceServiceList",
-	detect.LLMISVCGVR:          "LLMInferenceServiceList",
-	configsStorageGVR:          "LLMInferenceServiceConfigList",
-	detect.DaemonSetGVR:        "DaemonSetList",
-	detect.NodeClaimGVR:        "NodeClaimList",
-	detect.EventsGVR:           "EventList",
-	detect.GatewayGVR:          "GatewayList",
-	JobGVR:                     "JobList",
+	ClusterGVR:                      "ClusterList",
+	MachinePoolGVR:                  "MachinePoolList",
+	HelmReleaseGVR:                  "HelmReleaseList",
+	ReleaseGVR:                      "ReleaseList",
+	compose.OCIRepositoryGVR:        "OCIRepositoryList",
+	compose.SecretGVR:               "SecretList",
+	ConfigMapGVR:                    "ConfigMapList",
+	AppGVR:                          "AppList",
+	detect.NodesGVR:                 "NodeList",
+	detect.PodsGVR:                  "PodList",
+	detect.DeploymentGVR:            "DeploymentList",
+	detect.ClusterPolicyGVR:         "ClusterPolicyList",
+	detect.InferenceServiceGVR:      "InferenceServiceList",
+	detect.LLMISVCGVR:               "LLMInferenceServiceList",
+	configsStorageGVR:               "LLMInferenceServiceConfigList",
+	detect.DaemonSetGVR:             "DaemonSetList",
+	detect.NodeClaimGVR:             "NodeClaimList",
+	detect.EventsGVR:                "EventList",
+	detect.GatewayGVR:               "GatewayList",
+	JobGVR:                          "JobList",
+	detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 }
 
 // configsStorageGVR is the LLMInferenceServiceConfigs API in the storage
@@ -236,8 +237,9 @@ func TestListClusters(t *testing.T) {
 	assert.Equal(t, detect.ProviderChart, byName["wc2"].Serving.Provider, "the platform's discovery ConfigMap")
 	assert.Equal(t, []string{"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)
 	assert.Equal(t, detect.StatusAbsent, byName["gazelle"].GPUOperator.Status, "the installation's own cluster is read through the installation")
-	assert.Equal(t, &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}, byName["gazelle"].Serving.Readiness.CacheClaim, "the model cache claim and its zone under serving readiness (giantswarm/cluster-manager#59)")
-	assert.Nil(t, byName["wc1"].Serving.Readiness.CacheClaim, "no claim on wc1")
+	assert.Equal(t, []*detect.CacheClaim{{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}}, byName["gazelle"].Serving.Readiness.CacheClaims, "the model cache claims with their zones under serving readiness (giantswarm/cluster-manager#59, #71)")
+	assert.Equal(t, []*detect.CacheClaim{}, byName["wc1"].Serving.Readiness.CacheClaims, "no claim on wc1: an empty list, not null")
+	assert.Nil(t, byName["gazelle"].Serving.Readiness.Cache, "no slice release of cluster-manager's: the slice's cache setting is unknown")
 
 	assertGolden(t, "list_clusters", clusters)
 }

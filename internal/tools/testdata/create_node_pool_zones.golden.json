@@ -145,7 +145,6 @@
               "4xlarge"
             ],
             "zones": [
-              "eu-central-1a",
               "eu-central-1b"
             ]
           },
@@ -521,10 +520,9 @@
     "note": "no serving preset is published on gazelle yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each"
   },
   "zones": [
-    "eu-central-1a",
     "eu-central-1b"
   ],
-  "zonesNote": "nodes pinned to eu-central-1a, eu-central-1b, the zones named on create; the model cache (claim model-serving/hf-cache, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80) lives in eu-central-1b, one of them — a predictor mounting it needs its node there",
+  "zonesNote": "nodes pinned to eu-central-1b, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), Bound there — the weights and compiled graphs of the models served from it are kept, and a predictor mounting it needs its node in eu-central-1b",
   "cacheClaim": {
     "namespace": "model-serving",
     "name": "hf-cache",
@@ -532,9 +530,18 @@
     "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
     "zone": "eu-central-1b"
   },
+  "cacheClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b"
+    }
+  ],
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache (the connectivity chart applies it where it does not exist, and keeps it): the weights and compiled graphs of every served model are kept there, and a pool created while the claim is Bound follows its zone"
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — Bound in eu-central-1b (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), kept by the connectivity chart: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
   }
 }

@@ -125,11 +125,27 @@ type ServingReadiness struct {
 	// ModelsGateway is the Gateway listening on models.<domain>, null where
 	// the slice runs none (or the cluster cannot be read).
 	ModelsGateway *GatewayState `json:"modelsGateway"`
-	// CacheClaim is the serving namespace's model cache claim with the zone
-	// its volume is bound to — where every GPU pool created while it exists
-	// lands (filled in by the tools, which know the namespace and name);
-	// null when there is none or the cluster cannot be read.
-	CacheClaim *CacheClaim `json:"cacheClaim"`
+	// Cache is the model cache as cluster-manager's slice release states it
+	// in its values (the chart's defaults where they name nothing): whether
+	// the predictors mount a claim, and which one — the claim of the zone the
+	// last pool with the cache on was created in (giantswarm/cluster-manager#71).
+	// Null where the slice release is not cluster-manager's.
+	Cache *SliceCache `json:"cache"`
+	// CacheClaims are the model cache claims of the serving namespace — the
+	// one claim of before and the claims per zone — each with its phase and
+	// the zone its volume is bound to, where a pool mounting it lands (filled
+	// in by the tools, which know the namespace and the base name); empty for
+	// none, null when the cluster cannot be read.
+	CacheClaims []*CacheClaim `json:"cacheClaims"`
+}
+
+// SliceCache is the model cache as the slice release's values state it.
+type SliceCache struct {
+	Enabled bool `json:"enabled"`
+	// Claim names the claim the predictors mount (`modelServing.cache.pvc.name`,
+	// the chart's default when the values name none); empty with the cache
+	// off.
+	Claim string `json:"claim,omitempty"`
 }
 
 // ControllerState is one KServe controller Deployment.
