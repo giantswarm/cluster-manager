@@ -14,8 +14,9 @@ func preset(name, cpu, memory string, gpus int, gpuGiB float64) PresetRequests {
 }
 
 // TestShapesCoverTheChart: every accelerator of the curated list has a family
-// with the chart's default sizes, and a size the family lacks is refused
-// naming the sizes.
+// with the chart's default sizes, every size of every family has an instance
+// store — what lets gpu-node-pool 0.7.0 keep /var/lib on it without a size
+// being refused — and a size the family lacks is refused naming the sizes.
 func TestShapesCoverTheChart(t *testing.T) {
 	for _, acc := range Accelerators {
 		shapes, err := Shapes(acc, nil)
@@ -26,7 +27,16 @@ func TestShapesCoverTheChart(t *testing.T) {
 			assert.Equal(t, InstanceFamily(acc)+"."+s.Size, s.InstanceType)
 			assert.Positive(t, s.GPUMemoryGiB, acc)
 		}
+		all, err := Shapes(acc, FamilySizes(acc))
+		require.NoError(t, err, acc)
+		for _, s := range all {
+			assert.Positive(t, s.InstanceStoreDisks, s.InstanceType)
+			assert.Positive(t, s.InstanceStoreDiskGB, s.InstanceType)
+			assert.Equal(t, s.InstanceStoreDisks*s.InstanceStoreDiskGB, s.InstanceStoreGB, s.InstanceType)
+		}
 	}
+	assert.PanicsWithValue(t, "instance stores: 7 listed for a family of 8 sizes", func() { gFamily(4, false, g4dnStores) }, "a stores list short of the family's sizes stops the package, never a size without a store")
+	assert.PanicsWithValue(t, "instance stores: 8 listed for a family of 7 sizes", func() { gFamily(4, true, g6Stores) }, "and one too long is caught as well")
 	_, err := Shapes("nvidia-l4", []string{"xlarge", "xlage"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `size "xlage": not a size of the g6 family (nvidia-l4); the sizes are xlarge, 2xlarge, 4xlarge, 8xlarge, 12xlarge, 16xlarge, 24xlarge, 48xlarge`)
@@ -37,15 +47,27 @@ func TestShapesCoverTheChart(t *testing.T) {
 }
 
 // TestShapeUsable pins the node model (giantswarm/agent-platform#502): a
-// g6.xlarge leaves a predictor 3 vCPU / 11.9 GiB, a g6e.xlarge 3 / 27.1.
+// g6.xlarge leaves a predictor 3 vCPU / 11.9 GiB, a g6e.xlarge 3 / 27.1 —
+// and the node's instance store as AWS lists it: one 250 GB device on an
+// xlarge, 450 on a 2xlarge; the g6 and g6e 8xlarge carry two of 450 GB and
+// /var/lib gets one, the g5 8xlarge one of 900, the g4dn.xlarge 125.
 func TestShapeUsable(t *testing.T) {
-	l4, err := Shapes("nvidia-l4", []string{"xlarge", "2xlarge"})
+	l4, err := Shapes("nvidia-l4", []string{"xlarge", "2xlarge", "8xlarge"})
 	require.NoError(t, err)
-	assert.Equal(t, InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, UsableVCPU: 3, UsableMemoryGiB: 11.9}, l4[0])
-	assert.Equal(t, InstanceShape{InstanceType: "g6.2xlarge", Size: "2xlarge", VCPU: 8, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 24, UsableVCPU: 7, UsableMemoryGiB: 27.1}, l4[1])
-	l40s, err := Shapes("nvidia-l40s", []string{"xlarge"})
+	assert.Equal(t, InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 11.9}, l4[0])
+	assert.Equal(t, InstanceShape{InstanceType: "g6.2xlarge", Size: "2xlarge", VCPU: 8, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 450, InstanceStoreDisks: 1, InstanceStoreDiskGB: 450, UsableVCPU: 7, UsableMemoryGiB: 27.1}, l4[1])
+	assert.Equal(t, InstanceShape{InstanceType: "g6.8xlarge", Size: "8xlarge", VCPU: 32, MemoryGiB: 128, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 900, InstanceStoreDisks: 2, InstanceStoreDiskGB: 450, UsableVCPU: 31, UsableMemoryGiB: 118.3}, l4[2], "two devices: /var/lib is 450 GB, not 900")
+	l40s, err := Shapes("nvidia-l40s", []string{"xlarge", "8xlarge"})
 	require.NoError(t, err)
-	assert.Equal(t, InstanceShape{InstanceType: "g6e.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 48, UsableVCPU: 3, UsableMemoryGiB: 27.1}, l40s[0])
+	assert.Equal(t, InstanceShape{InstanceType: "g6e.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 48, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 27.1}, l40s[0])
+	assert.Equal(t, []int{900, 2, 450}, []int{l40s[1].InstanceStoreGB, l40s[1].InstanceStoreDisks, l40s[1].InstanceStoreDiskGB}, "g6e.8xlarge: two devices of 450 GB, like the g6")
+	a10g, err := Shapes("nvidia-a10g", []string{"8xlarge"})
+	require.NoError(t, err)
+	assert.Equal(t, 900, a10g[0].InstanceStoreDiskGB, "one device of 900 GB")
+	t4, err := Shapes("nvidia-t4", []string{"xlarge", "4xlarge"})
+	require.NoError(t, err)
+	assert.Equal(t, 125, t4[0].InstanceStoreGB)
+	assert.Equal(t, 225, t4[1].InstanceStoreGB, "the g4dn 2xlarge and 4xlarge share a 225 GB device")
 }
 
 // TestFit places presets against a pool's sizes: the resized L4 preset on an

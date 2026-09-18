@@ -4,7 +4,7 @@
   "pool": "gpu-l4b",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.6.0",
+  "chartVersion": "0.7.0",
   "kubernetesVersion": "1.30.8",
   "controlPlaneVersion": "v1.30.8",
   "machineImage": "flatcar-stable-4459.2.0-kube-1.30.8-tooling-1.26.0-gs",
@@ -62,7 +62,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "0.6.0"
+          "tag": "0.7.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }
@@ -302,6 +302,9 @@
       "memoryGiB": 16,
       "gpus": 1,
       "gpuMemoryGiB": 24,
+      "instanceStoreGB": 250,
+      "instanceStoreDisks": 1,
+      "instanceStoreDiskGB": 250,
       "usableVcpu": 3,
       "usableMemoryGiB": 11.9,
       "priceNote": "no on-demand price: AWS lists no on-demand g6.xlarge in EU (Ireland) (eu-west-1) — the size is not offered there"

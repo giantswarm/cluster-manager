@@ -171,9 +171,10 @@ type WriteResult struct {
 	LastPool  bool   `json:"lastPool,omitempty"`
 	SliceKept string `json:"sliceKept,omitempty"`
 	// Sizes are the pool's instance sizes as composed (create): the node as
-	// AWS lists it, what it leaves a predictor after the kubelet's
-	// reservations and the fleet's daemonsets, and its on-demand price per
-	// hour in the cluster's region (giantswarm/cluster-manager#44). PresetFit
+	// AWS lists it, its NVMe instance store (what a pool node's /var/lib is
+	// from gpu-node-pool 0.7.0), what it leaves a predictor after the
+	// kubelet's reservations and the fleet's daemonsets, and its on-demand
+	// price per hour in the cluster's region (giantswarm/cluster-manager#44). PresetFit
 	// places the serving presets against them — the ones published on the
 	// cluster, else the ones the slice would publish, read from its chart;
 	// Warnings name the presets the accelerator could serve but no size of

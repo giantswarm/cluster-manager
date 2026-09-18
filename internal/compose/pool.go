@@ -20,8 +20,12 @@ const (
 	// DefaultPoolChartVersion is the pin used when the caller names none:
 	// the newest released chart. The pool release pins the chart exactly — a
 	// bootstrap change rolls GPU nodes under a served model, so bumps are
-	// explicit (bumblebee-plans#46 D3).
-	DefaultPoolChartVersion = "0.6.0"
+	// explicit (bumblebee-plans#46 D3). 0.7.0 keeps a pool node's /var/lib
+	// on its NVMe instance store (the chart's default `pool.volumes.libSource:
+	// instance-store`; cluster-manager writes no volumes block): every size
+	// of the curated families has one (the shape table's stores), so no
+	// size is refused.
+	DefaultPoolChartVersion = "0.7.0"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot
