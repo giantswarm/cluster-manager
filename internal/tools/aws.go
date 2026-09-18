@@ -74,6 +74,15 @@ func (a awsInfra) unknown(reason string) awsInfra {
 	return a
 }
 
+// zonesList is the node subnets' zones for an answer: never null, empty
+// when they are unknown.
+func (a awsInfra) zonesList() []string {
+	if a.zones == nil {
+		return []string{}
+	}
+	return a.zones
+}
+
 // nodeSubnetZones are the distinct zones of the subnets tagged for nodes,
 // sorted.
 func nodeSubnetZones(infra *unstructured.Unstructured) []string {

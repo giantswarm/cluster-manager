@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/cluster-manager/internal/detect"
@@ -34,6 +35,19 @@ import (
 // before: one claim, its zone pins the pool; several, the zone has to be
 // named. The slice release is the cluster's one, so its predictors mount
 // the claim the last create_node_pool with the cache on named.
+//
+// Any combination of zones stands with the cache on, and the pool follows
+// its cache (giantswarm/cluster-manager#79): with several zones the pool's
+// nodes are pinned to the zones named and the slice mounts the claim of the
+// base name — the first predictor binds it to a volume in its node's zone,
+// one of the named, and from then on every predictor mounting it runs there
+// (the scheduler and Karpenter place a pod's node where its volume is); a
+// re-run of the same create pins the pool to that zone. A claim Bound in
+// one of the named zones already pins the pool to it at once, and the note
+// says which zones were named and why one stands. Claims Bound in several
+// of the named zones are refused (the slice mounts one, none is chosen for
+// the person), as is the base claim Bound outside every named zone (a node
+// in the named zones could not mount it).
 
 // cacheClaims is the serving namespace's model cache claims as read on the
 // target as the caller (detect.CacheClaims): the claim of the base name and
@@ -91,6 +105,29 @@ func (r cacheClaims) boundIn(zone string) *detect.CacheClaim {
 		}
 	}
 	return nil
+}
+
+// boundZones are the zones among the given ones a claim is Bound in, in
+// the order given.
+func (r cacheClaims) boundZones(zones []string) []string {
+	var out []string
+	for _, z := range zones {
+		if r.boundIn(z) != nil {
+			out = append(out, z)
+		}
+	}
+	return out
+}
+
+// boundAmong are the claims Bound in any of the zones, by name.
+func (r cacheClaims) boundAmong(zones []string) []*detect.CacheClaim {
+	var out []*detect.CacheClaim
+	for _, c := range r.claims {
+		if c.Phase == detect.ClaimBound && c.Volume != "" && slices.Contains(zones, c.Zone) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // zoneClaim is the claim of a zone — the one Bound there, else the claim
@@ -203,13 +240,13 @@ func (p zonePin) warnings(warnings []string) []string {
 }
 
 // CacheZoneRefusal is the structured form of the zones refusals
-// (Refused.CacheZone): the zones named against the model cache — several
-// zones with the cache on (a claim is one volume in one zone; Claim is nil),
-// or the zone's claim Bound elsewhere (Claim, Bound in ClaimZone) — with the
+// (Refused.CacheZone): the zones named against the model cache — the zone's
+// claim Bound elsewhere, or the base claim a pool across several zones binds
+// Bound outside every zone named (Claim, Bound in ClaimZone) — with the
 // ways out.
 type CacheZoneRefusal struct {
-	// Claim is the model cache claim of the zone named, as read, when it is
-	// Bound outside it (ClaimZone); nil for the several-zones refusal.
+	// Claim is the model cache claim at fault, as read: the named zone's
+	// claim, or the base claim, Bound outside the zones named (ClaimZone).
 	Claim     *detect.CacheClaim `json:"claim,omitempty"`
 	ClaimZone string             `json:"claimZone,omitempty"`
 	// Zones are the zones named on create.
@@ -218,10 +255,10 @@ type CacheZoneRefusal struct {
 	Remedies []string `json:"remedies"`
 }
 
-// CacheClaimsRefusal is the structured form of the claims refusal
+// CacheClaimsRefusal is the structured form of the claims refusals
 // (Refused.CacheClaims): several model cache claims in the serving namespace
-// and no zones named — the pool's slice mounts one claim, its zone's, so the
-// zone has to be named.
+// and no zones named, or claims Bound in several of the zones named — the
+// pool's slice mounts one claim, its zone's, so the zone has to be named.
 type CacheClaimsRefusal struct {
 	Claims   []*detect.CacheClaim `json:"claims"`
 	Remedies []string             `json:"remedies"`
@@ -235,12 +272,12 @@ type CacheClaimsRefusal struct {
 // mounts the zone's claim — the one Bound there, else the claim named after
 // the zone, created by the chart where it does not exist yet; a claim named
 // after the zone but Bound elsewhere is a refusal; a claim not Bound yet,
-// naming no zone or not readable is said beside the pin. Several zones with
-// the cache on are refused: a claim is one volume in one zone. With none
+// naming no zone or not readable is said beside the pin. With none
 // named the claims decide: one claim — Bound, its zone pins the pool and the
 // slice mounts it; not Bound or naming no zone, no pin and the note says what
 // was found; not readable, no pin and a warning —; no claim, the base name
 // and no pin; several claims, a refusal naming them and asking for zones.
+// With several zones named the pool follows its cache (severalZonesPin).
 func zonePinFor(read cacheClaims, cluster string, choice zoneChoice) (zonePin, error) {
 	pin := zonePin{zones: choice.zones, cache: choice.cache}
 	if !choice.cache {
@@ -253,7 +290,7 @@ func zonePinFor(read cacheClaims, cluster string, choice zoneChoice) (zonePin, e
 	case 1:
 		return chosenZonePin(pin, read, cluster, choice.zones[0])
 	default:
-		return pin, severalZonesRefusal(read, choice.zones)
+		return severalZonesPin(pin, read, cluster, choice.zones)
 	}
 }
 
@@ -315,20 +352,100 @@ func chosenZonePin(pin zonePin, read cacheClaims, cluster, zone string) (zonePin
 	return pin, nil
 }
 
-// severalZonesRefusal refuses several zones with the cache on: a claim is one
-// volume in one zone, and the slice mounts one claim.
-func severalZonesRefusal(read cacheClaims, zones []string) error {
+// severalZonesPin is the pin for several zones named while the cache is on
+// (giantswarm/cluster-manager#79): the pool follows its cache. No claim
+// Bound among the named zones: the zones named pin the pool, and the slice
+// mounts the claim of the base name — the first predictor binds it to a
+// volume in its node's zone, one of the named, and from then on every
+// predictor mounting it runs there; the note says how a re-run pins the pool
+// to that zone. One claim Bound among them: the pool is pinned to its zone
+// at once (followedClaimPin). Claims Bound in several of them, or the base
+// claim Bound outside every one of them, are the refusals.
+func severalZonesPin(pin zonePin, read cacheClaims, cluster string, zones []string) (zonePin, error) {
 	named := strings.Join(zones, ", ")
+	pinned := fmt.Sprintf("nodes pinned to %s, the zones named on create", named)
+	ref := read.ref(read.base)
+	pin.claimName = read.base
+	if read.err != "" {
+		pin.note = fmt.Sprintf("%s; the slice mounts the model cache claim %s", pinned, ref)
+		pin.warning = fmt.Sprintf("the model cache claims of %s on %s cannot be read as you (%s): whether a claim is Bound in one of %s, and which, cannot be told — the slice mounts %s, which the connectivity chart creates where it does not exist; a claim Bound outside the zones named strands every predictor mounting it Pending; re-run once you may list the claims, or pass cache false so this pool's slice serves without one", read.namespace, cluster, read.err, named, ref)
+		return pin, nil
+	}
+	switch bound := read.boundZones(zones); len(bound) {
+	case 0:
+	case 1:
+		return followedClaimPin(pin, read, zones, bound[0]), nil
+	default:
+		return pin, severalClaimsAmongZonesRefusal(read, cluster, zones, bound)
+	}
+	base := read.named(read.base)
+	pin.claim = base
+	follows := fmt.Sprintf("the first predictor binds it to a volume in its node's zone, one of %s, and from then on every predictor mounting it runs there — the pool follows its cache: a re-run of this create_node_pool pins the pool's nodes to that zone, and a later pool naming that zone alone reuses the claim", named)
+	switch {
+	case base == nil:
+		pin.note = fmt.Sprintf("%s; the slice mounts the model cache claim %s, which does not exist yet: the connectivity chart creates it and keeps it, and %s%s", pinned, ref, follows, otherClaimsNote(read, read.base))
+	case base.Error != "":
+		pin.note = fmt.Sprintf("%s; the slice mounts the model cache claim %s", pinned, base)
+		pin.warning = fmt.Sprintf("the model cache claim %s on %s cannot be read as you (%s): whether its volume lies in one of %s cannot be told — the cache is one volume, bound in one zone, and a node launched in another zone strands a predictor mounting it Pending; re-run once you may read the claim and its volume, or pass cache false so this pool's slice serves without it", base, cluster, base.Error, named)
+	case base.Phase != detect.ClaimBound || base.Volume == "":
+		pin.note = fmt.Sprintf("%s; the slice mounts the model cache claim %s, %s and bound to no volume yet — %s%s", pinned, base, claimPhase(base), follows, otherClaimsNote(read, read.base))
+	case base.Zone == "":
+		pin.note = fmt.Sprintf("%s; the slice mounts the model cache claim %s, bound to volume %s, whose node affinity names no zone — a volume every zone reaches strands no predictor%s", pinned, base, base.Volume, otherClaimsNote(read, read.base))
+	default:
+		// Bound in a zone: not one of the named, or boundZones had found it.
+		return pin, baseClaimElsewhereRefusal(read, cluster, zones, base)
+	}
+	return pin, nil
+}
+
+// followedClaimPin pins a pool created with several zones to the one of them
+// its model cache claim is Bound in: a predictor mounting the claim runs
+// nowhere else, so the other zones named would only strand a predictor or
+// hold a placeholder it cannot use. The note names the zones named, the one
+// that stands and the ways out.
+func followedClaimPin(pin zonePin, read cacheClaims, zones []string, zone string) zonePin {
+	claim := read.boundIn(zone)
+	others := strings.Join(difference(zones, []string{zone}), ", ")
+	pin.zones = []string{zone}
+	pin.claimName, pin.claim = claim.Name, claim
+	pin.note = fmt.Sprintf("nodes pinned to %s, of %s named on create: the model cache claim %s (volume %s) is Bound there, and a predictor mounting it runs nowhere else — the pool follows its cache, and a node in %s would only strand a predictor Pending or hold a placeholder it cannot use; pass cache false to run across %s without the cache, or name one of %s alone to serve from it with its own claim (%s, created there and kept)%s", zone, strings.Join(zones, ", "), claim, claim.Volume, others, strings.Join(zones, ", "), others, detect.ZoneClaimName(read.base, "<zone>"), otherClaimsNote(read, claim.Name))
+	return pin
+}
+
+// severalClaimsAmongZonesRefusal refuses several zones with a claim Bound in
+// more than one of them: the slice mounts one claim, the zone's, and none is
+// chosen for the person.
+func severalClaimsAmongZonesRefusal(read cacheClaims, cluster string, zones, bound []string) error {
+	claims := read.boundAmong(bound)
 	remedies := []string{
 		fmt.Sprintf("name one zone — the slice then mounts that zone's model cache claim (the one Bound there, else %s, which the connectivity chart creates and keeps)", detect.ZoneClaimName(read.base, "<zone>")),
-		"pass cache false, so this pool's slice serves without the cache across the zones — the weights land in each predictor pod's ephemeral storage",
+		"pass cache false, so this pool's slice serves without the cache across the zones — the weights land in each predictor pod's ephemeral storage, and the claims are left as they are",
 	}
 	return &ErrRefused{
-		Reason: fmt.Sprintf("zones %s with the cache on: a model cache claim is one volume in one zone, and the pool's slice mounts one claim — a predictor launched outside the claim's zone sits Pending (`didn't match PersistentVolume's node affinity`); %s", named, strings.Join(remedies, ", or ")),
+		Reason: fmt.Sprintf("zones %s: model cache claims on %s are Bound in %d of them — %s: a pool's slice mounts one claim, the one of the zone the pool runs in, and none is chosen for you; %s", strings.Join(zones, ", "), cluster, len(bound), describeClaims(claims), strings.Join(remedies, ", or ")),
 		Refused: &Refused{
 			Nodes: []string{}, Models: []string{}, ReadFrom: readFromCluster,
-			Hint:      "Name one zone, or pass cache false, and re-run.",
-			CacheZone: &CacheZoneRefusal{Zones: zones, Remedies: remedies},
+			Hint:        "Name one zone, or pass cache false, and re-run.",
+			CacheClaims: &CacheClaimsRefusal{Claims: claims, Remedies: remedies},
+		},
+	}
+}
+
+// baseClaimElsewhereRefusal refuses several zones while the base claim — the
+// one a pool across several zones binds — is Bound outside every one of
+// them: a pool node in the zones named cannot mount it.
+func baseClaimElsewhereRefusal(read cacheClaims, cluster string, zones []string, claim *detect.CacheClaim) error {
+	remedies := []string{
+		fmt.Sprintf("name %s among the zones — the pool then follows the claim there", claim.Zone),
+		fmt.Sprintf("name one zone — the slice then mounts that zone's model cache claim (the one Bound there, else %s, which the connectivity chart creates and keeps)", detect.ZoneClaimName(read.base, "<zone>")),
+		"pass cache false, so this pool's slice serves without the cache across the zones — the weights land in each predictor pod's ephemeral storage and the claim is left as it is",
+	}
+	return &ErrRefused{
+		Reason: fmt.Sprintf("zones %s: the model cache claim %s on %s — the claim a pool across several zones binds in the zone its first predictor lands in — is bound to volume %s in %s already, outside every zone named, and a pool node launched in %s cannot mount it: every predictor mounting it would sit Pending (`didn't match PersistentVolume's node affinity`); %s", strings.Join(zones, ", "), claim, cluster, claim.Volume, claim.Zone, strings.Join(zones, ", "), strings.Join(remedies, ", or ")),
+		Refused: &Refused{
+			Nodes: []string{}, Models: []string{}, ReadFrom: readFromCluster,
+			Hint:      "Name the claim's zone among the zones, name one zone, or pass cache false, and re-run.",
+			CacheZone: &CacheZoneRefusal{Claim: claim, ClaimZone: claim.Zone, Zones: zones, Remedies: remedies},
 		},
 	}
 }
