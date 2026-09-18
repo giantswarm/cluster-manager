@@ -64,7 +64,7 @@ status:
     - type: Ready
       status: "True"
       reason: InstallSucceeded
-      message: Helm install succeeded for release org-giantswarm/gazelle-gpu-l4.v1 with chart gpu-node-pool@0.4.0
+      message: Helm install succeeded for release org-giantswarm/gazelle-gpu-l4.v1 with chart gpu-node-pool@0.4.1
       lastTransitionTime: "2026-09-18T06:00:09Z"
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -193,7 +193,7 @@ metadata:
     batch.kubernetes.io/job-name: gazelle-gpu-l4-prewarm
 spec:
   nodeName: ip-10-0-1-23.eu-central-1.compute.internal
-  priorityClassName: gazelle-gpu-l4-prewarm
+  priorityClassName: agent-platform-prewarm-placeholder
   priority: -1000
   containers:
     - name: hold

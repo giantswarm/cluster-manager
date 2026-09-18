@@ -246,8 +246,10 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 			removing = true
 		}
 	}
+	var release Step
 	if r.release != nil {
-		steps = append(steps, releaseStep(r.release))
+		release = releaseStep(r.release)
+		steps = append(steps, release)
 		removing = removing || r.release.GetDeletionTimestamp() != nil
 	}
 	steps = append(steps, machinePoolStep(r.mp))
@@ -257,7 +259,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release)))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
-		steps = append(steps, prewarmStep(r.prewarm))
+		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone))
 	}
 	if removing {
 		return PhaseRemoving, steps, true, r.pending
@@ -286,19 +288,29 @@ func poolPhase(steps []Step) Phase {
 }
 
 // prewarmStep words the placeholder's state (giantswarm/cluster-manager#48).
-// The Job's terminal condition decides where it has one: Complete — the hold
-// ended without a workload, done; Failed for DeadlineExceeded — no node came
-// within the hold plus ten minutes, failed; Failed otherwise — the pod ended
-// before its hold, preempted by the first workload (backoffLimit 0: it is not
-// replaced), done. While the Job is active its pod says: Pending while the
-// first node launches, Running while it holds the node, terminating while
-// the first workload takes it. A Job that is gone — its TTL removed it ten
-// minutes after it ended, or prewarm was set on an existing pool and the
-// chart creates the Job on install only — is done, saying so.
-func prewarmStep(p *prewarmState) Step {
+// The chart creates the Job with the release's install only, so an absent
+// Job while the pool release is not Ready (releaseDone false) says nothing
+// about the placeholder — the install has not happened: the step is pending
+// until the release step is done (giantswarm/cluster-manager#53). A Job that
+// exists speaks for itself whatever the release reports. Its terminal
+// condition decides where it has one: Complete — the hold ended without a
+// workload, done; Failed for DeadlineExceeded — no node came within the hold
+// plus ten minutes, failed; Failed otherwise — the pod ended before its hold,
+// preempted by the first workload (backoffLimit 0: it is not replaced), done.
+// While the Job is active its pod says: Pending while the first node
+// launches, Running while it holds the node, terminating while the first
+// workload takes it. A Job that is gone after the release installed — its TTL
+// removed it ten minutes after it ended, or prewarm was set on an existing
+// pool — is done, saying so.
+func prewarmStep(p *prewarmState, releaseDone bool) Step {
 	st := Step{Name: StepPrewarm, State: StepDone}
 	job := p.namespace + "/" + p.name
 	if p.job == nil {
+		if !releaseDone {
+			st.State = StepPending
+			st.Message = "the pool release is not Ready yet: the placeholder Job " + job + " is created with the release's install (the release step says where it stands)"
+			return st
+		}
 		st.Message = "no placeholder Job " + job + ": removed ten minutes after it ended, or prewarm was set on an existing pool (the Job is created with the release's install only)"
 		return st
 	}

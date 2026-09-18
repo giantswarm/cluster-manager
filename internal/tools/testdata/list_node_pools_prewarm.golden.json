@@ -54,7 +54,7 @@
           "state": "done",
           "since": "2026-09-18T06:00:09Z",
           "finishedAt": "2026-09-18T06:00:09Z",
-          "message": "Helm install succeeded for release org-giantswarm/gazelle-gpu-l4.v1 with chart gpu-node-pool@0.4.0"
+          "message": "Helm install succeeded for release org-giantswarm/gazelle-gpu-l4.v1 with chart gpu-node-pool@0.4.1"
         },
         {
           "name": "machinePool",

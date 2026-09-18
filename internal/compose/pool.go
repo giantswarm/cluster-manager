@@ -20,7 +20,7 @@ const (
 	// the newest released chart. The pool release pins the chart exactly — a
 	// bootstrap change rolls GPU nodes under a served model, so bumps are
 	// explicit (bumblebee-plans#46 D3).
-	DefaultPoolChartVersion = "0.4.0"
+	DefaultPoolChartVersion = "0.4.1"
 	// ReleaseInterval is the reconciliation interval of the source and the
 	// release.
 	ReleaseInterval = "10m"

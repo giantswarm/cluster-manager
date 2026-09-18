@@ -1,0 +1,59 @@
+{
+  "cluster": "gazelle",
+  "namespace": "org-giantswarm",
+  "controlPlaneVersion": "v1.31.4",
+  "nodePools": [
+    {
+      "name": "gazelle-gpu-l40s",
+      "namespace": "org-giantswarm",
+      "version": "",
+      "controlPlaneVersion": "v1.31.4",
+      "replicas": 0,
+      "readyReplicas": 0,
+      "instanceTypes": [],
+      "accelerator": "nvidia-l40s",
+      "sizes": [
+        {
+          "instanceType": "g6e.2xlarge",
+          "size": "2xlarge",
+          "vcpu": 8,
+          "memoryGiB": 64,
+          "gpus": 1,
+          "gpuMemoryGiB": 48,
+          "usableVcpu": 7,
+          "usableMemoryGiB": 57.5,
+          "pricePerHourUSD": 2.8035,
+          "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
+          "priceAsOf": "2026-09-17"
+        }
+      ],
+      "ownerRelease": {
+        "name": "gazelle-gpu-l40s",
+        "namespace": "org-giantswarm"
+      },
+      "phase": "failed",
+      "steps": [
+        {
+          "name": "release",
+          "state": "failed",
+          "since": "2026-09-18T00:48:42Z",
+          "message": "InstallFailed: Helm install failed for release org-giantswarm/gazelle-gpu-l40s with chart gpu-node-pool@0.4.0: Unable to continue with install: could not get information about the resource PriorityClass \"gazelle-gpu-l40s-prewarm\" in namespace \"\": priorityclasses.scheduling.k8s.io \"gazelle-gpu-l40s-prewarm\" is forbidden: User \"system:serviceaccount:org-giantswarm:automation\" cannot get resource \"priorityclasses\" in API group \"scheduling.k8s.io\" at the cluster scope"
+        },
+        {
+          "name": "machinePool",
+          "state": "pending",
+          "message": "MachinePool not created yet"
+        },
+        {
+          "name": "nodes",
+          "state": "pending"
+        },
+        {
+          "name": "prewarm",
+          "state": "pending",
+          "message": "the pool release is not Ready yet: the placeholder Job org-giantswarm/gazelle-gpu-l40s-prewarm is created with the release's install (the release step says where it stands)"
+        }
+      ]
+    }
+  ]
+}
