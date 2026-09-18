@@ -133,6 +133,28 @@ func TestListNodePoolsPrewarm(t *testing.T) {
 	}
 }
 
+// TestListNodePoolsPrewarmPendingUntilInstalled (giantswarm/cluster-manager#53):
+// a pool created with prewarm whose release is not Ready — failing to install
+// here, right after create_node_pool — has no placeholder Job because the
+// install that creates it has not happened; the prewarm step is pending,
+// saying so, never done. An absent Job means finished only once the release
+// step is done. The golden is the answer's contract for the portal's row
+// while the pool installs.
+func TestListNodePoolsPrewarmPendingUntilInstalled(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.add(t, l.installation, "prewarm-install-failed.yaml")
+	pools, err := l.service(Config{Installation: "gazelle"}).ListNodePools(context.Background(), "gazelle", "")
+	require.NoError(t, err)
+	require.Len(t, pools.NodePools, 1)
+	pool := pools.NodePools[0]
+	assert.Equal(t, PhaseFailed, pool.Phase, "the release step failed; the placeholder never decides the phase")
+	assert.Equal(t, []string{StepRelease, StepMachinePool, StepNodes, StepPrewarm}, names(pool.Steps))
+	assert.Equal(t, []string{StepFailed, StepPending, StepPending, StepPending}, states(pool.Steps))
+	assert.Equal(t, "the pool release is not Ready yet: the placeholder Job org-giantswarm/gazelle-gpu-l40s-prewarm is created with the release's install (the release step says where it stands)", pool.Steps[3].Message)
+	assert.Empty(t, pool.Steps[3].Since, "nothing has happened to the placeholder yet")
+	assertGolden(t, "list_node_pools_prewarm_install_failed", pools)
+}
+
 // TestPrewarmStep words every state of the placeholder from its Job and pod.
 func TestPrewarmStep(t *testing.T) {
 	job := func(status map[string]any) *unstructured.Unstructured {
@@ -155,33 +177,43 @@ func TestPrewarmStep(t *testing.T) {
 	failed := func(reason, message, at string) map[string]any {
 		return map[string]any{"conditions": []any{map[string]any{"type": "Failed", "status": "True", "reason": reason, "message": message, "lastTransitionTime": at}}}
 	}
+	holding := func() prewarmState {
+		return prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", nil, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}}
+	}
 	cases := []struct {
-		name     string
-		state    prewarmState
-		want     string
-		message  string
-		since    string
-		finished string
+		name  string
+		state prewarmState
+		// releaseDone is whether the pool release's step is done: the chart
+		// creates the Job with the install, so before it an absent Job is
+		// pending, not finished (giantswarm/cluster-manager#53).
+		releaseDone bool
+		want        string
+		message     string
+		since       string
+		finished    string
 	}{
-		{"absent", prewarmState{}, StepDone, "no placeholder Job org-acme/mc-gpu-l4-prewarm: removed ten minutes after it ended, or prewarm was set on an existing pool (the Job is created with the release's install only)", "", ""},
-		{"created, no pod", prewarmState{job: job(map[string]any{"active": int64(0)})}, StepInProgress, "placeholder Job org-acme/mc-gpu-l4-prewarm created, its pod not yet", "2026-09-18T06:00:08Z", ""},
-		{"pending", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Pending", nil, map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}})}},
+		{"absent while the release installs", prewarmState{}, false, StepPending, "the pool release is not Ready yet: the placeholder Job org-acme/mc-gpu-l4-prewarm is created with the release's install (the release step says where it stands)", "", ""},
+		{"absent after the release installed", prewarmState{}, true, StepDone, "no placeholder Job org-acme/mc-gpu-l4-prewarm: removed ten minutes after it ended, or prewarm was set on an existing pool (the Job is created with the release's install only)", "", ""},
+		{"created, no pod", prewarmState{job: job(map[string]any{"active": int64(0)})}, true, StepInProgress, "placeholder Job org-acme/mc-gpu-l4-prewarm created, its pod not yet", "2026-09-18T06:00:08Z", ""},
+		{"pending", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Pending", nil, map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}})}}, true,
 			StepInProgress, "pending: the placeholder waits for the pool's first node, launched by Karpenter for its GPU (0/6 nodes are available: 6 Insufficient nvidia.com/gpu.)", "2026-09-18T06:00:09Z", ""},
-		{"holding", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", nil, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}},
+		{"holding", holding(), true,
 			StepInProgress, "holding node ip-10-0-1-23.eu-central-1.compute.internal until the first workload preempts the placeholder or its hold ends", "2026-09-18T06:04:41Z", ""},
-		{"being preempted", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", map[string]any{"deletionTimestamp": "2026-09-18T06:09:00Z"}, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}},
+		{"holding while the release reconciles again", holding(), false,
+			StepInProgress, "holding node ip-10-0-1-23.eu-central-1.compute.internal until the first workload preempts the placeholder or its hold ends", "2026-09-18T06:04:41Z", ""},
+		{"being preempted", prewarmState{job: job(map[string]any{"active": int64(1)}), pods: []unstructured.Unstructured{pod("Running", map[string]any{"deletionTimestamp": "2026-09-18T06:09:00Z"}, map[string]any{"startTime": "2026-09-18T06:04:41Z"})}}, true,
 			StepInProgress, "preempted: the placeholder's pod is terminating, the first workload takes its node ip-10-0-1-23.eu-central-1.compute.internal", "2026-09-18T06:09:00Z", ""},
-		{"preempted", prewarmState{job: job(failed("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:09:02Z"))},
+		{"preempted", prewarmState{job: job(failed("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:09:02Z"))}, true,
 			StepDone, "preempted: the first workload took the placeholder's node before its hold ended (BackoffLimitExceeded Job has reached the specified backoff limit)", "2026-09-18T06:00:08Z", "2026-09-18T06:09:02Z"},
-		{"finished", prewarmState{job: job(map[string]any{"completionTime": "2026-09-18T06:19:45Z", "conditions": []any{map[string]any{"type": "Complete", "status": "True", "lastTransitionTime": "2026-09-18T06:19:45Z"}}})},
+		{"finished", prewarmState{job: job(map[string]any{"completionTime": "2026-09-18T06:19:45Z", "conditions": []any{map[string]any{"type": "Complete", "status": "True", "lastTransitionTime": "2026-09-18T06:19:45Z"}}})}, true,
 			StepDone, "finished: the hold ended without a workload; Karpenter consolidates the empty node", "2026-09-18T06:00:08Z", "2026-09-18T06:19:45Z"},
-		{"no node came", prewarmState{job: job(failed("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z"))},
+		{"no node came", prewarmState{job: job(failed("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z"))}, true,
 			StepFailed, "no node came within the placeholder's deadline of 1500 s (DeadlineExceeded Job was active longer than specified deadline): check the pool's NodeClaims and Karpenter's log", "2026-09-18T06:00:08Z", "2026-09-18T06:25:08Z"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.state.namespace, tc.state.name = "org-acme", "mc-gpu-l4-prewarm"
-			st := prewarmStep(&tc.state)
+			st := prewarmStep(&tc.state, tc.releaseDone)
 			assert.Equal(t, StepPrewarm, st.Name)
 			assert.Equal(t, tc.want, st.State)
 			assert.Equal(t, tc.message, st.Message)

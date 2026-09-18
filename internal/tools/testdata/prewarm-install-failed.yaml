@@ -1,0 +1,43 @@
+# The installation's own pool created with prewarm, right after
+# create_node_pool, while its release fails to install
+# (giantswarm/cluster-manager#53), added to installation.yaml: the pool
+# release Ready=False, no MachinePool, no placeholder Job — the chart creates
+# the Job with the release's install, which has not happened. list_node_pools
+# lists the prewarm step pending, not done.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+  creationTimestamp: "2026-09-18T00:48:36Z"
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: gazelle
+    giantswarm.io/node-pool: gpu-l40s
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: gazelle-gpu-l40s
+  values:
+    pool:
+      accelerator: nvidia-l40s
+      sizes: [2xlarge]
+      prewarm:
+        enabled: true
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: InstallFailed
+      message: 'Helm install failed for release org-giantswarm/gazelle-gpu-l40s with chart gpu-node-pool@0.4.0: Unable to continue with install: could not get information about the resource PriorityClass "gazelle-gpu-l40s-prewarm" in namespace "": priorityclasses.scheduling.k8s.io "gazelle-gpu-l40s-prewarm" is forbidden: User "system:serviceaccount:org-giantswarm:automation" cannot get resource "priorityclasses" in API group "scheduling.k8s.io" at the cluster scope'
+      lastTransitionTime: "2026-09-18T00:48:42Z"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: gazelle-gpu-l40s
+  namespace: org-giantswarm
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
