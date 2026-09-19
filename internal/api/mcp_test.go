@@ -99,7 +99,7 @@ func TestToolsListAndSchemas(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rpc(t, srv, "tools/list", nil), &listed))
 	names := map[string]bool{}
-	writes := map[string]bool{ToolCreateNodePool: false, ToolDeleteNodePool: true, ToolEnableModelServing: false, ToolDisableModelServing: true}
+	writes := map[string]bool{ToolCreateNodePool: false, ToolDeleteNodePool: true, ToolEnableModelServing: false, ToolDisableModelServing: true, ToolRemoveModelCache: true}
 	for _, tool := range listed.Tools {
 		names[tool.Name] = true
 		destructive, isWrite := writes[tool.Name]

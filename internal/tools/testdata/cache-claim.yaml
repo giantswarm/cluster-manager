@@ -3,12 +3,30 @@
 # connectivity chart's PersistentVolumeClaim, kept when the slice goes, Bound
 # to one EBS volume whose node affinity names the zone the predictor's node
 # was in. Every pool created while the claim exists is pinned to that zone.
+# Its StorageClass — the chart's own, gp3 at 500 MiB/s and the tier's 3000
+# IOPS — is what the claim is billed for beside its storage
+# (giantswarm/cluster-manager#83): 500 GiB in Frankfurt come to $65.45 a
+# month at list prices. The volume goes with the claim (Delete).
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: agent-platform-connectivity-hf-cache
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "500"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: hf-cache
   namespace: model-serving
+  creationTimestamp: "2026-09-16T10:12:00Z"
   labels:
     app.kubernetes.io/component: model-serving
     app.kubernetes.io/name: agent-platform-connectivity
@@ -23,6 +41,8 @@ spec:
       storage: 500Gi
 status:
   phase: Bound
+  capacity:
+    storage: 500Gi
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -45,7 +65,7 @@ spec:
             - key: topology.kubernetes.io/zone
               operator: In
               values: [eu-central-1b]
-  persistentVolumeReclaimPolicy: Retain
+  persistentVolumeReclaimPolicy: Delete
   storageClassName: agent-platform-connectivity-hf-cache
 status:
   phase: Bound

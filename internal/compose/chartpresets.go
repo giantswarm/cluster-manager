@@ -76,40 +76,11 @@ func (p *ShippedPresets) Source() string {
 // chart at that version, and its preset files. Every step that fails is an
 // error naming it; nothing is guessed from another version.
 func ReadShippedPresets(ctx context.Context, r ChartReader, metaVersion string) (*ShippedPresets, error) {
-	metaRef, err := registry.ParseRef(SliceChartURL)
+	child, src, err := connectivityChart(ctx, r, metaVersion)
 	if err != nil {
 		return nil, err
 	}
-	meta, err := r.Chart(ctx, metaRef, metaVersion)
-	if err != nil {
-		return nil, err
-	}
-	entry, err := connectivityEntry(meta)
-	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", SliceChart, metaVersion, err)
-	}
-	childRef, err := registry.ParseRef(strings.TrimSuffix(entry.Repository, "/") + "/" + entry.Chart)
-	if err != nil {
-		return nil, fmt.Errorf("%s %s: components.%s: %w", SliceChart, metaVersion, ConnectivityComponent, err)
-	}
-	out := &ShippedPresets{MetaVersion: metaVersion, Chart: entry.Chart, Range: entry.VersionRange, Registry: childRef.Host}
-	if entry.ownVersion() {
-		// Released off the meta chart's tag: one right version, the meta
-		// chart's own (the template's rule; a range there fails its render).
-		out.Version, out.ReleasedWithChart, out.Range = metaVersion, true, ""
-	} else {
-		tags, err := r.Tags(ctx, childRef)
-		if err != nil {
-			return nil, err
-		}
-		if out.Version, err = registry.Resolve(tags, entry.VersionRange, entry.SemverFilter); err != nil {
-			return nil, fmt.Errorf("%s: %w", childRef, err)
-		}
-	}
-	child, err := r.Chart(ctx, childRef, out.Version)
-	if err != nil {
-		return nil, err
-	}
+	out := &ShippedPresets{MetaVersion: metaVersion, Chart: src.Chart, Version: src.Version, Range: src.Range, ReleasedWithChart: src.ReleasedWithChart, Registry: src.Registry}
 	for _, name := range child.Glob(presetsDir) {
 		if path.Ext(name) != ".yaml" {
 			continue
@@ -118,6 +89,60 @@ func ReadShippedPresets(ctx context.Context, r ChartReader, metaVersion string) 
 	}
 	sort.Slice(out.Presets, func(i, j int) bool { return out.Presets[i].Name < out.Presets[j].Name })
 	return out, nil
+}
+
+// chartSource is where a connectivity chart was resolved from: its name and
+// version, the range that version came from (empty when released with the
+// meta chart) and the registry host.
+type chartSource struct {
+	Chart, Version, Range, Registry string
+	ReleasedWithChart               bool
+}
+
+// connectivityChart resolves and pulls the connectivity chart the slice at
+// metaVersion would release: the meta chart at that version from the slice's
+// chart repository, its connectivity component entry, the connectivity
+// chart's version — the meta chart's own when the entry is released with it
+// (and names no range or filter of its own), else the connectivity chart's
+// tags resolved through the entry's range and filter —, and the chart at
+// that version. Every step that fails is an error naming it; nothing is
+// guessed from another version.
+func connectivityChart(ctx context.Context, r ChartReader, metaVersion string) (*registry.Chart, chartSource, error) {
+	metaRef, err := registry.ParseRef(SliceChartURL)
+	if err != nil {
+		return nil, chartSource{}, err
+	}
+	meta, err := r.Chart(ctx, metaRef, metaVersion)
+	if err != nil {
+		return nil, chartSource{}, err
+	}
+	entry, err := connectivityEntry(meta)
+	if err != nil {
+		return nil, chartSource{}, fmt.Errorf("%s %s: %w", SliceChart, metaVersion, err)
+	}
+	childRef, err := registry.ParseRef(strings.TrimSuffix(entry.Repository, "/") + "/" + entry.Chart)
+	if err != nil {
+		return nil, chartSource{}, fmt.Errorf("%s %s: components.%s: %w", SliceChart, metaVersion, ConnectivityComponent, err)
+	}
+	src := chartSource{Chart: entry.Chart, Range: entry.VersionRange, Registry: childRef.Host}
+	if entry.ownVersion() {
+		// Released off the meta chart's tag: one right version, the meta
+		// chart's own (the template's rule; a range there fails its render).
+		src.Version, src.ReleasedWithChart, src.Range = metaVersion, true, ""
+	} else {
+		tags, err := r.Tags(ctx, childRef)
+		if err != nil {
+			return nil, chartSource{}, err
+		}
+		if src.Version, err = registry.Resolve(tags, entry.VersionRange, entry.SemverFilter); err != nil {
+			return nil, chartSource{}, fmt.Errorf("%s: %w", childRef, err)
+		}
+	}
+	child, err := r.Chart(ctx, childRef, src.Version)
+	if err != nil {
+		return nil, chartSource{}, err
+	}
+	return child, src, nil
 }
 
 // componentEntry is the meta chart's components.<name> entry as far as the

@@ -172,7 +172,9 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 	g.Go(func() error { infra = awsInfrastructure(gctx, dyn, c); return nil })
 	_ = g.Wait()
 	serving.Readiness.Backend = backend
-	serving.Readiness.CacheClaims = claims.claims
+	// Each claim priced in the cluster's region, the one the slice mounts
+	// marked (giantswarm/cluster-manager#83).
+	serving.Readiness.CacheClaims = claims.priced(infra.region, serving.Readiness.Cache)
 	return Cluster{
 		Name:           c.GetName(),
 		Namespace:      c.GetNamespace(),

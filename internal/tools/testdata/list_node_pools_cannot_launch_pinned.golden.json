@@ -27,7 +27,7 @@
           "usableMemoryGiB": 57.5,
           "pricePerHourUSD": 2.8035,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         },
         {
           "instanceType": "g6e.4xlarge",
@@ -43,7 +43,7 @@
           "usableMemoryGiB": 118.3,
           "pricePerHourUSD": 3.75651,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         },
         {
           "instanceType": "g6e.8xlarge",
@@ -59,7 +59,7 @@
           "usableMemoryGiB": 239.9,
           "pricePerHourUSD": 5.66252,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         }
       ],
       "ownerRelease": {
@@ -113,7 +113,7 @@
           "usableMemoryGiB": 57.5,
           "pricePerHourUSD": 2.8035,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         },
         {
           "instanceType": "g6e.4xlarge",
@@ -129,7 +129,7 @@
           "usableMemoryGiB": 118.3,
           "pricePerHourUSD": 3.75651,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         },
         {
           "instanceType": "g6e.8xlarge",
@@ -145,7 +145,7 @@
           "usableMemoryGiB": 239.9,
           "pricePerHourUSD": 5.66252,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         }
       ],
       "ownerRelease": {

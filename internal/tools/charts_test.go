@@ -65,6 +65,9 @@ func shippedPresetCharts() *fakeCharts {
 		add(compose.SliceChartURL, "4.44.1", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
 		add(connectivityChartURL, "4.44.1", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
 		add(connectivityChartURL, "4.45.0", map[string]string{
+			// The cache claim's defaults: 100Gi on the chart's own class, gp3 at
+			// 500 MiB/s and the tier's 3000 IOPS (giantswarm/cluster-manager#83).
+			"values.yaml": "modelServing:\n  cache:\n    enabled: true\n    pvc:\n      name: hf-cache\n      size: 100Gi\n    storageClass:\n      create: true\n      provisioner: ebs.csi.aws.com\n      parameters:\n        type: gp3\n        iops: \"3000\"\n        throughput: \"500\"\n",
 			"files/model-serving/presets/qwen3-8b-fp8.yaml": presetDoc("qwen3-8b-fp8", "Qwen3 8B FP8", "Qwen/Qwen3-8B-FP8", "2", "10Gi", 9, 12),
 			"files/model-serving/presets/qwen3-14b.yaml":    presetDoc("qwen3-14b", "Qwen3 14B", "Qwen/Qwen3-14B", "4", "48Gi", 28, 30),
 			"files/model-serving/presets/wide-l4.yaml":      presetDoc("wide-l4", "Wide L4 recipe", "acme/wide-9b", "4", "16Gi", 8, 12),

@@ -599,7 +599,7 @@
       "usableMemoryGiB": 11.9,
       "pricePerHourUSD": 1.0064,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     },
     {
       "instanceType": "g6.2xlarge",
@@ -615,7 +615,7 @@
       "usableMemoryGiB": 27.1,
       "pricePerHourUSD": 1.22249,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     },
     {
       "instanceType": "g6.4xlarge",
@@ -631,7 +631,7 @@
       "usableMemoryGiB": 57.5,
       "pricePerHourUSD": 1.65466,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     }
   ],
   "presetFit": {
@@ -640,6 +640,7 @@
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache — it does not exist yet: the connectivity chart creates it and keeps it, and the first predictor binds it to a volume in its node's zone: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
+    "priceNote": "no price: the size and tier the connectivity chart creates the claim with could not be read (this server reads no chart registry)",
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — it does not exist yet: the connectivity chart creates it and keeps it (no price: the size and tier the connectivity chart creates the claim with could not be read (this server reads no chart registry)), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache; the first predictor binds it to a volume in its node's zone; the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
   }
 }

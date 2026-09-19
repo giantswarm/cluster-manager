@@ -125,7 +125,22 @@
             "name": "hf-cache",
             "phase": "Bound",
             "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
-            "zone": "eu-central-1b"
+            "zone": "eu-central-1b",
+            "capacity": "500Gi",
+            "capacityGiB": 500,
+            "storageClass": "agent-platform-connectivity-hf-cache",
+            "tier": {
+              "type": "gp3",
+              "iops": 3000,
+              "throughputMiBps": 500
+            },
+            "reclaimPolicy": "Delete",
+            "created": "2026-09-16T10:12:00Z",
+            "price": {
+              "monthlyUSD": 65.45,
+              "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+              "asOf": "2026-09-19"
+            }
           }
         ]
       }

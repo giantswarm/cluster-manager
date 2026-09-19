@@ -9,21 +9,24 @@
       "kind": "OCIRepository",
       "name": "gazelle-agent-platform",
       "namespace": "org-giantswarm",
-      "action": "would-create"
+      "action": "unchanged"
     },
     {
       "apiVersion": "helm.toolkit.fluxcd.io/v2",
       "kind": "HelmRelease",
       "name": "gazelle-agent-platform",
       "namespace": "org-giantswarm",
-      "action": "would-create"
+      "action": "would-update",
+      "changes": [
+        "spec.values.modelServing.cache.enabled"
+      ]
     },
     {
       "apiVersion": "v1",
-      "kind": "ConfigMap",
-      "name": "model-backend-kserve",
-      "namespace": "agent-platform",
-      "action": "would-create"
+      "kind": "PersistentVolumeClaim",
+      "name": "hf-cache",
+      "namespace": "model-serving",
+      "action": "would-delete"
     }
   ],
   "manifests": [
@@ -171,6 +174,9 @@
             }
           },
           "modelServing": {
+            "cache": {
+              "enabled": false
+            },
             "modelsGateway": {
               "enabled": true,
               "jwtAuthentication": {
@@ -186,30 +192,17 @@
           }
         }
       }
-    },
-    {
-      "apiVersion": "v1",
-      "data": {
-        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-giantswarm\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
-      },
-      "kind": "ConfigMap",
-      "metadata": {
-        "labels": {
-          "agent-platform.giantswarm.io/model-backend": "true",
-          "agent-platform.giantswarm.io/model-backend-source": "cluster-manager",
-          "app.kubernetes.io/managed-by": "cluster-manager",
-          "giantswarm.io/cluster": "gazelle"
-        },
-        "name": "model-backend-kserve",
-        "namespace": "agent-platform"
-      }
     }
   ],
   "gpuOperator": {
     "status": ""
   },
   "serving": {
-    "status": "absent"
+    "status": "present",
+    "provider": "cluster-manager",
+    "evidence": [
+      "HelmRelease org-giantswarm/gazelle-agent-platform"
+    ]
   },
   "slice": {
     "name": "gazelle-agent-platform",
@@ -219,16 +212,58 @@
     "modelsHost": "models.gazelle.example.io",
     "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"
   },
-  "backend": {
-    "kind": "kserve",
-    "namespace": "agent-platform",
-    "name": "model-backend-kserve",
-    "target": "local"
-  },
+  "cacheClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b",
+      "capacity": "500Gi",
+      "capacityGiB": 500,
+      "storageClass": "agent-platform-connectivity-hf-cache",
+      "tier": {
+        "type": "gp3",
+        "iops": 3000,
+        "throughputMiBps": 500
+      },
+      "reclaimPolicy": "Delete",
+      "created": "2026-09-16T10:12:00Z",
+      "price": {
+        "monthlyUSD": 65.45,
+        "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+        "asOf": "2026-09-19"
+      },
+      "mounted": true
+    }
+  ],
   "cache": {
-    "enabled": true,
-    "claim": "model-serving/hf-cache",
-    "priceNote": "no price: the size and tier the connectivity chart creates the claim with could not be read (this server reads no chart registry)",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache — it does not exist yet: the connectivity chart creates it and keeps it (no price: the size and tier the connectivity chart creates the claim with could not be read (this server reads no chart registry)), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache; the first predictor binds it to a volume in its node's zone; the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
-  }
+    "enabled": false,
+    "note": "the model cache of gazelle is removed: 1 claim(s) deleted — model-serving/hf-cache (500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of 2026-09-19)) — with their volumes under the class's Delete reclaim policy, and with them the cached weights and compiled graphs of every model served from them; the bill stops with the volume; the slice release org-giantswarm/gazelle-agent-platform is upgraded to modelServing.cache.enabled false, so the connectivity chart applies no claim again and every predictor of gazelle downloads its weights into its pod's ephemeral storage (the node's local disk) at each start — about 90 s more per cold start; a later create_node_pool or enable_model_serving with cache true creates the claim anew and is the slice's upgrade back to the cache"
+  },
+  "removedClaims": [
+    {
+      "namespace": "model-serving",
+      "name": "hf-cache",
+      "phase": "Bound",
+      "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
+      "zone": "eu-central-1b",
+      "capacity": "500Gi",
+      "capacityGiB": 500,
+      "storageClass": "agent-platform-connectivity-hf-cache",
+      "tier": {
+        "type": "gp3",
+        "iops": 3000,
+        "throughputMiBps": 500
+      },
+      "reclaimPolicy": "Delete",
+      "created": "2026-09-16T10:12:00Z",
+      "price": {
+        "monthlyUSD": 65.45,
+        "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+        "asOf": "2026-09-19"
+      },
+      "mounted": true
+    }
+  ]
 }

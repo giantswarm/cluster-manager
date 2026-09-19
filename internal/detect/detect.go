@@ -338,7 +338,7 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 			found = append(found, finding{provider, "HelmRelease " + t.Namespace + "/" + hr.GetName()})
 			state := NewReleaseState(hr)
 			r.Release = &state
-			r.Cache = sliceCache(hr)
+			r.Cache = SliceCacheOf(hr)
 			r.Children = sliceChildren(ctx, t.Installation, t.Namespace, hr.GetName())
 		}
 	}
@@ -388,11 +388,11 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 	return c, r
 }
 
-// sliceCache reads the model cache setting of cluster-manager's slice
+// SliceCacheOf reads the model cache setting of cluster-manager's slice
 // release from its values: on unless modelServing.cache.enabled is false,
 // mounting the claim modelServing.cache.pvc.name names, else the chart's
 // default (giantswarm/cluster-manager#71).
-func sliceCache(hr *unstructured.Unstructured) *SliceCache {
+func SliceCacheOf(hr *unstructured.Unstructured) *SliceCache {
 	if enabled, found, _ := unstructured.NestedBool(hr.Object, "spec", "values", "modelServing", "cache", "enabled"); found && !enabled {
 		return &SliceCache{}
 	}

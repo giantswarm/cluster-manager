@@ -92,6 +92,11 @@ type Refused struct {
 	// serving namespace has several model cache claims
 	// (giantswarm/cluster-manager#71); nil for the others.
 	CacheClaims *CacheClaimsRefusal `json:"cacheClaims,omitempty"`
+	// CacheOn is the refusal of `cache: false` while the cluster's slice
+	// release runs with the cache on — the setting is the cluster's, and the
+	// way to serve without the cache is to remove it
+	// (giantswarm/cluster-manager#83); nil for the others.
+	CacheOn *CacheOnRefusal `json:"cacheOn,omitempty"`
 }
 
 // What the nodes guard read from (Refused.ReadFrom).
@@ -203,6 +208,10 @@ type WriteResult struct {
 	CacheClaim  *detect.CacheClaim   `json:"cacheClaim,omitempty"`
 	CacheClaims []*detect.CacheClaim `json:"cacheClaims,omitempty"`
 	Cache       *CacheSetting        `json:"cache,omitempty"`
+	// RemovedClaims are the model cache claims remove_model_cache deleted
+	// (or, dry-run, would delete), as read before the delete with their
+	// price: what stops being billed (giantswarm/cluster-manager#83).
+	RemovedClaims []*detect.CacheClaim `json:"removedClaims,omitempty"`
 	// Partial marks an apply that stopped writing so its answer arrives
 	// within the caller's deadline: the objects it did not reach are listed
 	// with action `pending`, and NextStep says what to do — re-run, the
@@ -309,6 +318,12 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err := r.aws.checkZones(in.Pool.Zones, target.Cluster); err != nil {
 		return nil, err
 	}
+	// The cache is the cluster's setting: off while the cluster's slice runs
+	// with it on is refused, the way out being to remove the cache
+	// (giantswarm/cluster-manager#83).
+	if !cache && r.slice.cache != nil && r.slice.cache.Enabled {
+		return nil, cacheOnRefusal(r.cache, target.Cluster, r.slice.release, r.slice.cache, r.aws.region)
+	}
 	pin, err := zonePinFor(r.cache, target.Cluster, zoneChoice{zones: in.Pool.Zones, cache: cache})
 	if err != nil {
 		return nil, err
@@ -342,6 +357,11 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	// The claims priced in the cluster's region, and the cache block's
+	// figures for the claim the slice mounts — as read, or as the chart
+	// would create it (giantswarm/cluster-manager#83).
+	claims := r.cache.priced(r.aws.region, r.slice.cache)
+	cacheWords := s.cacheFacts(ctx, target.Cluster, r.aws.region, r.slice, slice, pin)
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: nestedString(objs[0], "spec", "ref", "tag"), KubernetesVersion: facts.KubernetesVersion,
@@ -349,7 +369,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
-		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: r.cache.claims, Cache: s.cacheSettingFor(slice, r.cache, pin),
+		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: claims, Cache: s.cacheSettingFor(slice, r.cache, pin, cacheWords),
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
