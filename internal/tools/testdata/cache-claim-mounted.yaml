@@ -1,0 +1,43 @@
+# The model cache in use (giantswarm/cluster-manager#83): a model
+# model-manager serves in the serving namespace, its predictor pod mounting
+# the claim of cache-claim.yaml. remove_model_cache is refused while the pod
+# is there — the claim's protection finalizer holds a mounted claim, and the
+# predictor reads its weights from it — naming the model to unload first.
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: qwen3-8b
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/managed-by: model-manager
+  annotations:
+    model-manager.giantswarm.io/model: Qwen/Qwen3-8B-FP8
+spec:
+  model:
+    uri: hf://Qwen/Qwen3-8B-FP8
+    name: Qwen/Qwen3-8B-FP8
+  replicas: 1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: qwen3-8b-kserve-7c9d8-xnkd2
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/part-of: llminferenceservice
+    app.kubernetes.io/name: qwen3-8b
+spec:
+  nodeName: gazelle-gpu-l40s-node-1
+  volumes:
+    - name: hf-cache
+      persistentVolumeClaim:
+        claimName: hf-cache
+  containers:
+    - name: main
+      image: vllm
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+status:
+  phase: Running

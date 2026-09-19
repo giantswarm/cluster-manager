@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -471,6 +472,17 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	assert.Empty(t, out.Warnings, "every hostable preset has a size in the default pool")
 	require.NotNil(t, out.Sizes[0].PricePerHourUSD)
 	assert.InDelta(t, 1.0064, *out.Sizes[0].PricePerHourUSD, 1e-9, "g6.xlarge in Frankfurt, beside the fit")
+	// The claim the slice would create, priced from the same chart's defaults
+	// (giantswarm/cluster-manager#83): what the cache costs before it exists.
+	require.NotNil(t, out.Cache)
+	assert.True(t, out.Cache.Enabled)
+	assert.False(t, out.Cache.Exists)
+	assert.Equal(t, "100Gi", out.Cache.Capacity)
+	assert.Equal(t, "gp3, 500 MiB/s, 3000 IOPS", out.Cache.Tier)
+	require.NotNil(t, out.Cache.MonthlyPriceUSD, out.Cache.PriceNote)
+	assert.InDelta(t, 27.37, *out.Cache.MonthlyPriceUSD, 1e-9, "100 GiB gp3 at 500 MiB/s in Frankfurt")
+	assert.Equal(t, "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)", out.Cache.PriceSource)
+	assert.Contains(t, out.Cache.Note, "it does not exist yet: the connectivity chart creates it and keeps it at its defaults, 100Gi gp3, 500 MiB/s, 3000 IOPS: about $27.37 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+"), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache")
 	assertGolden(t, "create_node_pool_preset_fit_from_chart", out)
 
 	narrow := l4("wc1", "gpu-l4", true)
@@ -571,8 +583,21 @@ func TestCreateNodePoolFollowsTheCacheZone(t *testing.T) {
 	require.NotNil(t, out.Cache, "the slice was composed: the answer says the cache is on")
 	assert.True(t, out.Cache.Enabled)
 	assert.Equal(t, "model-serving/hf-cache", out.Cache.Claim)
-	assert.Equal(t, &detect.CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}, out.CacheClaim)
+	require.NotNil(t, out.CacheClaim)
+	assert.Equal(t, "hf-cache", out.CacheClaim.Name)
+	assert.Equal(t, "eu-central-1b", out.CacheClaim.Zone)
+	assert.Equal(t, "500Gi", out.CacheClaim.Capacity, "what the claim is billed for (giantswarm/cluster-manager#83)")
+	assert.Equal(t, &compose.VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500}, out.CacheClaim.Tier, "from its StorageClass")
+	require.NotNil(t, out.CacheClaim.Price, out.CacheClaim.PriceNote)
+	assert.InDelta(t, 65.45, out.CacheClaim.Price.MonthlyUSD, 1e-9, "500 GiB gp3 at 500 MiB/s in Frankfurt")
+	assert.Equal(t, "2026-09-16T10:12:00Z", out.CacheClaim.Created)
+	assert.Equal(t, detect.ReclaimDelete, out.CacheClaim.ReclaimPolicy)
 	assert.Equal(t, []*detect.CacheClaim{out.CacheClaim}, out.CacheClaims, "every claim of the namespace, as read")
+	assert.Equal(t, "500Gi", out.Cache.Capacity)
+	assert.Equal(t, "gp3, 500 MiB/s, 3000 IOPS", out.Cache.Tier)
+	assert.True(t, out.Cache.Exists)
+	assert.InDelta(t, 65.45, *out.Cache.MonthlyPriceUSD, 1e-9, "the cache block carries the claim's price")
+	assert.Contains(t, out.Cache.Note, "500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+"), billed while the claim exists until the cache is removed with remove_model_cache — after every pool of the cluster is removed too")
 	assert.Empty(t, out.Warnings, "a pin is not a warning")
 	_, found, _ := unstructured.NestedString(poolManifest(t, out, "gazelle-agent-platform"), "spec", "values", "modelServing", "cache", "pvc", "name")
 	assert.False(t, found, "the one claim of before is the chart's default: nothing written for it")
@@ -654,7 +679,9 @@ func TestCreateNodePoolZones(t *testing.T) {
 		assert.Equal(t, "nodes pinned to eu-central-1a, the zone named on create; the slice mounts the zone's model cache claim model-serving/hf-cache-eu-central-1a, which does not exist yet: the connectivity chart creates it, the first predictor of the pool binds it to a volume in eu-central-1a, and it is kept when the pool goes — a later pool in eu-central-1a reuses it; the other claims — model-serving/hf-cache (Bound in eu-central-1b) — are left as they are, each its zone's", out.ZonesNote)
 		assert.Empty(t, out.Warnings)
 		assert.Equal(t, "model-serving/hf-cache-eu-central-1a", out.Cache.Claim)
-		assert.Equal(t, "the predictors mount the model cache claim model-serving/hf-cache-eu-central-1a — it does not exist yet: the connectivity chart creates it and keeps it, and the first predictor binds it to a volume in its node's zone: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on", out.Cache.Note)
+		assert.Equal(t, "the predictors mount the model cache claim model-serving/hf-cache-eu-central-1a — it does not exist yet: the connectivity chart creates it and keeps it (no price: the size and tier the connectivity chart creates the claim with could not be read (this server reads no chart registry)), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache; the first predictor binds it to a volume in its node's zone; the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on", out.Cache.Note)
+		assert.False(t, out.Cache.Exists)
+		assert.Contains(t, out.Cache.PriceNote, "this server reads no chart registry")
 		assert.Nil(t, out.CacheClaim, "the zone's claim does not exist yet")
 		assert.Len(t, out.CacheClaims, 1, "the one claim of before, as read")
 		name, found := sliceClaim(t, out)
@@ -762,7 +789,7 @@ func TestCreateNodePoolZones(t *testing.T) {
 		out, err = svc.CreateNodePool(ctx, in)
 		require.NoError(t, err, "several zones without the cache: nothing is mounted, so nothing pins")
 		assert.Equal(t, "nodes pinned to eu-central-1a, eu-central-1c, the zones named on create; this pool's slice serves without the model cache (cache false): no predictor mounts the claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) on gazelle, so their zones pin nothing and they are left as they are", out.ZonesNote)
-		assert.Contains(t, out.Cache.Note, "the existing claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) are left as they are — Helm keeps them — and pin nothing")
+		assert.Contains(t, out.Cache.Note, "the existing claims model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Bound in eu-central-1a) are left as they are — Helm keeps them, each billed while it exists until the cache is removed with remove_model_cache — and pin nothing")
 
 		clusters, err := svc.ListClusters(ctx)
 		require.NoError(t, err)
@@ -912,7 +939,8 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 	require.NotNil(t, out.Cache)
 	assert.False(t, out.Cache.Enabled)
 	assert.Empty(t, out.Cache.Claim)
-	assert.Equal(t, "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing", out.Cache.Note)
+	assert.Equal(t, "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it, 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+"), billed while the claim exists until the cache is removed with remove_model_cache — and pins nothing", out.Cache.Note, "the standing cost is named (giantswarm/cluster-manager#83)")
+	assert.Empty(t, out.Cache.MonthlyPriceUSD, "no figure for a slice without the cache")
 	assert.Nil(t, out.CacheClaim, "no claim is mounted")
 	require.Len(t, out.CacheClaims, 1, "the claims as read stay in the answer")
 	assert.Equal(t, "eu-central-1b", out.CacheClaims[0].Zone)
@@ -939,6 +967,7 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, again.Cache.Enabled)
 	assert.Equal(t, "model-serving/hf-cache", again.Cache.Claim)
+	assert.True(t, strings.HasPrefix(again.Cache.Note, "the model cache is switched on for every pool of gazelle — the slice release is the cluster's one: "), again.Cache.Note)
 	assert.Equal(t, []string{"eu-central-1b"}, again.Zones, "the cache on again: the claim's zone pins the pool")
 	for _, o := range again.Objects {
 		if o.Kind == "HelmRelease" && o.Name == "gazelle-agent-platform" {

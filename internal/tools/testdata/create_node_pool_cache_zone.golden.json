@@ -532,7 +532,7 @@
       "usableMemoryGiB": 57.5,
       "pricePerHourUSD": 2.8035,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     },
     {
       "instanceType": "g6e.4xlarge",
@@ -548,7 +548,7 @@
       "usableMemoryGiB": 118.3,
       "pricePerHourUSD": 3.75651,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     }
   ],
   "presetFit": {
@@ -563,7 +563,22 @@
     "name": "hf-cache",
     "phase": "Bound",
     "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
-    "zone": "eu-central-1b"
+    "zone": "eu-central-1b",
+    "capacity": "500Gi",
+    "capacityGiB": 500,
+    "storageClass": "agent-platform-connectivity-hf-cache",
+    "tier": {
+      "type": "gp3",
+      "iops": 3000,
+      "throughputMiBps": 500
+    },
+    "reclaimPolicy": "Delete",
+    "created": "2026-09-16T10:12:00Z",
+    "price": {
+      "monthlyUSD": 65.45,
+      "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+      "asOf": "2026-09-19"
+    }
   },
   "cacheClaims": [
     {
@@ -571,12 +586,34 @@
       "name": "hf-cache",
       "phase": "Bound",
       "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
-      "zone": "eu-central-1b"
+      "zone": "eu-central-1b",
+      "capacity": "500Gi",
+      "capacityGiB": 500,
+      "storageClass": "agent-platform-connectivity-hf-cache",
+      "tier": {
+        "type": "gp3",
+        "iops": 3000,
+        "throughputMiBps": 500
+      },
+      "reclaimPolicy": "Delete",
+      "created": "2026-09-16T10:12:00Z",
+      "price": {
+        "monthlyUSD": 65.45,
+        "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+        "asOf": "2026-09-19"
+      }
     }
   ],
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
-    "note": "the predictors mount the model cache claim model-serving/hf-cache — Bound in eu-central-1b (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), kept by the connectivity chart: the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
+    "exists": true,
+    "since": "2026-09-16T10:12:00Z",
+    "capacity": "500Gi",
+    "tier": "gp3, 500 MiB/s, 3000 IOPS",
+    "monthlyPriceUSD": 65.45,
+    "priceSource": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+    "priceAsOf": "2026-09-19",
+    "note": "the predictors mount the model cache claim model-serving/hf-cache — Bound in eu-central-1b (volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80), kept by the connectivity chart: 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of 2026-09-19), billed while the claim exists until the cache is removed with remove_model_cache — after every pool of the cluster is removed too; the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
   }
 }

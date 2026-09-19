@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,7 +105,7 @@ func TestEnableModelServingWithoutCache(t *testing.T) {
 	assert.False(t, enabled)
 	require.NotNil(t, out.Cache)
 	assert.False(t, out.Cache.Enabled)
-	assert.Contains(t, out.Cache.Note, "the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing")
+	assert.Contains(t, out.Cache.Note, "the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it, 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices")
 
 	on, err := svc.EnableModelServing(ctx, serving("gazelle", true))
 	require.NoError(t, err)
@@ -145,14 +146,20 @@ func TestEnableModelServingKeepsTheZoneClaim(t *testing.T) {
 		}
 	}
 
+	// The cache is the cluster's setting: off while the release runs with it
+	// on is refused, the way to serve without it being remove_model_cache
+	// (giantswarm/cluster-manager#83).
 	off := false
 	in2 := serving("gazelle", true)
 	in2.Cache = &off
-	out, err = svc.EnableModelServing(ctx, in2)
-	require.NoError(t, err)
-	_, found, _ = unstructured.NestedString(out.Manifests[1], "spec", "values", "modelServing", "cache", "pvc", "name")
-	assert.False(t, found, "no claim is mounted: none is named")
-	assert.Contains(t, out.Cache.Note, "the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is")
+	_, err = svc.EnableModelServing(ctx, in2)
+	assertRefused(t, err, "cache false: the model cache is on for every pool of gazelle — the slice release org-giantswarm/gazelle-agent-platform is the cluster's one and mounts model-serving/hf-cache-eu-central-1a")
+	var refused *ErrRefused
+	require.True(t, errors.As(err, &refused))
+	require.NotNil(t, refused.Refused.CacheOn)
+	assert.Equal(t, "hf-cache-eu-central-1a", refused.Refused.CacheOn.ClaimName)
+	assert.Nil(t, refused.Refused.CacheOn.Claim, "the zone's claim does not exist yet")
+	assert.Len(t, refused.Refused.CacheOn.Remedies, 2)
 }
 
 // TestCreateNodePoolUpdatesTheSliceInPlace: with the slice on wc1 from

@@ -48,7 +48,16 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["nodes", "pods", "events", "persistentvolumeclaims", "persistentvolumes"]
+    resources: ["nodes", "pods", "events", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  # The model cache claims: read for their zone, size and price; deleted by
+  # remove_model_cache (giantswarm/cluster-manager#83). Their StorageClass
+  # names the tier a claim is billed for.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
@@ -154,6 +155,27 @@ func (r cacheClaims) others(name string) []*detect.CacheClaim {
 
 // ref is a claim's `namespace/name` for the answer.
 func (r cacheClaims) ref(name string) string { return r.namespace + "/" + name }
+
+// priced fills every claim's monthly list price for the region
+// (detect.CacheClaim.Priced) and marks the claim the slice release mounts —
+// its modelServing.cache.pvc.name with the cache on — and returns the claims
+// for an answer: nil when they could not be read.
+func (r cacheClaims) priced(region compose.Region, slice *detect.SliceCache) []*detect.CacheClaim {
+	for _, c := range r.claims {
+		c.Priced(region)
+		c.Mounted = slice != nil && slice.Enabled && c.Name == slice.Claim
+	}
+	return r.claims
+}
+
+// standingNote is the clause a note carries for a claim that exists and is
+// left standing: what it costs and how that stops.
+func standingNote(c *detect.CacheClaim) string {
+	if standing := c.Standing(); standing != "" {
+		return standing + ", billed while the claim exists until the cache is removed with remove_model_cache"
+	}
+	return "billed while the claim exists until the cache is removed with remove_model_cache"
+}
 
 // describeClaims words claims for a sentence, each with where it stands:
 // `model-serving/hf-cache (Bound in eu-central-1b), model-serving/hf-cache-eu-central-1a (Pending)`.
@@ -505,22 +527,48 @@ func noCacheNote(read cacheClaims, cluster string, zones []string) string {
 
 // CacheSetting is the answer's word on the model cache for the slice the
 // write composed (create_node_pool, enable_model_serving): whether the
-// predictors mount a cache claim, which one, and what follows.
+// predictors mount a cache claim, which one, what it costs, and what follows.
 type CacheSetting struct {
 	Enabled bool `json:"enabled"`
 	// Claim names the claim the predictors mount (`namespace/name`); empty
 	// when the cache is off.
 	Claim string `json:"claim,omitempty"`
-	Note  string `json:"note"`
+	// Exists says whether that claim exists already (as read) or the
+	// connectivity chart creates it with the slice.
+	Exists bool `json:"exists,omitempty"`
+	// Since is the claim's creation time when it exists (RFC3339).
+	Since string `json:"since,omitempty"`
+	// Capacity and Tier are the claim's — as read, or as the chart creates
+	// it (its defaults) — and MonthlyPriceUSD what its volume is billed per
+	// month at list prices in the cluster's region, with PriceSource and
+	// PriceAsOf; PriceNote says why there is no figure. All empty with the
+	// cache off (giantswarm/cluster-manager#83).
+	Capacity        string   `json:"capacity,omitempty"`
+	Tier            string   `json:"tier,omitempty"`
+	MonthlyPriceUSD *float64 `json:"monthlyPriceUSD,omitempty"`
+	PriceSource     string   `json:"priceSource,omitempty"`
+	PriceAsOf       string   `json:"priceAsOf,omitempty"`
+	PriceNote       string   `json:"priceNote,omitempty"`
+	Note            string   `json:"note"`
+}
+
+// priced fills the block's figures from a price and its note.
+func (c *CacheSetting) priced(price *compose.ClaimPrice, note string) {
+	if price != nil {
+		monthly := price.MonthlyUSD
+		c.MonthlyPriceUSD, c.PriceSource, c.PriceAsOf = &monthly, price.Source, price.AsOf
+		return
+	}
+	c.PriceNote = note
 }
 
 // cacheSettingFor is the answer's cache block for the slice a write composed;
 // nil when none was.
-func (s *Service) cacheSettingFor(slice *SliceRelease, read cacheClaims, pin zonePin) *CacheSetting {
+func (s *Service) cacheSettingFor(slice *SliceRelease, read cacheClaims, pin zonePin, facts cacheFacts) *CacheSetting {
 	if slice == nil {
 		return nil
 	}
-	return cacheSetting(read, pin)
+	return cacheSetting(read, pin, facts)
 }
 
 // cacheSetting words the cache setting: on, the claim the slice's predictors
@@ -529,20 +577,42 @@ func (s *Service) cacheSettingFor(slice *SliceRelease, read cacheClaims, pin zon
 // modelServing.cache.enabled false, the weights in the pod's ephemeral
 // storage, no zone following from a claim — and the claims as read, when
 // there are any, left as they are.
-func cacheSetting(read cacheClaims, pin zonePin) *CacheSetting {
+func cacheSetting(read cacheClaims, pin zonePin, facts cacheFacts) *CacheSetting {
 	if pin.cache {
 		ref := read.ref(pin.claimName)
+		out := &CacheSetting{Enabled: true, Claim: ref}
 		note := "the predictors mount the model cache claim " + ref
-		switch {
-		case pin.claim == nil:
-			note += " — it does not exist yet: the connectivity chart creates it and keeps it, and the first predictor binds it to a volume in its node's zone"
-		case pin.claim.Error == "" && pin.claim.BoundIn(pin.claim.Zone) && pin.claim.Zone != "":
-			note += fmt.Sprintf(" — Bound in %s (volume %s), kept by the connectivity chart", pin.claim.Zone, pin.claim.Volume)
-		default:
-			note += fmt.Sprintf(" (%s; the connectivity chart keeps it)", claimWhere(pin.claim))
+		if pin.claim == nil {
+			capacity, tier, price, priceNote := facts.projected()
+			out.Capacity, out.Tier = capacity, tier
+			out.priced(price, priceNote)
+			note += " — it does not exist yet: the connectivity chart creates it and keeps it"
+			if capacity != "" {
+				note += fmt.Sprintf(" at its defaults, %s", projectedStanding(capacity, tier, price, priceNote))
+			} else {
+				note += " (" + priceNote + ")"
+			}
+			note += ", billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache; the first predictor binds it to a volume in its node's zone"
+		} else {
+			pin.claim.Priced(facts.region)
+			out.Exists, out.Since, out.Capacity = true, pin.claim.Created, pin.claim.Capacity
+			if pin.claim.Tier != nil {
+				out.Tier = pin.claim.Tier.String()
+			}
+			out.priced(pin.claim.Price, firstNonEmpty(pin.claim.PriceNote, pin.claim.TierNote))
+			if pin.claim.Error == "" && pin.claim.BoundIn(pin.claim.Zone) && pin.claim.Zone != "" {
+				note += fmt.Sprintf(" — Bound in %s (volume %s), kept by the connectivity chart", pin.claim.Zone, pin.claim.Volume)
+			} else {
+				note += fmt.Sprintf(" (%s; the connectivity chart keeps it)", claimWhere(pin.claim))
+			}
+			note += ": " + standingNote(pin.claim) + " — after every pool of the cluster is removed too"
 		}
-		note += ": the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
-		return &CacheSetting{Enabled: true, Claim: ref, Note: note}
+		note += "; the weights and compiled graphs of every model served from this slice are kept there, and a pool created in the claim's zone with the cache on reuses it; the slice release is the cluster's one, so every predictor of the cluster mounts this claim from now on"
+		if facts.before != nil && !facts.before.Enabled {
+			note = fmt.Sprintf("the model cache is switched on for every pool of %s — the slice release is the cluster's one: %s", facts.cluster, note)
+		}
+		out.Note = note
+		return out
 	}
 	note := "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache"
 	switch {
@@ -555,9 +625,113 @@ func cacheSetting(read cacheClaims, pin zonePin) *CacheSetting {
 		if claim.Zone != "" {
 			note += " in " + claim.Zone
 		}
-		note += ") is left as it is — Helm keeps it — and pins nothing"
+		note += fmt.Sprintf(") is left as it is — Helm keeps it, %s — and pins nothing", standingNote(claim))
 	case len(read.claims) > 1:
-		note += fmt.Sprintf("; the existing claims %s are left as they are — Helm keeps them — and pin nothing", describeClaims(read.claims))
+		note += fmt.Sprintf("; the existing claims %s are left as they are — Helm keeps them, each billed while it exists until the cache is removed with remove_model_cache — and pin nothing", describeClaims(read.claims))
+	}
+	if facts.before != nil && facts.before.Enabled {
+		note = fmt.Sprintf("the model cache is switched off for every pool of %s — the slice release is the cluster's one: %s", facts.cluster, note)
 	}
 	return &CacheSetting{Note: note}
+}
+
+// cacheFacts is what the cache block of an answer is worded from beside the
+// pin: the cluster's region (the price), the slice's cache setting before
+// the write (nil for no slice release of cluster-manager's) and, for a claim
+// that does not exist yet, the size and tier the connectivity chart creates
+// it with — or why they could not be read.
+type cacheFacts struct {
+	cluster      string
+	region       compose.Region
+	before       *detect.SliceCache
+	defaults     *compose.CacheDefaults
+	defaultsNote string
+}
+
+// projected is the cache block's figures for the claim the chart would
+// create: its size and tier from the chart's defaults, priced in the region.
+func (f cacheFacts) projected() (capacity, tier string, price *compose.ClaimPrice, note string) {
+	if f.defaults == nil {
+		return "", "", nil, "no price: the size and tier the connectivity chart creates the claim with could not be read" + suffixNote(f.defaultsNote)
+	}
+	price, note = compose.PriceClaim(f.region, f.defaults.SizeGiB, f.defaults.Tier)
+	return f.defaults.Size, f.defaults.Tier.String(), price, note
+}
+
+// suffixNote is ` (reason)` for a reason, empty for none.
+func suffixNote(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return " (" + reason + ")"
+}
+
+// CacheOnRefusal is the structured form of the refusal of `cache: false`
+// while the cluster's slice release runs with the cache on
+// (Refused.CacheOn; giantswarm/cluster-manager#83): the claim the slice
+// mounts as read (nil while it does not exist yet), its name, and the ways
+// out.
+type CacheOnRefusal struct {
+	Claim     *detect.CacheClaim `json:"claim,omitempty"`
+	ClaimName string             `json:"claimName"`
+	Remedies  []string           `json:"remedies"`
+}
+
+// cacheOnRefusal refuses `cache: false` for a cluster whose slice release
+// runs with the cache on: the slice release is the cluster's one, so the
+// flip would switch the cache off for the models served on every pool of the
+// cluster while the claim stays and keeps costing. The ways out: leave the
+// cache on, or remove it — the slice then serves from the node's disk and
+// the claim goes with its volume.
+func cacheOnRefusal(read cacheClaims, cluster, release string, slice *detect.SliceCache, region compose.Region) error {
+	name := slice.Claim
+	if name == "" {
+		name = read.base
+	}
+	claim := read.named(name)
+	mounts := fmt.Sprintf("mounts %s", read.ref(name))
+	if claim != nil {
+		claim.Priced(region)
+		mounts = fmt.Sprintf("mounts %s (%s", claim, claimWhere(claim))
+		if standing := claim.Standing(); standing != "" {
+			mounts += "; " + standing
+		}
+		mounts += ")"
+	}
+	remedies := []string{
+		"leave cache on (the default): this pool's slice mounts the cluster's cache like every other pool's",
+		"remove the cache with remove_model_cache: the slice release is upgraded to serve without it, the claim and its volume go, and every model served on the cluster downloads and compiles again at its next start",
+	}
+	return &ErrRefused{
+		Reason: fmt.Sprintf("cache false: the model cache is on for every pool of %s — the slice release %s is the cluster's one and %s — and cache false on this pool would switch it off for the models served on every pool while the claim stays and keeps costing; %s", cluster, release, mounts, strings.Join(remedies, ", or ")),
+		Refused: &Refused{
+			Nodes: []string{}, Models: []string{}, ReadFrom: readFromCluster,
+			Hint:    "Leave cache on, or remove the cache with remove_model_cache, and re-run.",
+			CacheOn: &CacheOnRefusal{Claim: claim, ClaimName: name, Remedies: remedies},
+		},
+	}
+}
+
+// projectedStanding words the claim the chart would create: `100Gi gp3, 500
+// MiB/s, 3000 IOPS: about $27.37 a month at list prices (…)`, or the size
+// with why there is no price.
+func projectedStanding(capacity, tier string, price *compose.ClaimPrice, priceNote string) string {
+	size := capacity
+	if tier != "" {
+		size += " " + tier
+	}
+	if price != nil {
+		return fmt.Sprintf("%s: about $%.2f a month at list prices (%s, as of %s)", size, price.MonthlyUSD, price.Source, price.AsOf)
+	}
+	return size + " (" + priceNote + ")"
+}
+
+// firstNonEmpty is the first of the strings that is not empty.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -236,7 +236,14 @@ func TestListClusters(t *testing.T) {
 	assert.Equal(t, detect.ProviderChart, byName["wc2"].Serving.Provider, "the platform's discovery ConfigMap")
 	assert.Equal(t, []string{"discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)
 	assert.Equal(t, detect.StatusAbsent, byName["gazelle"].GPUOperator.Status, "the installation's own cluster is read through the installation")
-	assert.Equal(t, []*detect.CacheClaim{{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}}, byName["gazelle"].Serving.Readiness.CacheClaims, "the model cache claims with their zones under serving readiness (giantswarm/cluster-manager#59, #71)")
+	require.Len(t, byName["gazelle"].Serving.Readiness.CacheClaims, 1, "the model cache claims with their zones under serving readiness (giantswarm/cluster-manager#59, #71)")
+	claim := byName["gazelle"].Serving.Readiness.CacheClaims[0]
+	assert.Equal(t, "hf-cache", claim.Name)
+	assert.Equal(t, "eu-central-1b", claim.Zone)
+	assert.Equal(t, "500Gi", claim.Capacity, "and what each is billed for (giantswarm/cluster-manager#83)")
+	require.NotNil(t, claim.Price)
+	assert.InDelta(t, 65.45, claim.Price.MonthlyUSD, 1e-9, "priced in the cluster's region")
+	assert.False(t, claim.Mounted, "no slice release of cluster-manager's mounts it")
 	assert.Equal(t, []*detect.CacheClaim{}, byName["wc1"].Serving.Readiness.CacheClaims, "no claim on wc1: an empty list, not null")
 	assert.Nil(t, byName["gazelle"].Serving.Readiness.Cache, "no slice release of cluster-manager's: the slice's cache setting is unknown")
 

@@ -27,7 +27,7 @@
           "usableMemoryGiB": 57.5,
           "pricePerHourUSD": 2.8035,
           "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-          "priceAsOf": "2026-09-17"
+          "priceAsOf": "2026-09-19"
         }
       ],
       "ownerRelease": {

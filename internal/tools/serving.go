@@ -96,6 +96,16 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if pin.claimName == "" {
 		pin.claimName = s.cfg.cacheClaimName()
 	}
+	// The answer says where the claim the slice mounts stands, what it
+	// costs, and what becomes of the claims that exist with the cache off.
+	claims := s.readCacheClaims(ctx, target)
+	infra := awsInfrastructure(ctx, dyn, c)
+	// The cache is the cluster's setting: off while the release runs with
+	// it on is refused, the way out being to remove the cache
+	// (giantswarm/cluster-manager#83).
+	if !pin.cache && reads.cache != nil && reads.cache.Enabled {
+		return nil, cacheOnRefusal(claims, c.GetName(), reads.release, reads.cache, infra.region)
+	}
 	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, pin.sliceCache())
 	if err != nil {
 		return nil, err
@@ -103,10 +113,8 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if slice == nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("serving is already present on %s, provided by %s (%s): the slice release is composed only where nothing provides serving — nothing to do", c.GetName(), providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
-	// The answer says where the claim the slice mounts stands, and what
-	// becomes of the claims that exist with the cache off.
-	claims := s.readCacheClaims(ctx, target)
 	pin.claim = claims.named(pin.claimName)
+	claims.priced(infra.region, reads.cache)
 	instances, err := poolShapes(ctx, dyn, c.GetNamespace(), c.GetName(), pool)
 	if err != nil {
 		return nil, err
@@ -121,7 +129,8 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{},
-		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin),
+		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin, s.cacheFacts(ctx, c.GetName(), infra.region, reads, slice, pin)),
+		CacheClaim: pin.claim, CacheClaims: claims.claims,
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 	}
 	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
@@ -198,6 +207,11 @@ type sliceReads struct {
 	serving    detect.Component
 	platform   compose.PlatformInputs
 	cacheClaim string
+	// release names cluster-manager's slice release of the cluster
+	// (`namespace/name`) and cache its model cache setting as its values
+	// state it; nil while there is no release (giantswarm/cluster-manager#83).
+	release string
+	cache   *detect.SliceCache
 }
 
 // readSlice detects serving on the target and, where the slice would be
@@ -215,6 +229,8 @@ func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target
 		hr, err := s.sliceReleaseOf(gctx, dyn, t.Namespace, t.Cluster)
 		if hr != nil {
 			r.cacheClaim, _, _ = unstructured.NestedString(hr.Object, "spec", "values", "modelServing", "cache", "pvc", "name")
+			r.release = hr.GetNamespace() + "/" + hr.GetName()
+			r.cache = detect.SliceCacheOf(hr)
 		}
 		return err
 	})
@@ -223,6 +239,31 @@ func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target
 		return err
 	})
 	return r, g.Wait()
+}
+
+// cacheFacts gathers what the cache block is worded from: the cluster's
+// region, the slice's cache setting before the write, and — for a slice
+// composed with the cache on whose claim does not exist yet — the size and
+// tier the connectivity chart at the slice's version creates it with, read
+// from the registry (compose.ReadCacheDefaults); a read that fails is the
+// note, never a guess (giantswarm/cluster-manager#83).
+func (s *Service) cacheFacts(ctx context.Context, cluster string, region compose.Region, reads sliceReads, slice *SliceRelease, pin zonePin) cacheFacts {
+	f := cacheFacts{cluster: cluster, region: region, before: reads.cache}
+	if slice == nil || !pin.cache || pin.claim != nil {
+		return f
+	}
+	if s.charts == nil {
+		f.defaultsNote = "this server reads no chart registry"
+		return f
+	}
+	defer timed(ctx, "cache defaults from the chart")()
+	defaults, err := compose.ReadCacheDefaults(ctx, s.charts, slice.ChartVersion)
+	if err != nil {
+		f.defaultsNote = err.Error()
+		return f
+	}
+	f.defaults = defaults
+	return f
 }
 
 // composesSlice reports whether the slice's part of a write is composed: when

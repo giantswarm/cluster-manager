@@ -27,11 +27,12 @@ const (
 
 	ToolEnableModelServing  = "enable_model_serving"
 	ToolDisableModelServing = "disable_model_serving"
+	ToolRemoveModelCache    = "remove_model_cache"
 )
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
-	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing}
+	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing, ToolRemoveModelCache}
 }
 
 const (
@@ -49,6 +50,7 @@ const (
 	argPrewarm      = "prewarm"
 	argZones        = "zones"
 	argCache        = "cache"
+	argClaim        = "claim"
 
 	defaultMaxGPUs = 4
 )
@@ -78,7 +80,7 @@ type Modes struct {
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("cluster-manager", version,
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	t := &handlers{svc: svc, version: version}
 
@@ -111,7 +113,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithBoolean(argTeleport, mcp.Description("Join the nodes to Teleport; default on when the cluster has its teleport join-token Secret, off otherwise")),
 		mcp.WithBoolean(argPrewarm, mcp.DefaultBool(false), mcp.Description("Launch the pool's first node with the release instead of with the first predictor (pool.prewarm.enabled): a one-shot placeholder Job in the release namespace holds one GPU at negative priority until the first workload preempts it or its hold (the chart's default, 15 minutes) ends and Karpenter consolidates the empty node. Only for the installation's own pool — the Job runs on the installation, where only that pool's nodes join; refused for a workload cluster's pool, naming why. The Job is created with the release's install only: a re-run on an existing pool flips the value but never launches a placeholder again, and a re-run with prewarm false removes the block. list_node_pools shows the placeholder as the prewarm step.")),
 		mcp.WithArray(argZones, mcp.Items(map[string]any{"type": "string"}), mcp.Description("The availability zones the pool's nodes may launch in, any combination of the zones of the cluster's node subnets (pool.zones; [\"eu-central-1a\"], [\"eu-central-1a\", \"eu-central-1c\"]; list_clusters names them per cluster) — a zone the cluster has no node subnet in is refused, naming the zones it has. With the cache on and one zone the pool's slice mounts that zone's model cache claim (the claim Bound there, else hf-cache-<zone>, created by the connectivity chart and kept), so the zone is chosen by capacity and brings its own cache; with several zones the pool follows its cache: the slice mounts hf-cache, the first predictor binds it in its node's zone, one of the named, and from then on the predictors run there — a claim Bound in one of the named zones pins the pool to it at once, claims Bound in several of them are refused. Default none: the serving namespace's claims decide — one claim Bound pins the pool to its zone and the slice mounts it; several claims are refused, asking for zones. A re-run moves the pin and the claim.")),
-		mcp.WithBoolean(argCache, mcp.DefaultBool(true), mcp.Description("Whether this pool's serving slice mounts a model cache claim (default true): the zone's claim with zones, else the one claim of the serving namespace. false composes modelServing.cache.enabled false on the <cluster>-agent-platform release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, no zone pin follows from a claim, and the existing claims are left as they are (Helm keeps them). A re-run with a changed value is the slice's upgrade. Refused where someone else provides serving — the setting is that layer's.")),
+		mcp.WithBoolean(argCache, mcp.DefaultBool(true), mcp.Description("Whether the cluster's serving slice mounts a model cache claim (default true): the zone's claim with zones, else the one claim of the serving namespace. The setting is the cluster's — the slice release is the cluster's one, so every pool serves from the same claim — and the claim is a gp3 volume billed every month it exists, after every pool is removed too, until the cache is removed with remove_model_cache: the answer's cache block names the claim, its size, tier and monthly list price in the cluster's region (monthlyPriceUSD, or priceNote why there is none), existing or as the connectivity chart would create it. false composes modelServing.cache.enabled false on the <cluster>-agent-platform release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, no zone pin follows from a claim, and the existing claims are left as they are, Helm keeping them and the bill running. Refused (refused{cacheOn{claim, claimName, remedies}}) while the cluster's slice release runs with the cache on — the flip would switch the cache off for the models served on every pool while the claim stays: leave cache on, or remove the cache with remove_model_cache; a first slice with cache false stands, and cache true on a slice that ran without it is the slice's upgrade for every pool. Refused where someone else provides serving — the setting is that layer's.")),
 		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you (the only mode this version offers); commit: a pull request as you (refused until available)")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -134,7 +136,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithDescription("Switch model serving on for a cluster, with or without a GPU pool: composes the cluster's one <cluster>-agent-platform release (the agent-platform chart pinned exactly to the version the installation's own platform release runs, at least 4.27.0 — refused below it, naming why; a HelmRelease and its OCIRepository in the cluster's org- namespace, delivered by the installation's Flux) with the serving slice on — KServe and the llm-d control plane with the well-known configs, the nvidia RuntimeClass, the models Gateway at models.<domain> with the login issuer's JWT policy — validating against the platform's Dex service in-cluster on the installation's own cluster (the answer's slice.jwks names the source), against the public issuer on a workload cluster; global.domain, global.identity and where Dex serves its key set (gateway.jwksEgress) read from the platform's own release, never invented; on a workload cluster the target knob (gitops.target.kubeConfig.secretRef: <cluster>-kubeconfig) and agentgateway on, beside the platform's release agentgateway off — and registers the cluster's kserve backend with model-manager. A release that exists is updated in place (never a second release of the chart on one cluster: one under another name is refused, naming it). Refused where the platform's own release or a hand install provides serving already. dryRun returns the rendered manifests and touches nothing. Stranded terminating LLMInferenceServiceConfigs of the release namespace are healed first, as create_node_pool does. cache (default true) is whether the slice's predictors mount the serving namespace's model cache claim, as create_node_pool's: false composes modelServing.cache.enabled false — no claim applied or mounted, the weights in the pod's ephemeral storage, an existing claim left as it is — and the answer says so (cache{enabled, claim, note}); a re-run with a changed value is the slice's upgrade."),
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name; the installation's own cluster included")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
-		mcp.WithBoolean(argCache, mcp.DefaultBool(true), mcp.Description("Whether the slice's predictors mount a model cache claim (default true) — the claim the release mounts already (the zone's claim the last create_node_pool named), else hf-cache; false composes modelServing.cache.enabled false on the release — no claim applied or mounted, the weights downloaded into each predictor pod's ephemeral storage, the existing claims left as they are")),
+		mcp.WithBoolean(argCache, mcp.DefaultBool(true), mcp.Description("Whether the slice's predictors mount a model cache claim (default true) — the claim the release mounts already (the zone's claim the last create_node_pool named), else hf-cache; the answer's cache block names its size, tier and monthly list price. false composes modelServing.cache.enabled false on the release — no claim applied or mounted, the weights downloaded into each predictor pod's ephemeral storage, the existing claims left as they are and billed until removed; refused (refused{cacheOn}) while the release runs with the cache on — the way to serve without the cache is remove_model_cache")),
 		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you (the only mode this version offers); commit: a pull request as you (refused until available)")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -156,7 +158,38 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithOpenWorldHintAnnotation(true),
 	), t.disableModelServing)
 
+	s.AddTool(mcp.NewTool(ToolRemoveModelCache,
+		mcp.WithDescription("Remove a cluster's model cache: the hf-cache* claims of the serving namespace — gp3 volumes that outlive every pool and the slice release by design and are billed every month they exist, filled or not — deleted on the cluster as you, the volume going with the claim under the class's Delete reclaim policy (a Retain volume is a warning: it stays, and is billed, until deleted by hand). Where cluster-manager's <cluster>-agent-platform slice release runs with the cache on, it is upgraded to modelServing.cache.enabled false first — the connectivity chart applies the claim from a hook on every upgrade, so a claim deleted under a slice with the cache on would come back — and every predictor of the cluster downloads its weights into its pod's ephemeral storage at each start from then on (about 90 s more per cold start); a later create_node_pool or enable_model_serving with cache true creates the claim anew. claim names one claim to remove; default every claim. Refused while a pod of the serving namespace mounts a claim to be removed (refused{models, hint}: the served models to unload first with model-manager's unload_model — a claim a pod mounts is not deleted until the pod is gone), plainly while the cluster cannot be read as you, and where someone else provides serving (the cache is that layer's setting). The answer lists the claims removed with their size, tier and monthly price (removedClaims[]), every claim as read (cacheClaims[]), the slice's objects, and cache.note saying what went and what follows. dryRun lists what would be removed; nothing is written. Answers within the caller's deadline: what did not fit is pending and the re-run continues."),
+		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
+		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
+		mcp.WithString(argClaim, mcp.Description("One model cache claim to remove, by name (hf-cache, hf-cache-eu-central-1a); default every hf-cache* claim of the serving namespace. The slice serves without the cache from then on when the claim removed is the one it mounts.")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation and the cluster as you (the only mode this version offers)")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+	), t.removeModelCache)
+
 	return s
+}
+
+func (h *handlers) removeModelCache(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cluster, err := req.RequireString(argCluster)
+	if err != nil {
+		return errResult(err), nil
+	}
+	result, err := h.svc.RemoveModelCache(ctx, tools.RemoveModelCacheInput{
+		Cluster:   cluster,
+		Namespace: req.GetString(argNamespace, ""),
+		Claim:     req.GetString(argClaim, ""),
+		Mode:      req.GetString(argMode, tools.ModeApply),
+		DryRun:    req.GetBool(argDryRun, false),
+	})
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
 }
 
 func (h *handlers) enableModelServing(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

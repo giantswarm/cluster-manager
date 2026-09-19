@@ -532,7 +532,7 @@
       "usableMemoryGiB": 57.5,
       "pricePerHourUSD": 2.8035,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     },
     {
       "instanceType": "g6e.4xlarge",
@@ -548,7 +548,7 @@
       "usableMemoryGiB": 118.3,
       "pricePerHourUSD": 3.75651,
       "priceSource": "AWS EC2 on-demand Linux list price, EU (Frankfurt) (eu-central-1)",
-      "priceAsOf": "2026-09-17"
+      "priceAsOf": "2026-09-19"
     }
   ],
   "presetFit": {
@@ -564,11 +564,26 @@
       "name": "hf-cache",
       "phase": "Bound",
       "volume": "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80",
-      "zone": "eu-central-1b"
+      "zone": "eu-central-1b",
+      "capacity": "500Gi",
+      "capacityGiB": 500,
+      "storageClass": "agent-platform-connectivity-hf-cache",
+      "tier": {
+        "type": "gp3",
+        "iops": 3000,
+        "throughputMiBps": 500
+      },
+      "reclaimPolicy": "Delete",
+      "created": "2026-09-16T10:12:00Z",
+      "price": {
+        "monthlyUSD": 65.45,
+        "source": "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)",
+        "asOf": "2026-09-19"
+      }
     }
   ],
   "cache": {
     "enabled": false,
-    "note": "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it — and pins nothing"
+    "note": "modelServing.cache.enabled false on the slice release: no claim is applied or mounted, every predictor downloads its weights into its pod's ephemeral storage (the node's local disk) at each start, and no zone pin follows from a claim; a re-run with cache true is the slice's upgrade back to the cache; the existing claim model-serving/hf-cache (Bound, volume pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80 in eu-central-1b) is left as it is — Helm keeps it, 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of 2026-09-19), billed while the claim exists until the cache is removed with remove_model_cache — and pins nothing"
   }
 }

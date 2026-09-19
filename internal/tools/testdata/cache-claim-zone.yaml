@@ -4,12 +4,16 @@
 # pool's first predictor to a volume there. With the one claim of before
 # (cache-claim.yaml, Bound in eu-central-1b) the namespace holds a claim per
 # zone: a pool without zones is refused, a pool in either zone mounts its own.
+# Its volume is kept when the claim goes (Retain, as an operator's class may
+# set): remove_model_cache warns that it stays, and is billed, until deleted
+# by hand (giantswarm/cluster-manager#83).
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: hf-cache-eu-central-1a
   namespace: model-serving
+  creationTimestamp: "2026-09-17T08:00:00Z"
   labels:
     app.kubernetes.io/component: model-serving
     app.kubernetes.io/name: agent-platform-connectivity
