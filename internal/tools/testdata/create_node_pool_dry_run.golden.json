@@ -230,7 +230,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.27.2"
+          "tag": "4.44.1"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -304,16 +304,10 @@
             "klaus-gateway": {
               "enabled": false
             },
-            "kserve-crd": {
-              "enabled": true
-            },
             "kserve-llmisvc-crd": {
               "enabled": true
             },
             "kserve-llmisvc-resources": {
-              "enabled": true
-            },
-            "kserve-resources": {
               "enabled": true
             },
             "kserve-runtime-configs": {
@@ -579,7 +573,7 @@
   "slice": {
     "name": "wc1-agent-platform",
     "namespace": "org-acme",
-    "chartVersion": "4.27.2",
+    "chartVersion": "4.44.1",
     "domain": "wc1.acme.example.io",
     "modelsHost": "models.wc1.acme.example.io",
     "jwks": "https://dex.gazelle.example.io/keys"

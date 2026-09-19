@@ -74,7 +74,6 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.PodsGVR:                  "PodList",
 	detect.DeploymentGVR:            "DeploymentList",
 	detect.ClusterPolicyGVR:         "ClusterPolicyList",
-	detect.InferenceServiceGVR:      "InferenceServiceList",
 	detect.LLMISVCGVR:               "LLMInferenceServiceList",
 	configsStorageGVR:               "LLMInferenceServiceConfigList",
 	detect.DaemonSetGVR:             "DaemonSetList",
@@ -93,7 +92,7 @@ var configsStorageGVR = detect.LLMISVCConfigResource.WithVersion("v1alpha2")
 
 // servingAPIs are the APIs a cluster without the serving layer does not
 // serve.
-var servingAPIs = []schema.GroupVersionResource{detect.InferenceServiceGVR, detect.LLMISVCGVR, configsStorageGVR}
+var servingAPIs = []schema.GroupVersionResource{detect.LLMISVCGVR, configsStorageGVR}
 
 // newFake is a fake dynamic client over a fixture; the APIs named absent
 // answer every list with not found, as an apiserver without them does.
@@ -235,7 +234,7 @@ func TestListClusters(t *testing.T) {
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, byName["wc1"].Serving.Component, "the serving APIs are not served")
 	assert.Equal(t, detect.StatusAbsent, byName["wc2"].GPUOperator.Status, "a pre-installed driver label is not an operator")
 	assert.Equal(t, detect.ProviderChart, byName["wc2"].Serving.Provider, "the platform's discovery ConfigMap")
-	assert.Equal(t, []string{"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)
+	assert.Equal(t, []string{"discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}, byName["wc2"].Serving.Evidence)
 	assert.Equal(t, detect.StatusAbsent, byName["gazelle"].GPUOperator.Status, "the installation's own cluster is read through the installation")
 	assert.Equal(t, []*detect.CacheClaim{{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-6e577f13-ff22-461c-a453-cfbcdd2d7c80", Zone: "eu-central-1b"}}, byName["gazelle"].Serving.Readiness.CacheClaims, "the model cache claims with their zones under serving readiness (giantswarm/cluster-manager#59, #71)")
 	assert.Equal(t, []*detect.CacheClaim{}, byName["wc1"].Serving.Readiness.CacheClaims, "no claim on wc1: an empty list, not null")

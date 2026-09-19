@@ -17,11 +17,14 @@ import (
 
 // RenderOracleChartVersion is the agent-platform chart release the render
 // oracle (TestSliceRendersThroughChart) puts the composed slice through: the
-// release the platform ran where the slice was last proved (gazelle, proof 1
-// of giantswarm/giantswarm#37639). Move it when a platform release adds a
-// render guard the slice must satisfy; SLICE_RENDER_CHART_VERSION overrides
-// it for one run.
-const RenderOracleChartVersion = "4.28.10"
+// line without the classic KServe controller, whose render refuses the
+// components kserve-crd and kserve-resources and whose
+// kserve-llmisvc-resources renders the control plane's shared objects itself
+// (giantswarm/agent-platform#574) — the guard a slice with the classic
+// components failed on an installation (giantswarm/cluster-manager#78). Move
+// it when a platform release adds a render guard the slice must satisfy;
+// SLICE_RENDER_CHART_VERSION overrides it for one run.
+const RenderOracleChartVersion = "4.44.1"
 
 // TestSliceRendersThroughChart is the render oracle
 // (giantswarm/cluster-manager#30): the composed slice values go through the

@@ -1,0 +1,42 @@
+# wc1 with the classic KServe controller of before left running
+# (giantswarm/cluster-manager#78): the kserve-resources release the platform's
+# chart rendered before agent-platform 4.44.0 removed the component
+# (giantswarm/agent-platform#574) and its kserve-controller-manager Deployment,
+# the llmisvc API served by its CRD alone, and no llm-d controller. Nothing
+# the platform serves through runs here: serving is absent, the classic
+# controller is not evidence.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kserve-resources
+  namespace: agent-platform
+  labels:
+    helm.sh/chart: agent-platform-4.43.2
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: kserve-resources
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-controller-manager
+  namespace: agent-platform
+  labels:
+    control-plane: kserve-controller-manager
+    helm.toolkit.fluxcd.io/name: kserve-resources
+    helm.toolkit.fluxcd.io/namespace: agent-platform
+spec:
+  replicas: 1
+status:
+  readyReplicas: 1

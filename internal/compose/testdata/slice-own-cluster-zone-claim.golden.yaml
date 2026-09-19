@@ -15,7 +15,7 @@ metadata:
 spec:
   interval: 10m
   ref:
-    tag: 4.27.2
+    tag: 4.44.1
   url: oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -67,13 +67,9 @@ spec:
         enabled: false
       klaus-gateway:
         enabled: false
-      kserve-crd:
-        enabled: true
       kserve-llmisvc-crd:
         enabled: true
       kserve-llmisvc-resources:
-        enabled: true
-      kserve-resources:
         enabled: true
       kserve-runtime-configs:
         enabled: true

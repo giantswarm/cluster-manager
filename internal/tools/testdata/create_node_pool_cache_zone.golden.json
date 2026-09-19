@@ -172,7 +172,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.27.2"
+          "tag": "4.44.1"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -238,16 +238,10 @@
             "klaus-gateway": {
               "enabled": false
             },
-            "kserve-crd": {
-              "enabled": true
-            },
             "kserve-llmisvc-crd": {
               "enabled": true
             },
             "kserve-llmisvc-resources": {
-              "enabled": true
-            },
-            "kserve-resources": {
               "enabled": true
             },
             "kserve-runtime-configs": {
@@ -512,7 +506,7 @@
   "slice": {
     "name": "gazelle-agent-platform",
     "namespace": "org-giantswarm",
-    "chartVersion": "4.27.2",
+    "chartVersion": "4.44.1",
     "domain": "gazelle.example.io",
     "modelsHost": "models.gazelle.example.io",
     "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"

@@ -11,7 +11,7 @@ import (
 func platform() PlatformInputs {
 	return PlatformInputs{
 		Release:       "flux-giantswarm/agent-platform",
-		ChartVersion:  "4.27.2",
+		ChartVersion:  "4.44.1",
 		Domain:        "gazelle.example.io",
 		Identity:      map[string]any{"issuerUrl": "https://dex.gazelle.example.io", "clientId": "dex-k8s-authenticator", "existingSecret": "agent-platform-identity"},
 		TLSSecretName: "gazelle-wildcard-tls",
@@ -102,9 +102,16 @@ func TestSliceGoldens(t *testing.T) {
 			if hasEgress {
 				assert.Equal(t, map[string]any{"enabled": true, "namespace": DefaultDexNamespace, "port": DefaultDexJWKSPort}, egress, "the host's namespace and port, the facts the platform's release states")
 			}
-			for _, component := range ServingComponents[:6] {
+			for _, component := range ServingComponents {
+				if component == "agentgateway" {
+					continue // by the target's shape, not the profile's
+				}
 				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
 				assert.True(t, on, component)
+			}
+			for _, component := range []string{"kserve-crd", "kserve-resources"} {
+				_, found, _ := unstructured.NestedMap(values, "components", component)
+				assert.False(t, found, "%s: the classic KServe controller went with agent-platform 4.44.0, whose render refuses the key (giantswarm/cluster-manager#78)", component)
 			}
 			runtimeClass, _, _ := unstructured.NestedString(values, "modelServing", "serving", "runtimeClassName")
 			assert.Equal(t, "nvidia", runtimeClass)
@@ -232,12 +239,12 @@ func TestSliceChartVersion(t *testing.T) {
 		want    string
 		refusal string
 	}{
-		{"platform's version", SliceSpec{Platform: platform()}, "4.27.2", ""},
-		{"digest as build metadata dropped", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.28.0+1c7eb3256e07"}}, "4.28.0", ""},
-		{"below the floor with build metadata", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.25.0+c78155660389"}}, "", "runs agent-platform chart 4.25.0, below 4.27.0"},
+		{"platform's version", SliceSpec{Platform: platform()}, "4.44.1", ""},
+		{"digest as build metadata dropped", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.45.0+1c7eb3256e07"}}, "4.45.0", ""},
+		{"below the floor with build metadata", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.43.2+c78155660389"}}, "", "runs agent-platform chart 4.43.2, below 4.44.0"},
 		{"exactly the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinSliceChartVersion}}, MinSliceChartVersion, ""},
-		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.25.0"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.25.0, below 4.27.0, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to 4.27.0 or newer and re-run"},
-		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.27.0-rc.1"}}, "", "runs agent-platform chart 4.27.0-rc.1, below 4.27.0"},
+		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.43.2"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.43.2, below 4.44.0, the first whose serving slice is the llm-d control plane alone (the classic KServe controller and its components kserve-crd and kserve-resources removed, giantswarm/agent-platform#574): upgrade the platform to 4.44.0 or newer and re-run"},
+		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.44.0-rc.1"}}, "", "runs agent-platform chart 4.44.0-rc.1, below 4.44.0"},
 		{"not deployed yet", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform"}}, "", "flux-giantswarm/agent-platform has not deployed a chart yet (no status.history)"},
 		{"not a semver", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "latest"}}, "", `runs agent-platform chart "latest", not a semantic version`},
 		{"override wins", SliceSpec{ChartVersion: "0.0.0-lab", Platform: PlatformInputs{ChartVersion: "4.25.0"}}, "0.0.0-lab", ""},

@@ -20,12 +20,17 @@ const (
 	// SliceChartURL is the catalog location of the agent-platform chart.
 	SliceChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
 	// MinSliceChartVersion is the floor of the slice release's pin: the
-	// first chart whose serving slice places and tolerates the predictors on
-	// a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315).
-	// The pin itself is the version the installation's own platform release
-	// runs (SliceChartVersion): released by construction and known to work on
-	// the installation. A release below the floor is refused, naming why.
-	MinSliceChartVersion = "4.27.0"
+	// first chart whose serving slice is the llm-d control plane alone — the
+	// classic KServe controller removed, its components kserve-crd and
+	// kserve-resources refused at the render, and the control plane's shared
+	// objects rendered by kserve-llmisvc-resources itself
+	// (giantswarm/agent-platform#574); a slice without the classic components
+	// on an older chart would leave the llm-d controller without its shared
+	// config. The pin itself is the version the installation's own platform
+	// release runs (SliceChartVersion): released by construction and known to
+	// work on the installation. A release below the floor is refused, naming
+	// why.
+	MinSliceChartVersion = "4.44.0"
 	// SliceReleaseSuffix names the release after the cluster and the chart.
 	SliceReleaseSuffix = "-" + SliceChart
 	// LabelMachinePool is the node label the gpu-node-pool chart stamps on a
@@ -65,7 +70,7 @@ var servingSliceProfile []byte
 // ServingComponents are the components the serving slice switches on; a
 // slice release with any other component on carries another slice too and
 // is not removed with the last GPU pool.
-var ServingComponents = []string{"kserve-crd", "kserve-resources", "kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing", "agentgateway"}
+var ServingComponents = []string{"kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing", "agentgateway"}
 
 // PlatformInputs are the values the slice release takes from the
 // installation's own platform release, never invented: the domain, the
@@ -209,8 +214,8 @@ func SliceJWKS(s SliceSpec) (JWKSSource, error) {
 
 // SliceChartVersion resolves the slice release's chart pin: the spec's
 // explicit version when set, else the version the installation's platform
-// release runs — refused below MinSliceChartVersion, the first chart that
-// places the predictors on a tainted GPU pool, and when the release has not
+// release runs — refused below MinSliceChartVersion, the first chart whose
+// serving slice is the llm-d control plane alone, and when the release has not
 // deployed a chart yet. Flux records the chart's digest as the version's
 // build metadata (`4.27.2+b9d9972a5aca`); the pin is the chart's tag, so
 // the metadata is dropped.
@@ -231,7 +236,7 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 	}
 	tag, _, _ := strings.Cut(s.Platform.ChartVersion, "+")
 	if running.LessThan(version.MustParseSemantic(MinSliceChartVersion)) {
-		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first whose serving slice places the predictors on a tainted GPU pool (modelServing.gpuPool, giantswarm/agent-platform#315): upgrade the platform to %s or newer and re-run", release, SliceChart, tag, MinSliceChartVersion, MinSliceChartVersion)
+		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first whose serving slice is the llm-d control plane alone (the classic KServe controller and its components kserve-crd and kserve-resources removed, giantswarm/agent-platform#574): upgrade the platform to %s or newer and re-run", release, SliceChart, tag, MinSliceChartVersion, MinSliceChartVersion)
 	}
 	return tag, nil
 }
@@ -287,11 +292,10 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // controller of its own beside the platform's release, so the block states
 // the same facts the platform's release does and opens nothing new. A
 // workload cluster keeps the chart's default, the public issuer, and no
-// jwksEgress. The GPU
-// pool's label goes to modelServing.gpuPool.nodeSelector (the chart's
-// placement contract, giantswarm/agent-platform#315) and, until a pinned
-// chart carries that key, to modelServing.serving.nodeSelector, the route the
-// discovery ConfigMap takes to the predictors today. The model cache is the
+// jwksEgress. The GPU pool's label goes to modelServing.gpuPool.nodeSelector
+// (the chart's placement contract, giantswarm/agent-platform#315) and to
+// modelServing.serving.nodeSelector, the node selector of every model pod
+// (a preset's own merged on top). The model cache is the
 // chart's default, on, unless the spec switches it off (NoCache) or names the
 // claim the predictors mount (CacheClaim, the claim of the pool's zone).
 func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {

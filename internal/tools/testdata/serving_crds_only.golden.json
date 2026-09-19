@@ -1,7 +1,6 @@
 {
   "status": "absent",
   "evidence": [
-    "KServe API serving.kserve.io/v1beta1 served (CRDs only, no controller)",
     "llmisvc API serving.kserve.io/v1alpha1 served (CRDs only, no controller)"
   ]
 }

@@ -1,7 +1,7 @@
-# wc1 served by the platform's own release: the kserve-resources and
-# kserve-llmisvc-resources children the agent-platform chart renders (its
-# helm.sh/chart label) and their controller Deployments, labelled by Flux with
-# the release that installed them; the llmisvc controller not ready yet.
+# wc1 served by the platform's own release: the kserve-llmisvc-resources
+# child the agent-platform chart renders (its helm.sh/chart label) and its
+# controller Deployment, labelled by Flux with the release that installed it;
+# the llmisvc controller not ready yet.
 ---
 apiVersion: v1
 kind: Node
@@ -15,40 +15,14 @@ status:
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: kserve-resources
-  namespace: agent-platform
-  labels:
-    helm.sh/chart: agent-platform-4.28.8
-spec:
-  chartRef:
-    kind: OCIRepository
-    name: kserve-resources
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata:
   name: kserve-llmisvc-resources
   namespace: agent-platform
   labels:
-    helm.sh/chart: agent-platform-4.28.8
+    helm.sh/chart: agent-platform-4.44.1
 spec:
   chartRef:
     kind: OCIRepository
     name: kserve-llmisvc-resources
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: kserve-controller-manager
-  namespace: agent-platform
-  labels:
-    control-plane: kserve-controller-manager
-    helm.toolkit.fluxcd.io/name: kserve-resources
-    helm.toolkit.fluxcd.io/namespace: agent-platform
-spec:
-  replicas: 1
-status:
-  readyReplicas: 1
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -57,7 +57,7 @@ rules:
     resources: ["clusterpolicies"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["serving.kserve.io"]
-    resources: ["inferenceservices", "llminferenceservices"]
+    resources: ["llminferenceservices"]
     verbs: ["list"]
   - apiGroups: ["helm.toolkit.fluxcd.io"]
     resources: ["helmreleases"]

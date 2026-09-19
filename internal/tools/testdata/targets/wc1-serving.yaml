@@ -1,8 +1,7 @@
 # wc1 as its apiserver shows it once cluster-manager's slice serves models:
 # Flatcar nodes, the KServe and llmisvc APIs served, an LLMInferenceService
 # model-manager composed (its annotation names the model; Pending, as a
-# predictor waiting for its GPU node is) and an InferenceService by hand (the
-# model from its storageUri).
+# predictor waiting for its GPU node is).
 ---
 apiVersion: v1
 kind: Node
@@ -33,16 +32,6 @@ status:
     - type: Ready
       status: "False"
       reason: HTTPRoutesNotReady
----
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
-metadata:
-  name: mistral-7b
-  namespace: model-serving
-spec:
-  predictor:
-    model:
-      storageUri: hf://mistralai/Mistral-7B-Instruct-v0.3
 ---
 # The GPU pool's two nodes, registered from Karpenter's NodeClaims. The
 # first carries llama-3-8b's predictor: busy. The second carries only what

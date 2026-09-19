@@ -3,7 +3,8 @@
 # them but what holds nothing (the device plugin, a finished validation, the
 # prewarm placeholder) —, an LLMInferenceService model-manager composed whose
 # predictor pod is Pending on no node (the kept cache's zone, or a size the
-# family lacks there), and an InferenceService by hand whose predictor is
+# family lacks there), and a predictor pod of the classic serving path by hand
+# (label serving.kserve.io/inferenceservice, giantswarm/agent-platform#574),
 # Pending too: only the platform's counts for the guard.
 ---
 apiVersion: v1
@@ -35,16 +36,6 @@ status:
     - type: Ready
       status: "False"
       reason: WorkloadNotReady
----
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
-metadata:
-  name: mistral-7b
-  namespace: model-serving
-spec:
-  predictor:
-    model:
-      storageUri: hf://mistralai/Mistral-7B-Instruct-v0.3
 ---
 apiVersion: v1
 kind: Pod

@@ -1,7 +1,7 @@
 # wc1 as its apiserver shows it after the last GPU pool went: Flatcar nodes,
-# the KServe and llmisvc APIs still served — Helm never removes the CRDs the
-# slice's kserve-crd and kserve-llmisvc-crd children installed — and no
-# controller, release or discovery ConfigMap: nothing serves a model.
+# the llmisvc API still served — Helm never removes the CRDs the slice's
+# kserve-llmisvc-crd child installed — and no controller, release or
+# discovery ConfigMap: nothing serves a model.
 ---
 apiVersion: v1
 kind: Node
