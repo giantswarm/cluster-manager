@@ -33,8 +33,8 @@ type ModelServingInput struct {
 	Force bool
 	// Cache (enable) is whether the slice's predictors mount a model cache
 	// claim (false composes compose.SliceSpec.NoCache); nil keeps the
-	// default, the cache on — the claim the release mounts already, else the
-	// base name (giantswarm/cluster-manager#71).
+	// release's setting, off for a first slice (cacheChoice) — the claim the
+	// release mounts already, else the base name (giantswarm/cluster-manager#71).
 	Cache *bool
 }
 
@@ -92,7 +92,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	// The slice keeps the claim its release mounts (the zone's claim the
 	// last pool named), else the base name: enable_model_serving never moves
 	// the cache to another zone (giantswarm/cluster-manager#71).
-	pin := zonePin{cache: in.Cache == nil || *in.Cache, claimName: reads.cacheClaim}
+	pin := zonePin{cache: cacheChoice(in.Cache, reads.cache), claimName: reads.cacheClaim}
 	if pin.claimName == "" {
 		pin.claimName = s.cfg.cacheClaimName()
 	}

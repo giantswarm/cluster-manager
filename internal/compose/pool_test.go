@@ -19,7 +19,7 @@ var update = flag.Bool("update", false, "rewrite the golden files from the curre
 // (kubernetes 1.31.4, flatcar 4459.2.1 — a release shipping the nvidia-drivers
 // system extension the pool's bootstrap takes the driver from —, os-tooling
 // 1.26.1), one registry
-// mirror without credentials, no proxy, teleport on, the fleet's tenant
+// mirror without credentials, no proxy, the fleet's tenant
 // ServiceAccount in its org namespace.
 func wc1() Cluster {
 	return Cluster{
@@ -28,7 +28,7 @@ func wc1() Cluster {
 		KubernetesVersion:    "1.31.4", MachineImage: "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
 		BaseDomain: "acme.example.io", ManagementCluster: "gazelle",
 		RegistryMirrors: map[string][]string{"gsoci.azurecr.io": {"gsoci.azurecr.io"}},
-		CiliumIPAMMode:  "kubernetes", Teleport: true,
+		CiliumIPAMMode:  "kubernetes",
 	}
 }
 
@@ -42,7 +42,7 @@ func own() Cluster {
 
 // TestPoolGoldens pins the HelmRelease and OCIRepository shape byte for byte
 // per input: one golden per accelerator, plus the snapshot variants (proxy,
-// registry credentials as a valuesFrom Secret, teleport off, explicit sizes),
+// registry credentials as a valuesFrom Secret, explicit sizes),
 // the own cluster's pool with prewarm (giantswarm/cluster-manager#48) and a
 // pool pinned to the model cache's zone (giantswarm/cluster-manager#59).
 func TestPoolGoldens(t *testing.T) {
@@ -53,7 +53,6 @@ func TestPoolGoldens(t *testing.T) {
 		"gsoci.azurecr.io": {"gsoci.azurecr.io"},
 	}
 	proxied.RegistryCredentials = map[string]RegistryCredential{"registry.acme.example.io": {Username: "puller", Password: "s3cret"}}
-	proxied.Teleport = false
 
 	cases := []struct {
 		name    string
@@ -63,7 +62,7 @@ func TestPoolGoldens(t *testing.T) {
 		{"l4-default", wc1(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 4}},
 		{"a10g-sizes", wc1(), PoolSpec{Name: "gpu-a10g", Accelerator: "nvidia-a10g", MaxGPUs: 8, Sizes: []string{"xlarge", "2xlarge"}}},
 		{"t4-pinned-chart", wc1(), PoolSpec{Name: "gpu-t4", Accelerator: "nvidia-t4", MaxGPUs: 2, ChartVersion: "0.2.0"}},
-		{"l40s-proxy-credentials-no-teleport", proxied, PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 4}},
+		{"l40s-proxy-credentials", proxied, PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 4}},
 		{"own-cluster-prewarm", own(), PoolSpec{Name: "gpu-l4", Accelerator: "nvidia-l4", MaxGPUs: 4, Prewarm: true}},
 		{"l40s-cache-zone", own(), PoolSpec{Name: "gpu-l40s", Accelerator: "nvidia-l40s", MaxGPUs: 1, Sizes: []string{"2xlarge", "4xlarge"}, Prewarm: true, Zones: []string{"eu-central-1b"}}},
 	}

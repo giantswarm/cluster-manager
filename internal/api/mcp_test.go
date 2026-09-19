@@ -117,7 +117,7 @@ func TestToolsListAndSchemas(t *testing.T) {
 			assert.Equal(t, "array", props[argZones].(map[string]any)["type"], "zones is a list of the cluster's node-subnet zones")
 		}
 		if tool.Name == ToolCreateNodePool || tool.Name == ToolEnableModelServing {
-			assert.Equal(t, true, props[argCache].(map[string]any)["default"], "%s: the model cache is on unless said otherwise", tool.Name)
+			assert.Equal(t, false, props[argCache].(map[string]any)["default"], "%s: the model cache is off until asked for (giantswarm/cluster-manager#86)", tool.Name)
 		}
 	}
 	assert.Len(t, listed.Tools, len(ToolNames()))

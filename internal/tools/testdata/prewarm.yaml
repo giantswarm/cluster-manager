@@ -30,14 +30,6 @@ spec:
             gsoci.azurecr.io:
               - endpoint: gsoci.azurecr.io
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gazelle-teleport-join-token
-  namespace: org-giantswarm
-stringData:
-  joinToken: not-read-by-cluster-manager
----
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

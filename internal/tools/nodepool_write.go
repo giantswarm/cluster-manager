@@ -47,9 +47,6 @@ const (
 
 	// labelKustomizeName marks an object Flux's kustomize-controller owns.
 	labelKustomizeName = "kustomize.toolkit.fluxcd.io/name"
-	// teleportJoinSecretSuffix names the Secret teleport-operator writes;
-	// only its presence is read.
-	teleportJoinSecretSuffix = "-teleport-join-token" //nolint:gosec // a Secret's name, not a credential
 )
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
@@ -118,16 +115,27 @@ type CreateNodePoolInput struct {
 	Cluster   string
 	Namespace string
 	Pool      compose.PoolSpec
-	// Teleport overrides the default (on when the cluster has its join-token
-	// Secret); nil keeps the default.
-	Teleport *bool
 	// Cache is whether the slice's predictors mount a model cache claim
-	// (false composes compose.SliceSpec.NoCache); nil keeps the default, the
-	// cache on. Pool.Zones are the zones the caller named: one zone, whose
-	// claim the slice mounts, judged against the claims as read (zonePinFor).
+	// (false composes compose.SliceSpec.NoCache); nil keeps the slice's
+	// setting where the cluster's slice release runs, off for a first slice
+	// (cacheChoice). Pool.Zones are the zones the caller named: one zone,
+	// whose claim the slice mounts, judged against the claims as read
+	// (zonePinFor).
 	Cache  *bool
 	Mode   string
 	DryRun bool
+}
+
+// cacheChoice is the model cache setting a write composes: the caller's where
+// given; else the slice's own where the cluster's slice release runs — the
+// setting is the cluster's (giantswarm/cluster-manager#83) — and off for a
+// first slice: a claim is a volume billed every month it exists, after every
+// pool is removed too, and is never created unasked (giantswarm/cluster-manager#86).
+func cacheChoice(given *bool, before *detect.SliceCache) bool {
+	if given != nil {
+		return *given
+	}
+	return before != nil && before.Enabled
 }
 
 // DeleteNodePoolInput is delete_node_pool's input.
@@ -308,13 +316,10 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	facts := r.facts
-	if in.Teleport != nil {
-		facts.Teleport = *in.Teleport
-	}
 	if newer, err := versionNewer(facts.KubernetesVersion, strings.TrimPrefix(r.cpVersion, "v")); err == nil && newer {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the cluster's release pins Kubernetes %s but its control plane runs %s: a pool is never newer than the control plane — finish the cluster's upgrade first, then re-run", facts.KubernetesVersion, r.cpVersion)}
 	}
-	cache := in.Cache == nil || *in.Cache
+	cache := cacheChoice(in.Cache, r.slice.cache)
 	if err := r.aws.checkZones(in.Pool.Zones, target.Cluster); err != nil {
 		return nil, err
 	}
@@ -928,7 +933,7 @@ func servedModelsClause(ctx context.Context, t target, live bool) (string, []str
 
 // clusterFacts reads what the pool release needs: the pins from the
 // cluster's Release CR, the credential-free snapshot from the cluster's
-// values, teleport from the join-token Secret's presence.
+// values.
 func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (compose.Cluster, error) {
 	facts := s.identity(c)
 	if err := s.releasePins(ctx, dyn, c, &facts); err != nil {
@@ -949,7 +954,6 @@ func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *un
 	facts.CiliumIPAMMode, _, _ = unstructured.NestedString(vals, "global", "connectivity", "cilium", "ipamMode")
 	facts.RegistryMirrors, facts.RegistryCredentials = registries(vals)
 	facts.Proxy = proxy(vals)
-	facts.Teleport = exists(ctx, dyn, compose.SecretGVR, c.GetNamespace(), c.GetName()+teleportJoinSecretSuffix)
 	return facts, nil
 }
 
@@ -1138,11 +1142,6 @@ func proxy(vals map[string]any) compose.Proxy {
 		}
 	}
 	return out
-}
-
-func exists(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, ns, name string) bool {
-	_, err := dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	return err == nil
 }
 
 // The actions of an apply.

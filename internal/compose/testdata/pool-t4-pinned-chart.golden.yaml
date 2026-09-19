@@ -69,5 +69,3 @@ spec:
       maxSize:
         nvidia.com/gpu: "2"
       name: gpu-t4
-    teleport:
-      enabled: true

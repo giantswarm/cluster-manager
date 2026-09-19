@@ -274,15 +274,6 @@ data:
                   password: s3cret
               - endpoint: docker.io
 ---
-# teleport-operator's join token: the pool's nodes join Teleport.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: wc1-teleport-join-token
-  namespace: org-acme
-stringData:
-  joinToken: not-read-by-cluster-manager
----
 # The source of wc1's pool release.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
@@ -381,7 +372,7 @@ spec:
     instanceType: m5.xlarge
 ---
 # wc2's own release in the management-clusters layout: an App CR with a
-# user-values ConfigMap. wc2 has no teleport join token.
+# user-values ConfigMap.
 apiVersion: application.giantswarm.io/v1alpha1
 kind: App
 metadata:

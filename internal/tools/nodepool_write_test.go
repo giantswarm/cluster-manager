@@ -22,14 +22,14 @@ import (
 
 func l4(cluster, name string, dryRun bool) CreateNodePoolInput {
 	return CreateNodePoolInput{
-		Cluster: cluster, Mode: ModeApply, DryRun: dryRun,
+		Cluster: cluster, Mode: ModeApply, DryRun: dryRun, Cache: cacheOn(),
 		Pool: compose.PoolSpec{Name: name, Accelerator: "nvidia-l4", MaxGPUs: 4, ChartVersion: compose.DefaultPoolChartVersion},
 	}
 }
 
 // TestCreateNodePoolDryRun renders a new pool for wc1 from its Release CR
-// (pins), its values ConfigMap (snapshot, credentials into a Secret) and its
-// teleport Secret, and pins the answer as a golden.
+// (pins) and its values ConfigMap (snapshot, credentials into a Secret), and
+// pins the answer as a golden.
 func TestCreateNodePoolDryRun(t *testing.T) {
 	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	out, err := svc.CreateNodePool(context.Background(), l4("wc1", "gpu-l4", true))
@@ -45,11 +45,38 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	}
 	hr := out.Manifests[2]
 	values, _, _ := unstructured.NestedMap(hr, "spec", "values")
-	assert.Equal(t, map[string]any{"enabled": true}, values["teleport"], "the join-token Secret exists")
+	_, hasTeleport := values["teleport"]
+	assert.False(t, hasTeleport, "the chart joins the nodes with the cluster's join token; nothing to set (giantswarm/cluster-manager#86)")
 	mirrors, _, _ := unstructured.NestedMap(values, "cluster", "registryMirrors")
 	assert.Equal(t, []any{"registry.acme.example.io", "docker.io"}, mirrors["docker.io"], "endpoints without credentials")
 	assert.Equal(t, "<redacted>", out.Manifests[1]["stringData"].(map[string]any)["values.yaml"], "the Secret's content is not echoed")
 	assertGolden(t, "create_node_pool_dry_run", out)
+}
+
+// TestCreateNodePoolCacheDefault (giantswarm/cluster-manager#86): without
+// cache a first slice serves without a model cache — a claim is a volume
+// billed every month it exists, never created unasked — and the answer says
+// so; cache true is the opt-in (the other fixtures carry it, cacheOn).
+func TestCreateNodePoolCacheDefault(t *testing.T) {
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	in := l4("wc1", "gpu-l4", true)
+	in.Cache = nil
+	out, err := svc.CreateNodePool(context.Background(), in)
+	require.NoError(t, err)
+	require.NotNil(t, out.Cache, "the slice was composed")
+	assert.False(t, out.Cache.Enabled, "a first slice: no cache unasked")
+	assert.Contains(t, out.Cache.Note, "modelServing.cache.enabled false on the slice release")
+	var slice map[string]any
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "wc1-agent-platform" {
+			slice = m
+		}
+	}
+	require.NotNil(t, slice, "the slice release is among the manifests")
+	enabled, found, _ := unstructured.NestedBool(slice, "spec", "values", "modelServing", "cache", "enabled")
+	require.True(t, found, "the setting is written, not left to the chart's default")
+	assert.False(t, enabled)
+	assert.Empty(t, out.Zones, "no claim pins the pool")
 }
 
 // TestCreateNodePoolPrewarm (giantswarm/cluster-manager#48): the
@@ -94,14 +121,13 @@ func TestCreateNodePoolPrewarm(t *testing.T) {
 	assert.Contains(t, err.Error(), "re-run without prewarm")
 }
 
-// TestCreateNodePoolAppLayoutNoTeleport reads the snapshot from an App CR's
-// user-values ConfigMap; wc2 has a proxy and no teleport Secret.
-func TestCreateNodePoolAppLayoutNoTeleport(t *testing.T) {
+// TestCreateNodePoolAppLayout reads the snapshot from an App CR's
+// user-values ConfigMap; wc2 has a proxy.
+func TestCreateNodePoolAppLayout(t *testing.T) {
 	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
 	out, err := svc.CreateNodePool(context.Background(), l4("wc2", "gpu-l4b", true))
 	require.NoError(t, err)
 	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
-	assert.Equal(t, map[string]any{"enabled": false}, values["teleport"])
 	assert.Equal(t, compose.RowPreinstalled.Name, out.OperatorRow, "nodes labelled nvidia.com/gpu.deploy.driver=pre-installed: row 2")
 	operator, _, _ := unstructured.NestedMap(out.Manifests[4], "spec", "values", "gpu-operator")
 	assert.Equal(t, map[string]any{"enabled": false}, operator["driver"])
@@ -958,11 +984,17 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 	_, found, _ = unstructured.NestedSlice(poolManifest(t, out, "gazelle-gpu-l40s"), "spec", "values", "pool", "zones")
 	assert.False(t, found, "no zones block")
 
-	// Landed with the cache off, a re-run with it on is the slice's upgrade.
+	// Landed with the cache off, a re-run without cache keeps it off — the
+	// slice's setting stands (giantswarm/cluster-manager#86) — and one asking
+	// for it is the slice's upgrade.
 	in.DryRun = false
 	_, err = svc.CreateNodePool(ctx, in)
 	require.NoError(t, err)
 	in.Cache, in.DryRun = nil, true
+	still, err := svc.CreateNodePool(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, still.Cache.Enabled, "nothing asked for the cache: the slice keeps serving without it")
+	in.Cache = cacheOn()
 	again, err := svc.CreateNodePool(ctx, in)
 	require.NoError(t, err)
 	assert.True(t, again.Cache.Enabled)
