@@ -699,7 +699,7 @@ func cacheOnRefusal(read cacheClaims, cluster, release string, slice *detect.Sli
 		mounts += ")"
 	}
 	remedies := []string{
-		"leave cache on (the default): this pool's slice mounts the cluster's cache like every other pool's",
+		"leave cache on: this pool's slice mounts the cluster's cache like every other pool's",
 		"remove the cache with remove_model_cache: the slice release is upgraded to serve without it, the claim and its volume go, and every model served on the cluster downloads and compiles again at its next start",
 	}
 	return &ErrRefused{

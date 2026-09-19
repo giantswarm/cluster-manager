@@ -99,10 +99,20 @@ func TestRemoveModelCache(t *testing.T) {
 	require.True(t, errors.As(err, &notFound), "nothing left to remove: %v", err)
 	assert.Equal(t, "model cache on gazelle (no hf-cache* claim in model-serving, and no slice release of cluster-manager's runs with the cache on there) not found", err.Error())
 
-	// The way back: a create with the cache on is the slice's upgrade and
-	// the chart creates the claim anew.
+	// A create without cache keeps the cluster's setting, off as the
+	// removal left it: nothing is created unasked (giantswarm/cluster-manager#86).
 	in := l4("gazelle", "gpu-l40s", true)
 	in.Pool.Accelerator, in.Pool.Sizes, in.Pool.MaxGPUs = "nvidia-l40s", []string{"2xlarge"}, 1
+	in.Cache = nil
+	kept, err := svc.CreateNodePool(ctx, in)
+	require.NoError(t, err)
+	require.NotNil(t, kept.Cache)
+	assert.False(t, kept.Cache.Enabled, "the slice's setting stands")
+	assert.NotContains(t, kept.Cache.Note, "switched")
+
+	// The way back: a create with the cache on is the slice's upgrade and
+	// the chart creates the claim anew.
+	in.Cache = cacheOn()
 	again, err := svc.CreateNodePool(ctx, in)
 	require.NoError(t, err)
 	assert.True(t, again.Cache.Enabled)
@@ -187,7 +197,7 @@ func TestCreateNodePoolCacheOffRefusedWhileTheClusterKeepsOne(t *testing.T) {
 	in := l4("gazelle", "gpu-l4", true)
 	in.Cache = &off
 	_, err := svc.CreateNodePool(ctx, in)
-	assertRefused(t, err, "cache false: the model cache is on for every pool of gazelle — the slice release org-giantswarm/gazelle-agent-platform is the cluster's one and mounts model-serving/hf-cache (Bound in eu-central-1b; 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+")) — and cache false on this pool would switch it off for the models served on every pool while the claim stays and keeps costing; leave cache on (the default): this pool's slice mounts the cluster's cache like every other pool's, or remove the cache with remove_model_cache: the slice release is upgraded to serve without it, the claim and its volume go, and every model served on the cluster downloads and compiles again at its next start")
+	assertRefused(t, err, "cache false: the model cache is on for every pool of gazelle — the slice release org-giantswarm/gazelle-agent-platform is the cluster's one and mounts model-serving/hf-cache (Bound in eu-central-1b; 500 GiB gp3 at 500 MiB/s, about $65.45 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+")) — and cache false on this pool would switch it off for the models served on every pool while the claim stays and keeps costing; leave cache on: this pool's slice mounts the cluster's cache like every other pool's, or remove the cache with remove_model_cache: the slice release is upgraded to serve without it, the claim and its volume go, and every model served on the cluster downloads and compiles again at its next start")
 	var refused *ErrRefused
 	require.True(t, errors.As(err, &refused))
 	require.NotNil(t, refused.Refused.CacheOn)
@@ -197,8 +207,8 @@ func TestCreateNodePoolCacheOffRefusedWhileTheClusterKeepsOne(t *testing.T) {
 	assert.Len(t, refused.Refused.CacheOn.Remedies, 2)
 	assert.Equal(t, "Leave cache on, or remove the cache with remove_model_cache, and re-run.", refused.Refused.Hint)
 
-	// The same call with the cache on stands, and the note says whose the
-	// setting is.
+	// The same call without cache keeps the cluster's setting — on — and
+	// the note says whose the setting is.
 	in.Cache = nil
 	out, err := svc.CreateNodePool(ctx, in)
 	require.NoError(t, err)

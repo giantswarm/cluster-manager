@@ -30,6 +30,13 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files from the current output")
 
+// cacheOn is the cache argument the fixtures were written with: on. Without
+// it a first slice serves without a cache (TestCreateNodePoolCacheDefault).
+func cacheOn() *bool {
+	on := true
+	return &on
+}
+
 // loadFixtures reads the multi-document YAML fixture into unstructured objects.
 func loadFixtures(t *testing.T, name string) []runtime.Object {
 	t.Helper()

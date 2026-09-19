@@ -16,7 +16,7 @@ metadata:
 spec:
   interval: 10m
   ref:
-    tag: 0.7.1
+    tag: 0.7.2
   url: oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -76,5 +76,3 @@ spec:
       - 4xlarge
       zones:
       - eu-central-1b
-    teleport:
-      enabled: true

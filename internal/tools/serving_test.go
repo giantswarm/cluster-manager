@@ -15,7 +15,7 @@ import (
 )
 
 func serving(cluster string, dryRun bool) ModelServingInput {
-	return ModelServingInput{Cluster: cluster, Mode: ModeApply, DryRun: dryRun}
+	return ModelServingInput{Cluster: cluster, Mode: ModeApply, DryRun: dryRun, Cache: cacheOn()}
 }
 
 // TestEnableModelServingOwnCluster composes the slice beside the platform's
