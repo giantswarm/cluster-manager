@@ -94,12 +94,11 @@ type Target struct {
 var (
 	NodesGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
 	// PodsGVR is the pods, read per node for what holds a GPU pool's node.
-	PodsGVR             = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	DeploymentGVR       = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	AppGVR              = schema.GroupVersionResource{Group: "application.giantswarm.io", Version: "v1alpha1", Resource: "apps"}
-	ClusterPolicyGVR    = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}
-	InferenceServiceGVR = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1beta1", Resource: "inferenceservices"}
-	LLMISVCGVR          = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceservices"}
+	PodsGVR          = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	DeploymentGVR    = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	AppGVR           = schema.GroupVersionResource{Group: "application.giantswarm.io", Version: "v1alpha1", Resource: "apps"}
+	ClusterPolicyGVR = schema.GroupVersionResource{Group: "nvidia.com", Version: "v1", Resource: "clusterpolicies"}
+	LLMISVCGVR       = schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceservices"}
 	// CRDGVR is the CustomResourceDefinitions, read for the storage version
 	// of an API whose conversion webhook may be gone (ConfigsGVR).
 	CRDGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
@@ -136,8 +135,7 @@ const (
 	// PresetDocumentKey is the ConfigMap key holding the ServingPreset.
 	PresetDocumentKey = "preset.yaml"
 	// LabelControlPlane is KServe's label on its controller Deployments:
-	// `control-plane: kserve-controller-manager` on the InferenceService
-	// controller, `llmisvc-controller-manager` on the llm-d one.
+	// `control-plane: llmisvc-controller-manager` on the llm-d one.
 	LabelControlPlane = "control-plane"
 	// AnnotationModel is model-manager's annotation on a serving object it
 	// composed: the id of the model it serves.
@@ -145,13 +143,11 @@ const (
 	// ManagedByModelManager is the `app.kubernetes.io/managed-by` value
 	// model-manager puts on every serving object it composes.
 	ManagedByModelManager = "model-manager"
-	// The labels KServe puts on a predictor's pods, naming the serving
-	// object: the InferenceService's on its predictor, and the name and
-	// part-of on an LLMInferenceService's workload.
-	LabelKServeInferenceService = "serving.kserve.io/inferenceservice"
-	LabelName                   = "app.kubernetes.io/name"
-	LabelPartOf                 = "app.kubernetes.io/part-of"
-	PartOfLLMISVC               = "llminferenceservice"
+	// The labels KServe puts on an LLMInferenceService's workload pods,
+	// naming the serving object: the name beside the part-of.
+	LabelName     = "app.kubernetes.io/name"
+	LabelPartOf   = "app.kubernetes.io/part-of"
+	PartOfLLMISVC = "llminferenceservice"
 	// hfScheme prefixes a Hugging Face repository in a serving object's
 	// storage uri.
 	hfScheme = "hf://"
@@ -301,26 +297,24 @@ func releaseProvider(hr *unstructured.Unstructured) Provider {
 	}
 }
 
-// KServeControllers are the Deployments of the KServe control plane, by
-// their `control-plane` label: the InferenceService controller and the
-// llm-d LLMInferenceService controller (the kserve-resources and
-// kserve-llmisvc-resources charts). One of them on the cluster is what makes
+// LLMISVCChart is the chart of the llm-d controller, as the platform's
+// release or a hand install names it in a HelmRelease. The controller on the
+// cluster (LLMISVCController, by its `control-plane` label) is what makes
 // serving present; the CRDs alone do not — Helm never removes CRDs, so a
-// serving layer that went leaves them behind, and CRDs serve no model.
-var KServeControllers = []string{"kserve-controller-manager", LLMISVCController}
+// serving layer that went leaves them behind, and CRDs serve no model. The
+// classic KServe controller of before (`kserve-controller-manager`, the
+// `kserve-resources` chart) went with the classic serving path
+// (giantswarm/agent-platform#574) and means nothing here: a cluster still
+// running it serves no model the platform knows.
+const LLMISVCChart = "kserve-llmisvc-resources"
 
-// KServeCharts are the charts of the KServe controllers, as the platform's
-// release or a hand install names them in a HelmRelease.
-var KServeCharts = []string{"kserve-resources", "kserve-llmisvc-resources"}
-
-// Serving reports the serving layer on the target: present with a KServe
-// controller — one of KServeControllers running, a HelmRelease of
-// KServeCharts, the model-serving discovery ConfigMap the platform's chart
-// renders — or with cluster-manager's own `<cluster>-agent-platform` slice
-// release in the cluster's namespace, whose children they then are. The
-// KServe and llmisvc APIs served are evidence, never the verdict: on their
-// own they are the CRDs a serving layer left behind, and the answer is
-// absent with a note.
+// Serving reports the serving layer on the target: present with the llm-d
+// controller — LLMISVCController running, a HelmRelease of LLMISVCChart, the
+// model-serving discovery ConfigMap the platform's chart renders — or with
+// cluster-manager's own `<cluster>-agent-platform` slice release in the
+// cluster's namespace, whose children they then are. The llmisvc API served
+// is evidence, never the verdict: on its own it is the CRD a serving layer
+// left behind, and the answer is absent with a note.
 func Serving(ctx context.Context, t Target) Component {
 	c, _ := ServingState(ctx, t)
 	return c
@@ -328,7 +322,7 @@ func Serving(ctx context.Context, t Target) Component {
 
 // ServingState is Serving's verdict with the layer's readiness beside it:
 // cluster-manager's slice release and every child of it with their Ready
-// conditions, the KServe controllers' available replicas, the counts of
+// conditions, the llm-d controller's available replicas, the counts of
 // LLMInferenceServiceConfigs in the release namespace and of published
 // serving presets, and the models Gateway's Programmed condition. The backend
 // registration is the caller's to fill in (it lives in model-manager's
@@ -551,22 +545,18 @@ func LLMISVCControllerRuns(ctx context.Context, reader dynamic.Interface) bool {
 	return false
 }
 
-// servedAPIs names the KServe APIs the target serves.
+// servedAPIs names the llmisvc API when the target serves it. The classic
+// serving.kserve.io/v1beta1 API a serving layer of before left behind is not
+// looked at: nothing the platform runs serves through it.
 func servedAPIs(ctx context.Context, reader dynamic.Interface) []string {
-	var out []string
-	for _, api := range []struct {
-		gvr  schema.GroupVersionResource
-		what string
-	}{{InferenceServiceGVR, "KServe API"}, {LLMISVCGVR, "llmisvc API"}} {
-		if _, err := list(ctx, reader, api.gvr, metav1.NamespaceAll, ""); err == nil {
-			out = append(out, api.what+" "+api.gvr.GroupVersion().String()+" served")
-		}
+	if _, err := list(ctx, reader, LLMISVCGVR, metav1.NamespaceAll, ""); err != nil {
+		return nil
 	}
-	return out
+	return []string{"llmisvc API " + LLMISVCGVR.GroupVersion().String() + " served"}
 }
 
-// servingControllers finds the KServe controllers on the target: the
-// HelmReleases of their charts and the controller Deployments. With
+// servingControllers finds the llm-d controller on the target: the
+// HelmRelease of its chart and the controller Deployment. With
 // cluster-manager's slice release on the cluster (owner) they are its
 // children; otherwise a release rendered by the platform's chart is the
 // chart's, a Deployment is its release's (Flux labels every object it
@@ -578,7 +568,7 @@ func servingControllers(ctx context.Context, reader dynamic.Interface, owner Pro
 	if hrs, err := list(ctx, reader, compose.HelmReleaseGVR, metav1.NamespaceAll, ""); err == nil {
 		for i := range hrs.Items {
 			hr := &hrs.Items[i]
-			if !isKServeRelease(hr) {
+			if !isLLMISVCRelease(hr) {
 				continue
 			}
 			p := owner
@@ -589,7 +579,7 @@ func servingControllers(ctx context.Context, reader dynamic.Interface, owner Pro
 			found = append(found, finding{p, fmt.Sprintf("HelmRelease %s/%s", hr.GetNamespace(), hr.GetName())})
 		}
 	}
-	selector := LabelControlPlane + " in (" + strings.Join(KServeControllers, ",") + ")"
+	selector := LabelControlPlane + "=" + LLMISVCController
 	if deps, err := list(ctx, reader, DeploymentGVR, metav1.NamespaceAll, selector); err == nil {
 		for i := range deps.Items {
 			d := &deps.Items[i]
@@ -609,17 +599,12 @@ func servingControllers(ctx context.Context, reader dynamic.Interface, owner Pro
 	return found, states
 }
 
-// isKServeRelease recognises a HelmRelease of a KServe controller chart by
-// its name, chart label, chart spec or chart source.
-func isKServeRelease(hr *unstructured.Unstructured) bool {
+// isLLMISVCRelease recognises a HelmRelease of the llm-d controller's chart
+// by its name, chart label, chart spec or chart source.
+func isLLMISVCRelease(hr *unstructured.Unstructured) bool {
 	chart, _, _ := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "chart")
 	ref, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "name")
-	for _, c := range KServeCharts {
-		if hr.GetName() == c || hr.GetLabels()[compose.LabelChartName] == c || chart == c || ref == c {
-			return true
-		}
-	}
-	return false
+	return hr.GetName() == LLMISVCChart || hr.GetLabels()[compose.LabelChartName] == LLMISVCChart || chart == LLMISVCChart || ref == LLMISVCChart
 }
 
 // ServedModel is one model served on a target: the serving object and the
@@ -631,8 +616,7 @@ type ServedModel struct {
 	Name      string
 	// Model is the served model's id: model-manager's annotation on the
 	// object, else the LLMInferenceService's spec.model.name or the
-	// repository of its hf:// uri, else the repository of the
-	// InferenceService's hf:// storageUri; empty when the object names none.
+	// repository of its hf:// uri; empty when the object names none.
 	Model string
 	// ManagedBy is the object's `app.kubernetes.io/managed-by` label:
 	// ManagedByModelManager on a model the platform serves, empty on one
@@ -647,26 +631,20 @@ func (m ServedModel) Managed(namespace string) bool {
 }
 
 // PredictorOf reports whether pod is a KServe predictor's and, when it is,
-// the kind and name of the serving object it belongs to: the
-// InferenceService's label on its predictor, the name beside the part-of
-// on an LLMInferenceService's workload (a workload without the name label
-// is a predictor of no named model).
+// the kind and name of the serving object it belongs to: the name beside the
+// part-of on an LLMInferenceService's workload (a workload without the name
+// label is a predictor of no named model). A predictor of the classic serving
+// path (label serving.kserve.io/inferenceservice) is nobody's.
 func PredictorOf(pod *unstructured.Unstructured) (kind, name string, ok bool) {
 	labels := pod.GetLabels()
-	if isvc := labels[LabelKServeInferenceService]; isvc != "" {
-		return KindInferenceService, isvc, true
-	}
 	if labels[LabelPartOf] == PartOfLLMISVC {
 		return KindLLMISVC, labels[LabelName], true
 	}
 	return "", "", false
 }
 
-// The kinds of the serving objects.
-const (
-	KindInferenceService = "InferenceService"
-	KindLLMISVC          = "LLMInferenceService"
-)
+// KindLLMISVC is the kind of the serving objects.
+const KindLLMISVC = "LLMInferenceService"
 
 // String names the object and, when known, its model:
 // `LLMInferenceService model-serving/qwen3-4b-instruct (Qwen/Qwen3-4B-Instruct-2507)`.
@@ -679,33 +657,31 @@ func (m ServedModel) String() string {
 }
 
 // ServedModels lists the models served on the target — every
-// LLMInferenceService and InferenceService whatever its readiness: a
-// predictor still Pending holds its GPU node as a Ready one does — read as
-// the caller; an API the target does not serve counts as no model of that
-// kind.
+// LLMInferenceService whatever its readiness: a predictor still Pending holds
+// its GPU node as a Ready one does — read as the caller; a target that does
+// not serve the API serves no model. A serving object of the classic path is
+// no model the platform serves (giantswarm/agent-platform#574) and is not
+// listed.
 func ServedModels(ctx context.Context, reader dynamic.Interface) ([]ServedModel, error) {
 	var out []ServedModel
-	for _, gvr := range []schema.GroupVersionResource{LLMISVCGVR, InferenceServiceGVR} {
-		items, err := reader.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-				continue
-			}
-			return nil, fmt.Errorf("list %s: %w", gvr.GroupResource(), err)
+	items, err := reader.Resource(LLMISVCGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
 		}
-		for i := range items.Items {
-			obj := &items.Items[i]
-			out = append(out, ServedModel{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Model: modelOf(obj), ManagedBy: obj.GetLabels()[compose.LabelManagedBy]})
-		}
+		return nil, fmt.Errorf("list %s: %w", LLMISVCGVR.GroupResource(), err)
+	}
+	for i := range items.Items {
+		obj := &items.Items[i]
+		out = append(out, ServedModel{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Model: modelOf(obj), ManagedBy: obj.GetLabels()[compose.LabelManagedBy]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out, nil
 }
 
 // modelOf is the model a serving object serves: model-manager's annotation,
-// else the LLMInferenceService's spec.model.name, else the repository of an
-// hf:// uri (spec.model.uri, or the InferenceService's
-// spec.predictor.model.storageUri).
+// else the LLMInferenceService's spec.model.name, else the repository of its
+// hf:// uri (spec.model.uri).
 func modelOf(obj *unstructured.Unstructured) string {
 	if m := obj.GetAnnotations()[AnnotationModel]; m != "" {
 		return m
@@ -713,10 +689,8 @@ func modelOf(obj *unstructured.Unstructured) string {
 	if m, _, _ := unstructured.NestedString(obj.Object, "spec", "model", "name"); m != "" {
 		return m
 	}
-	for _, path := range [][]string{{"spec", "model", "uri"}, {"spec", "predictor", "model", "storageUri"}} {
-		if uri, _, _ := unstructured.NestedString(obj.Object, path...); strings.HasPrefix(uri, hfScheme) {
-			return strings.TrimPrefix(uri, hfScheme)
-		}
+	if uri, _, _ := unstructured.NestedString(obj.Object, "spec", "model", "uri"); strings.HasPrefix(uri, hfScheme) {
+		return strings.TrimPrefix(uri, hfScheme)
 	}
 	return ""
 }

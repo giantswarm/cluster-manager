@@ -1,6 +1,6 @@
-# wc1 with KServe installed by hand: the controller Deployment in the kserve
-# namespace (upstream's control-plane label), no HelmRelease of its chart, no
-# discovery ConfigMap.
+# wc1 with the llm-d controller installed by hand: the controller Deployment
+# in the kserve namespace (upstream's control-plane label), no HelmRelease of
+# its chart, no discovery ConfigMap.
 ---
 apiVersion: v1
 kind: Node
@@ -14,10 +14,10 @@ status:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kserve-controller-manager
+  name: llmisvc-controller-manager
   namespace: kserve
   labels:
-    control-plane: kserve-controller-manager
+    control-plane: llmisvc-controller-manager
 spec:
   replicas: 1
 status:

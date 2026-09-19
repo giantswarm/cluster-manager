@@ -111,7 +111,7 @@ type ServingReadiness struct {
 	// charts, the connectivity child, kserve-runtime-configs), every one
 	// with its Ready condition; empty without a slice release.
 	Children []ReleaseState `json:"children"`
-	// Controllers are the KServe controller Deployments on the cluster.
+	// Controllers are the llm-d controller Deployments on the cluster.
 	Controllers []ControllerState `json:"controllers"`
 	// Configs counts the LLMInferenceServiceConfigs of the release
 	// namespace; null when the cluster cannot be read.
@@ -148,7 +148,7 @@ type SliceCache struct {
 	Claim string `json:"claim,omitempty"`
 }
 
-// ControllerState is one KServe controller Deployment.
+// ControllerState is one KServe controller Deployment, the llm-d one.
 type ControllerState struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`

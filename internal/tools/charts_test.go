@@ -57,14 +57,14 @@ func (f *fakeCharts) Chart(_ context.Context, ref registry.Ref, version string) 
 
 const connectivityChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-connectivity"
 
-// The fixture's platform runs agent-platform 4.27.2 (installation.yaml);
-// the connectivity range resolves to 4.28.0, which ships the resized L4
+// The fixture's platform runs agent-platform 4.44.1 (installation.yaml);
+// the connectivity range resolves to 4.45.0, which ships the resized L4
 // preset, a 14B preset no L4 hosts and a preset only a 2xlarge hosts.
 func shippedPresetCharts() *fakeCharts {
 	return (&fakeCharts{}).
-		add(compose.SliceChartURL, "4.27.2", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
-		add(connectivityChartURL, "4.27.2", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
-		add(connectivityChartURL, "4.28.0", map[string]string{
+		add(compose.SliceChartURL, "4.44.1", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
+		add(connectivityChartURL, "4.44.1", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
+		add(connectivityChartURL, "4.45.0", map[string]string{
 			"files/model-serving/presets/qwen3-8b-fp8.yaml": presetDoc("qwen3-8b-fp8", "Qwen3 8B FP8", "Qwen/Qwen3-8B-FP8", "2", "10Gi", 9, 12),
 			"files/model-serving/presets/qwen3-14b.yaml":    presetDoc("qwen3-14b", "Qwen3 14B", "Qwen/Qwen3-14B", "4", "48Gi", 28, 30),
 			"files/model-serving/presets/wide-l4.yaml":      presetDoc("wide-l4", "Wide L4 recipe", "acme/wide-9b", "4", "16Gi", 8, 12),

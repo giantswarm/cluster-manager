@@ -43,7 +43,7 @@ modelManager:
   namespace: agent-platform
 
 serving:
-  # -- Namespace on a serving cluster where the InferenceServices go, named
+  # -- Namespace on a serving cluster where the LLMInferenceServices go, named
   # as `target.servingNamespace` in the registered `kserve` backend.
   namespace: model-serving
   # -- Base name of the model cache `PersistentVolumeClaim`s in the serving
@@ -57,8 +57,8 @@ serving:
   cacheClaim: hf-cache
   # -- Exact `agent-platform` chart version the `<cluster>-agent-platform`
   # slice release pins. Empty pins the version the installation's own
-  # platform release runs (at least 4.27.0, the first chart that places the
-  # predictors on a tainted GPU pool); set it only for a lab running an
+  # platform release runs (at least 4.44.0, the first chart whose serving
+  # slice is the llm-d control plane alone); set it only for a lab running an
   # unreleased chart.
   sliceChartVersion: ""
   # -- cert-manager `ClusterIssuer` the `<cluster>-agent-platform` slice release

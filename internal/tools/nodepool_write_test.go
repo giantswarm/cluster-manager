@@ -254,11 +254,11 @@ func TestDeleteNodePool(t *testing.T) {
 
 	lab.target(t, wc1APIServer, "wc1-serving.yaml")
 	_, err := svc.DeleteNodePool(ctx, del)
-	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 1 busy node(s) on wc1: node wc1-gpu-a10g-node-1 runs model-serving/llama-3-8b-kserve-6649fb66c8-dllt7 (1 GPU), serving 2 model(s) on wc1: InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3), LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them; 1 idle node(s) (wc1-gpu-a10g-node-2) go with the pool once the busy ones are free")
+	assertRefused(t, err, "node pool wc1-gpu-a10g still runs 1 busy node(s) on wc1: node wc1-gpu-a10g-node-1 runs model-serving/llama-3-8b-kserve-6649fb66c8-dllt7 (1 GPU), serving 1 model(s) on wc1: LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct) — unload them first (model-manager's unload_model, or the cluster's Serving group) and re-run once the pool is empty, or pass force to delete the pool with its nodes and the models on them; 1 idle node(s) (wc1-gpu-a10g-node-2) go with the pool once the busy ones are free")
 	assert.Equal(t, &Refused{
 		Nodes:    []string{"wc1-gpu-a10g-node-1"},
 		Idle:     []string{"wc1-gpu-a10g-node-2"},
-		Models:   []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
+		Models:   []string{"LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
 		Hint:     refusedHint,
 		ReadFrom: readFromCluster,
 	}, refusedBlock(t, err), "the structured refusal beside the text (giantswarm/cluster-manager#41): the DaemonSet's, the finished and the preemptible pod hold nothing")
@@ -446,8 +446,8 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 // TestCreateNodePoolPresetFitFromChart (giantswarm/cluster-manager#44): wc1
 // publishes no preset and the call would compose the slice, so the presets
 // that slice would publish are judged — read from the connectivity chart the
-// slice's agent-platform release (4.27.2, the fixture's platform) resolves
-// for its range, 4.28.0 in the fake registry, not the meta chart's own
+// slice's agent-platform release (4.44.1, the fixture's platform) resolves
+// for its range, 4.45.0 in the fake registry, not the meta chart's own
 // version. The 8B preset fits an xlarge; the 14B none (no warning: no L4
 // serves it); the wide recipe only a 2xlarge — a warning on an xlarge-only
 // pool. wc2's published ConfigMaps keep precedence over the chart, and a
@@ -461,7 +461,7 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.PresetFit)
 	assert.Equal(t, PresetOriginChart, out.PresetFit.Origin)
-	assert.Equal(t, `3 preset(s) shipped by agent-platform-connectivity 4.28.0, the chart the slice's agent-platform 4.27.2 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, out.PresetFit.Source)
+	assert.Equal(t, `3 preset(s) shipped by agent-platform-connectivity 4.45.0, the chart the slice's agent-platform 4.44.1 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, out.PresetFit.Source)
 	assert.Empty(t, out.PresetFit.Note)
 	require.Len(t, out.PresetFit.Presets, 3)
 	assert.Equal(t, PresetSizeFit{Preset: "qwen3-14b", DisplayName: "Qwen3 14B", Model: "Qwen/Qwen3-14B", CPU: "4", Memory: "48Gi", GPUs: 1, GPUMemoryGiB: 58,
@@ -490,7 +490,7 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	unreadable := lab.service(Config{Installation: "gazelle"}, WithChartReader(&fakeCharts{}))
 	out, err = unreadable.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
-	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.27.2: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
+	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.44.1: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
 	assert.Empty(t, out.PresetFit.Presets)
 	assert.Empty(t, out.PresetFit.Origin)
 }
@@ -1050,8 +1050,9 @@ func poolManifest(t *testing.T, out *WriteResult, name string) map[string]any {
 // model-manager serves has its predictor Pending on no node — waiting for a
 // node of the pool. The delete is refused naming the model and its pod, the
 // idle nodes beside; the structured refusal lists it under unscheduled with
-// no busy node. A hand-made InferenceService Pending too is not the
-// platform's and does not count. Without a pod yet the model counts still.
+// no busy node. A Pending predictor pod of the classic serving path
+// (giantswarm/agent-platform#574) is nobody's and does not count. Without a
+// pod yet the model counts still.
 // Pods not readable as the caller are a refusal: what cannot be seen cannot
 // be judged idle. Force deletes regardless.
 func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
@@ -1065,11 +1066,11 @@ func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
 	assert.Equal(t, &Refused{
 		Nodes:       []string{},
 		Idle:        []string{"wc1-gpu-a10g-node-1", "wc1-gpu-a10g-node-2"},
-		Models:      []string{"InferenceService model-serving/mistral-7b (mistralai/Mistral-7B-Instruct-v0.3)", "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
+		Models:      []string{"LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
 		Unscheduled: []string{"LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"},
 		Hint:        refusedHint,
 		ReadFrom:    readFromCluster,
-	}, refusedBlock(t, err), "no busy node; the hand-made InferenceService is listed among the served models but does not refuse")
+	}, refusedBlock(t, err), "no busy node; the classic path's Pending predictor pod is nobody's and neither counts nor refuses")
 	assert.Len(t, poolClaims(t, lab, "wc1-gpu-a10g"), 2, "nothing was written")
 
 	// The controller has not created the predictor's pod yet: the model

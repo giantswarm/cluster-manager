@@ -89,9 +89,11 @@ func TestDetectGPUOperator(t *testing.T) {
 }
 
 // TestDetectServing runs every branch of the serving detection over wc1's
-// apiserver: the platform's chart (its KServe releases and controllers, or
-// its discovery ConfigMap), a controller by hand, the KServe CRDs alone —
-// what Helm leaves behind when a serving layer goes — and nothing.
+// apiserver: the platform's chart (its llm-d release and controller, or its
+// discovery ConfigMap), a controller by hand, the CRDs alone — what Helm
+// leaves behind when a serving layer goes —, the classic KServe controller of
+// before running beside kept CRDs and no llm-d controller (absent: nothing
+// the platform serves through, giantswarm/cluster-manager#78), and nothing.
 func TestDetectServing(t *testing.T) {
 	cases := []struct {
 		fixture  string
@@ -100,15 +102,15 @@ func TestDetectServing(t *testing.T) {
 		evidence []string
 	}{
 		{"chart-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
-			"Deployment agent-platform/kserve-controller-manager (1/1 ready)", "Deployment agent-platform/llmisvc-controller-manager (0/1 ready)",
-			"HelmRelease agent-platform/kserve-llmisvc-resources", "HelmRelease agent-platform/kserve-resources",
-			"KServe API serving.kserve.io/v1beta1 served", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+			"Deployment agent-platform/llmisvc-controller-manager (0/1 ready)", "HelmRelease agent-platform/kserve-llmisvc-resources", "llmisvc API serving.kserve.io/v1alpha1 served"}},
 		{"wc2.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
-			"KServe API serving.kserve.io/v1beta1 served", "discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+			"discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}},
 		{"manual-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderManual}, []string{
-			"Deployment kserve/kserve-controller-manager (1/1 ready)", "KServe API serving.kserve.io/v1beta1 served", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+			"Deployment kserve/llmisvc-controller-manager (1/1 ready)", "llmisvc API serving.kserve.io/v1alpha1 served"}},
 		{"crds-only.yaml", nil, detect.Component{Status: detect.StatusAbsent}, []string{
-			"KServe API serving.kserve.io/v1beta1 served (CRDs only, no controller)", "llmisvc API serving.kserve.io/v1alpha1 served (CRDs only, no controller)"}},
+			"llmisvc API serving.kserve.io/v1alpha1 served (CRDs only, no controller)"}},
+		{"classic-left-behind.yaml", nil, detect.Component{Status: detect.StatusAbsent}, []string{
+			"llmisvc API serving.kserve.io/v1alpha1 served (CRDs only, no controller)"}},
 		{"wc1.yaml", servingAPIs, detect.Component{Status: detect.StatusAbsent}, nil},
 	}
 	for _, tc := range cases {
@@ -140,7 +142,7 @@ func TestDetectServing(t *testing.T) {
 		got := wc1Cluster(t, l).Serving.Component
 		assert.Equal(t, detect.ProviderClusterManager, got.Provider, "the controllers on the cluster are the slice release's children, whatever their chart label says")
 		assert.Contains(t, got.Evidence, "HelmRelease org-acme/wc1-agent-platform")
-		assert.Contains(t, got.Evidence, "Deployment agent-platform/kserve-controller-manager (1/1 ready)")
+		assert.Contains(t, got.Evidence, "Deployment agent-platform/llmisvc-controller-manager (0/1 ready)")
 	})
 
 	// The slice's meta release reports Ready whether or not its children
@@ -170,7 +172,7 @@ func TestDetectServing(t *testing.T) {
 				assert.Contains(t, got.Evidence, failed, "the failed child, with the chart's own account")
 				assert.Contains(t, got.Evidence, pending, "a child without a Ready condition is not Ready either")
 				for _, e := range got.Evidence {
-					assert.NotContains(t, e, "kserve-resources not Ready", "a Ready child is not named")
+					assert.NotContains(t, e, "kserve-runtime-configs not Ready", "a Ready child is not named")
 					assert.NotContains(t, e, "wc2-agent-platform-connectivity", "another release's child is not the slice's")
 				}
 				// The same, structured (giantswarm/cluster-manager#41): every
@@ -219,7 +221,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	slice := out.Manifests[4]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
-	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.27.2", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
+	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.44.1", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys"}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
 	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
 
