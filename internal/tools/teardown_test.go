@@ -28,13 +28,20 @@ var fixtureConfigs = []string{"kserve-config-llm-decode-worker-data-parallel", "
 const webhookDenial = `admission webhook "llminferenceserviceconfig.kserve-webhook-server.v1alpha2.validator" denied the request: well-known config %s/%s cannot be deleted`
 
 // finalizing gives the fake at apiServer the apiserver's finalizer semantics
-// for LLMInferenceServiceConfigs: a delete of an object carrying finalizers
-// marks it terminating instead, and the update that takes the last finalizer
-// off drops it.
+// for LLMInferenceServiceConfigs and LLMInferenceServices: a delete of an
+// object carrying finalizers marks it terminating instead, and the update
+// that takes the last finalizer off drops it.
 func (l *lab) finalizing(t *testing.T, apiServer string) *lab {
 	t.Helper()
-	dyn := fakeTarget(t, l, apiServer)
-	gvr, tracker := configsStorageGVR, dyn.Tracker()
+	for _, gvr := range []schema.GroupVersionResource{configsStorageGVR, servedStorageGVR} {
+		finalizingResource(t, fakeTarget(t, l, apiServer), gvr)
+	}
+	return l
+}
+
+func finalizingResource(t *testing.T, dyn *dynamicfake.FakeDynamicClient, gvr schema.GroupVersionResource) {
+	t.Helper()
+	tracker := dyn.Tracker()
 	dyn.PrependReactor("delete", gvr.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
 		del, _ := a.(k8stesting.DeleteAction)
 		obj, err := tracker.Get(gvr, del.GetNamespace(), del.GetName())
@@ -60,7 +67,6 @@ func (l *lab) finalizing(t *testing.T, apiServer string) *lab {
 		}
 		return false, nil, nil
 	})
-	return l
 }
 
 func fakeTarget(t *testing.T, l *lab, apiServer string) *dynamicfake.FakeDynamicClient {
@@ -277,15 +283,17 @@ const conversionFailure = `conversion webhook for serving.kserve.io/v1alpha2, Ki
 func conversionWebhookGoesWithTheController(t *testing.T, l *lab) {
 	t.Helper()
 	dyn := fakeTarget(t, l, wc1APIServer)
-	dyn.PrependReactor("*", configsStorageGVR.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if a.GetResource().Version == configsStorageGVR.Version {
-			return false, nil, nil
-		}
-		if _, err := dyn.Tracker().Get(detect.DeploymentGVR, "org-acme", detect.LLMISVCController); err == nil {
-			return false, nil, nil
-		}
-		return true, nil, apierrors.NewInternalError(errors.New(conversionFailure))
-	})
+	for _, gvr := range []schema.GroupVersionResource{configsStorageGVR, servedStorageGVR} {
+		dyn.PrependReactor("*", gvr.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if a.GetResource().Version == gvr.Version {
+				return false, nil, nil
+			}
+			if _, err := dyn.Tracker().Get(detect.DeploymentGVR, "org-acme", detect.LLMISVCController); err == nil {
+				return false, nil, nil
+			}
+			return true, nil, apierrors.NewInternalError(errors.New(conversionFailure))
+		})
+	}
 }
 
 // moreConfigs adds n well-known configs to wc1 beside the fixture's three, as
@@ -359,6 +367,98 @@ func TestDeleteLastPoolWithoutAControllerStripsTheConfigs(t *testing.T) {
 	assert.Equal(t, orderedTeardown, objectNames(out))
 	assert.Empty(t, remainingConfigs(t, l))
 	require.Len(t, out.Warnings, 1)
+}
+
+// remainingServed names the LLMInferenceServices left in the serving
+// namespace of wc1, terminating or not.
+func remainingServed(t *testing.T, l *lab) []string {
+	t.Helper()
+	served, err := detect.ServedObjects(context.Background(), l.targets[wc1APIServer], "model-serving")
+	require.NoError(t, err)
+	return detect.Names(served)
+}
+
+// The ordered teardown with models served: the platform's served objects go
+// with the configs, once the controller is gone, the hand-made one stays.
+var forcedTeardown = []string{
+	"delete HelmRelease org-acme/kserve-llmisvc-resources",
+	"delete LLMInferenceService model-serving/qwen3-8b",
+	"delete LLMInferenceService model-serving/qwen3-stopped",
+	"delete LLMInferenceServiceConfig org-acme/kserve-config-llm-decode-worker-data-parallel",
+	"delete LLMInferenceServiceConfig org-acme/kserve-config-llm-scheduler",
+	"delete LLMInferenceServiceConfig org-acme/kserve-config-llm-template",
+	"delete HelmRelease org-acme/kserve-runtime-configs",
+	"delete ConfigMap agent-platform/model-backend-kserve",
+	"delete OCIRepository org-acme/wc1-agent-platform",
+	"delete HelmRelease org-acme/wc1-agent-platform",
+	"delete OCIRepository org-acme/wc1-gpu-a10g",
+	"delete HelmRelease org-acme/wc1-gpu-a10g",
+}
+
+// TestDeleteLastPoolWithForceRemovesTheServedModels (seen on an installation):
+// a person forces the last pool away from under a Ready model. The teardown
+// takes the controller away; the served objects model-manager composed — the
+// Ready one and the one stopped a moment ago, terminating with the
+// controller's finalizer uncleared — are removed by cluster-manager with
+// serving.kserve.io/llmisvc-finalizer taken off, through the CRD's storage
+// version (the conversion webhook went with the controller), before the
+// configs; nothing of theirs is left terminating. The object someone else
+// applied by hand is named and left. The dry run says what would happen.
+func TestDeleteLastPoolWithForceRemovesTheServedModels(t *testing.T) {
+	l, svc := servingLab(t, "wc1-forced.yaml")
+	l.controllerRuns(t, wc1APIServer)
+	fluxUninstallsController(t, l, 2)
+	conversionWebhookGoesWithTheController(t, l)
+	ctx := context.Background()
+	require.Equal(t, []string{"by-hand", "qwen3-8b", "qwen3-stopped"}, remainingServed(t, l))
+
+	dry := deleteLastPool(t, svc, ctx, true, true)
+	assert.Equal(t, withActions(forcedTeardown, "would-delete", 0), objectNames(dry))
+	assert.Equal(t, []string{"by-hand", "qwen3-8b", "qwen3-stopped"}, remainingServed(t, l), "a dry-run touches nothing")
+	require.Len(t, dry.Warnings, 3)
+	assert.Contains(t, dry.Warnings[0], "1 LLMInferenceService(s) in model-serving on wc1 not composed by model-manager are left as they are (by-hand)")
+	assert.Contains(t, dry.Warnings[1], "2 served model(s) in model-serving on wc1 would be removed by cluster-manager with serving.kserve.io/llmisvc-finalizer taken off once the llmisvc controller is gone")
+	assert.Contains(t, dry.Warnings[2], "3 LLMInferenceServiceConfig(s) in org-acme on wc1 would be removed")
+	assertGolden(t, "delete_node_pool_forced_served_models_dry_run", dry)
+
+	out := deleteLastPool(t, svc, ctx, true, false)
+	assert.False(t, out.Partial)
+	assert.Equal(t, forcedTeardown, objectNames(out))
+	assert.Equal(t, []string{"by-hand"}, remainingServed(t, l), "the platform's served objects are gone, terminating or not; the hand-made one stays")
+	assert.Empty(t, remainingConfigs(t, l))
+	for _, o := range out.Objects {
+		if o.Kind == "LLMInferenceService" {
+			assert.Equal(t, "serving.kserve.io/v1alpha2", o.APIVersion, "removed through the storage version")
+		}
+	}
+	require.Len(t, out.Warnings, 3)
+	assert.Contains(t, out.Warnings[1], "2 served model(s) in model-serving on wc1 removed by cluster-manager with serving.kserve.io/llmisvc-finalizer taken off (the teardown took the llm-d controller away from under them, and nothing clears the finalizer once it is gone; their workloads go with them): qwen3-8b, qwen3-stopped")
+	assertGone(t, l, llmisvcResourcesRelease, runtimeConfigsRelease, "wc1-agent-platform", "wc1-gpu-a10g")
+}
+
+// TestDeleteLastPoolWithoutAControllerStripsTheServedModels: the state a
+// forced teardown of before left an installation in — no controller, a served object
+// terminating with the finalizer uncleared. The re-run of the teardown (here:
+// the slice still there) removes it without a wait.
+func TestDeleteLastPoolWithoutAControllerStripsTheServedModels(t *testing.T) {
+	l, svc := servingLab(t, "wc1-forced.yaml")
+	out := deleteLastPool(t, svc, context.Background(), true, false)
+	assert.Equal(t, forcedTeardown, objectNames(out))
+	assert.Equal(t, []string{"by-hand"}, remainingServed(t, l))
+	assert.Empty(t, remainingConfigs(t, l))
+}
+
+// TestDisableModelServingWithForceRemovesTheServedModels: the same teardown
+// behind disable_model_serving with force.
+func TestDisableModelServingWithForceRemovesTheServedModels(t *testing.T) {
+	l, svc := servingLab(t, "wc1-forced.yaml")
+	l.controllerRuns(t, wc1APIServer)
+	fluxUninstallsController(t, l, 1)
+	out, err := svc.DisableModelServing(context.Background(), ModelServingInput{Cluster: "wc1", Mode: ModeApply, Force: true})
+	require.NoError(t, err)
+	assert.Equal(t, forcedTeardown[:len(forcedTeardown)-2], objectNames(out), "the slice's teardown without the pool's objects")
+	assert.Equal(t, []string{"by-hand"}, remainingServed(t, l))
+	assert.Empty(t, remainingConfigs(t, l))
 }
 
 // TestDeleteLastPoolAnswersPartialWhileTheControllerLingers (#37): Flux has

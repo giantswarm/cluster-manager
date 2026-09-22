@@ -1,0 +1,192 @@
+# wc1 as its apiserver shows it when a person forces the last pool away from
+# under a served model (seen on an installation): cluster-manager's slice
+# installed, the three well-known LLMInferenceServiceConfigs of
+# wc1-configs.yaml, and in the serving namespace three LLMInferenceServices
+# as the apiserver keeps them (the CRD's storage version, v1alpha2, the
+# controller's finalizer on each): qwen3-8b, composed by model-manager and
+# Ready on the pool's node; qwen3-stopped, composed by model-manager and
+# stopped a moment ago — terminating, the finalizer uncleared (the object
+# the installation was left with); by-hand, applied by someone else, which
+# cluster-manager names and leaves. The controller's Deployment is not here:
+# a test that needs it running adds it.
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: wc1-cp-1
+  labels: {}
+status:
+  nodeInfo:
+    osImage: Flatcar Container Linux by Kinvolk 4081.2.1 (Oklo)
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen3-8b
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/managed-by: model-manager
+    agent-platform.giantswarm.io/preset: qwen3-8b
+    model-manager.giantswarm.io/backend: kserve
+  annotations:
+    model-manager.giantswarm.io/model: Qwen/Qwen3-8B
+  finalizers:
+    - serving.kserve.io/llmisvc-finalizer
+spec:
+  model:
+    uri: hf://Qwen/Qwen3-8B
+    name: Qwen/Qwen3-8B
+  replicas: 1
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen3-stopped
+  namespace: model-serving
+  labels:
+    app.kubernetes.io/managed-by: model-manager
+    agent-platform.giantswarm.io/preset: qwen3-stopped
+    model-manager.giantswarm.io/backend: kserve
+  annotations:
+    model-manager.giantswarm.io/model: Qwen/Qwen3-4B-Instruct-2507
+  deletionTimestamp: "2026-09-21T21:37:03Z"
+  finalizers:
+    - serving.kserve.io/llmisvc-finalizer
+spec:
+  model:
+    uri: hf://Qwen/Qwen3-4B-Instruct-2507
+    name: Qwen/Qwen3-4B-Instruct-2507
+  replicas: 1
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: by-hand
+  namespace: model-serving
+  finalizers:
+    - serving.kserve.io/llmisvc-finalizer
+spec:
+  model:
+    uri: hf://meta-llama/Llama-3.1-8B-Instruct
+    name: meta-llama/Llama-3.1-8B-Instruct
+  replicas: 1
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-decode-worker-data-parallel
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-scheduler
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-template
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/namespace: org-acme
+  annotations:
+    meta.helm.sh/release-name: kserve-runtime-configs
+    meta.helm.sh/release-namespace: org-acme
+  finalizers:
+    - serving.kserve.io/llmisvcconfig-finalizer
+spec:
+  router: {}
+---
+# The two CRDs as the slice's kserve-llmisvc-crd child installs them: two
+# versions each, v1alpha2 the storage version, converted through the llmisvc
+# controller's webhook service — gone with the controller's release, so only
+# the storage version stays reachable (giantswarm/cluster-manager#39).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: llminferenceservices.serving.kserve.io
+spec:
+  group: serving.kserve.io
+  names:
+    kind: LLMInferenceService
+    plural: llminferenceservices
+  scope: Namespaced
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: llmisvc-webhook-server-service
+          namespace: org-acme
+          path: /convert
+      conversionReviewVersions: [v1]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: false
+    - name: v1alpha2
+      served: true
+      storage: true
+status:
+  storedVersions:
+    - v1alpha2
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: llminferenceserviceconfigs.serving.kserve.io
+spec:
+  group: serving.kserve.io
+  names:
+    kind: LLMInferenceServiceConfig
+    plural: llminferenceserviceconfigs
+  scope: Namespaced
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: llmisvc-webhook-server-service
+          namespace: org-acme
+          path: /convert
+      conversionReviewVersions: [v1]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: false
+    - name: v1alpha2
+      served: true
+      storage: true
+status:
+  storedVersions:
+    - v1alpha2
