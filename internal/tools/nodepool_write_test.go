@@ -1123,7 +1123,7 @@ func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
 	svc := lab.service(Config{Installation: "gazelle"})
 
 	_, err := svc.DeleteNodePool(ctx, del)
-	assertRefused(t, err, "node pool wc1-gpu-a10g runs no busy node on wc1, but 1 served model(s) wait for a node of the pool: LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct): pod model-serving/llama-3-8b-kserve-6649fb66c8-xnkd2 Pending on no node — removing the pool strands them (with the cluster's last pool the serving slice, its controller and the backend go too, and the serving object is left behind with a finalizer nothing clears) — unload them first (model-manager's unload_model) and re-run, or pass force to delete the pool regardless; 2 idle node(s) (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2) go with the pool once the models are unloaded")
+	assertRefused(t, err, "node pool wc1-gpu-a10g runs no busy node on wc1, but 1 served model(s) wait for a node of the pool: LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct): pod model-serving/llama-3-8b-kserve-6649fb66c8-xnkd2 Pending on no node — removing the pool strands them (with the cluster's last pool the serving slice, its controller and the backend go too; force removes the platform's served models with them, finalizer and all) — unload them first (model-manager's unload_model) and re-run, or pass force to delete the pool regardless; 2 idle node(s) (wc1-gpu-a10g-node-1, wc1-gpu-a10g-node-2) go with the pool once the models are unloaded")
 	assert.Equal(t, &Refused{
 		Nodes:       []string{},
 		Idle:        []string{"wc1-gpu-a10g-node-1", "wc1-gpu-a10g-node-2"},

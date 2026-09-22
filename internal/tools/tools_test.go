@@ -82,6 +82,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.DeploymentGVR:            "DeploymentList",
 	detect.ClusterPolicyGVR:         "ClusterPolicyList",
 	detect.LLMISVCGVR:               "LLMInferenceServiceList",
+	servedStorageGVR:                "LLMInferenceServiceList",
 	configsStorageGVR:               "LLMInferenceServiceConfigList",
 	detect.DaemonSetGVR:             "DaemonSetList",
 	detect.NodeClaimGVR:             "NodeClaimList",
@@ -96,6 +97,11 @@ var listKinds = map[schema.GroupVersionResource]string{
 // the version the fake keeps the configs under, as the apiserver keeps them
 // in etcd, and the one every request of cluster-manager goes through.
 var configsStorageGVR = detect.LLMISVCConfigResource.WithVersion("v1alpha2")
+
+// servedStorageGVR is the LLMInferenceServices API in the storage version of
+// the fixtures' CRD (targets/wc1-forced.yaml): the version the fake keeps the
+// served objects under, and the one the teardown removes them through.
+var servedStorageGVR = detect.LLMISVCResource.WithVersion("v1alpha2")
 
 // servingAPIs are the APIs a cluster without the serving layer does not
 // serve.

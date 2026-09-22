@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
@@ -35,6 +36,17 @@ import (
 // (nothing else will); then the configs' release — an uninstall that finds
 // nothing to delete —, then the rest. Every step within the call's budget:
 // what does not fit is pending and the re-run completes it.
+//
+// The models the platform serves go the same way. A forced teardown takes
+// the controller away from under them (the guards refuse it without force),
+// and the controller's finalizer on their LLMInferenceServices
+// (detect.LLMISVCFinalizer) is then cleared by nothing: a model stopped
+// afterwards sat "Stopping" for good on an installation (a forced removal,
+// then a stop). So once no controller runs, the served objects model-manager
+// composed in the serving namespace are removed by cluster-manager beside the
+// configs, finalizer and all; their workloads go with them through their
+// owner references. A serving object made by hand or through GitOps is
+// someone else's and is named, not touched.
 const (
 	// runtimeConfigsRelease is the slice's child HelmRelease of the
 	// well-known configs, named after its component in the meta chart.
@@ -200,6 +212,7 @@ func (td *teardown) deleteAll(plans []deletePlan) error {
 
 // servingTeardown removes the slice's serving objects that must go before
 // the slice release, in order: the llm-d controller's child release; the
+// served models model-manager composed in the serving namespace and the
 // LLMInferenceServiceConfigs of the release namespace on the target once no
 // controller runs there — waited for within the budget, removed with their
 // finalizer taken off; the configs' child release. A child release Flux
@@ -217,32 +230,47 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 	}
 	if t.Reader == nil {
 		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("whether LLMInferenceServiceConfigs remain in %s on %s cannot be told (%s): one left terminating with %s uncleared breaks the next serving slice installed there — check the namespace, or heal it by re-running create_node_pool once the cluster is readable as you", ns, cluster, t.Reason, detect.LLMISVCConfigFinalizer))
-	} else if err := td.purgeConfigsWhenControllerGone(t); err != nil {
+	} else if err := td.purgeWhenControllerGone(t, s.cfg.ServingNamespace); err != nil {
 		return err
 	}
 	return td.deleteChildRelease(ns, slice, runtimeConfigsRelease)
 }
 
-// purgeConfigsWhenControllerGone removes the LLMInferenceServiceConfigs of
-// the release namespace on the target, finalizer and all, once no llm-d
-// controller runs there — its webhook denies every delete while it does, and
-// nothing clears the finalizer once it is gone. The controller's release was
-// deleted a moment ago; Flux removes the controller within seconds, and the
-// wait is bounded by the budget: configs the call cannot remove in time are
-// pending. A delete the webhook still denies, or that fails while the webhook
-// is going, is retried the same way.
-func (td *teardown) purgeConfigsWhenControllerGone(t target) error {
+// purgeWhenControllerGone removes, once no llm-d controller runs on the
+// target, what the controller alone would clear: the served models
+// model-manager composed in the serving namespace, and the
+// LLMInferenceServiceConfigs of the release namespace — each deleted with its
+// finalizer taken off. While the controller runs its webhook denies every
+// delete of a config, and nothing clears either finalizer once it is gone.
+// The controller's release was deleted a moment ago; Flux removes the
+// controller within seconds, and the wait is bounded by the budget: objects
+// the call cannot remove in time are pending. A delete the webhook still
+// denies, or that fails while the webhook is going, is retried the same way.
+// A serving object someone else made (by hand, through GitOps) is named and
+// left: it is theirs to remove where it was created.
+func (td *teardown) purgeWhenControllerGone(t target, servingNamespace string) error {
 	configs, err := detect.Configs(td.ctx, t.Reader, t.Namespace)
-	if err != nil || len(configs) == 0 {
+	if err != nil {
 		return err
 	}
-	defer timed(td.ctx, "purge configs", "configs", len(configs))()
-	var reason string // why the configs are not gone yet
+	served, err := detect.ServedObjects(td.ctx, t.Reader, servingNamespace)
+	if err != nil {
+		return err
+	}
+	models, others := detect.SplitManaged(served)
+	if len(others) > 0 {
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceService(s) in %s on %s not composed by model-manager are left as they are (%s): with the llm-d controller gone, nothing clears %s once one is stopped — delete them where they were created, finalizer and all", len(others), servingNamespace, t.Cluster, strings.Join(detect.Names(others), ", "), detect.LLMISVCFinalizer))
+	}
+	if len(configs) == 0 && len(models) == 0 {
+		return nil
+	}
+	defer timed(td.ctx, "purge", "configs", len(configs), "models", len(models))()
+	var reason string // why the objects are not gone yet
 	for td.fits() && !td.dryRun {
 		if detect.LLMISVCControllerRuns(td.ctx, t.Reader) {
 			reason = "the llmisvc controller still runs on " + t.Cluster
 		} else {
-			err := purgeConfigs(td.ctx, t.Reader, configs)
+			err := purgeServing(td.ctx, t.Reader, models, configs)
 			if err == nil {
 				break
 			}
@@ -255,19 +283,43 @@ func (td *teardown) purgeConfigsWhenControllerGone(t target) error {
 			return err
 		}
 	}
-	for i := range configs {
-		td.record(ObjectAction{APIVersion: configs[i].GetAPIVersion(), Kind: configs[i].GetKind(), Name: configs[i].GetName(), Namespace: configs[i].GetNamespace(), Action: actionDelete})
+	for _, objs := range [][]unstructured.Unstructured{models, configs} {
+		for i := range objs {
+			td.record(ObjectAction{APIVersion: objs[i].GetAPIVersion(), Kind: objs[i].GetKind(), Name: objs[i].GetName(), Namespace: objs[i].GetNamespace(), Action: actionDelete})
+		}
 	}
-	names := strings.Join(detect.Names(configs), ", ")
-	switch {
-	case td.cut:
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are pending (%s): their release's uninstall and any delete are denied by the llmisvc webhook while the controller runs, and %s is cleared by nothing once it is gone — the re-run removes them with the finalizer taken off: %s", len(configs), t.Namespace, t.Cluster, reason, detect.LLMISVCConfigFinalizer, names))
-	case td.dryRun:
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s would be removed by cluster-manager with %s taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
-	default:
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s removed by cluster-manager with %s taken off (the llmisvc controller's webhook denies every delete while it runs, and nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
+	if len(models) > 0 {
+		names := strings.Join(detect.Names(models), ", ")
+		switch {
+		case td.cut:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d served model(s) in %s on %s are pending (%s): the teardown takes the llm-d controller away from under them, and %s is cleared by nothing once it is gone — the re-run removes them with the finalizer taken off: %s", len(models), servingNamespace, t.Cluster, reason, detect.LLMISVCFinalizer, names))
+		case td.dryRun:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d served model(s) in %s on %s would be removed by cluster-manager with %s taken off once the llmisvc controller is gone (the teardown takes the controller away from under them; nothing clears the finalizer once it is gone): %s", len(models), servingNamespace, t.Cluster, detect.LLMISVCFinalizer, names))
+		default:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d served model(s) in %s on %s removed by cluster-manager with %s taken off (the teardown took the llm-d controller away from under them, and nothing clears the finalizer once it is gone; their workloads go with them): %s", len(models), servingNamespace, t.Cluster, detect.LLMISVCFinalizer, names))
+		}
+	}
+	if len(configs) > 0 {
+		names := strings.Join(detect.Names(configs), ", ")
+		switch {
+		case td.cut:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are pending (%s): their release's uninstall and any delete are denied by the llmisvc webhook while the controller runs, and %s is cleared by nothing once it is gone — the re-run removes them with the finalizer taken off: %s", len(configs), t.Namespace, t.Cluster, reason, detect.LLMISVCConfigFinalizer, names))
+		case td.dryRun:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s would be removed by cluster-manager with %s taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
+		default:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s removed by cluster-manager with %s taken off (the llmisvc controller's webhook denies every delete while it runs, and nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
+		}
 	}
 	return nil
+}
+
+// purgeServing removes the served models, then the configs they compose
+// from, each set concurrently (purgeAll). The first error is returned.
+func purgeServing(ctx context.Context, reader dynamic.Interface, models, configs []unstructured.Unstructured) error {
+	if err := purgeAll(ctx, reader, detect.LLMISVCResource, detect.LLMISVCFinalizer, models); err != nil {
+		return err
+	}
+	return purgeConfigs(ctx, reader, configs)
 }
 
 // transientAdmission reports an error the going llmisvc webhook explains: a
@@ -384,38 +436,43 @@ func pollInterval(timeout time.Duration) time.Duration {
 	return max(10*time.Millisecond, min(2*time.Second, timeout/20))
 }
 
-// purgeConfigs removes the configs from the target, concurrently: deleted,
-// then their llmisvc finalizer taken off — a terminating object goes the
-// moment its last finalizer does, and a controller cannot put one back on an
-// object that is gone. Every request goes through the version the config was
-// listed in — the CRD's storage version (detect.ConfigsGVR), which needs no
-// conversion: the CRD's conversion webhook is the llmisvc controller's, gone
-// with its release a step before (giantswarm/cluster-manager#39). The first
-// error is returned.
+// purgeConfigs removes the configs from the target: deleted, then their
+// llmisvc finalizer taken off (purgeAll).
 func purgeConfigs(ctx context.Context, reader dynamic.Interface, configs []unstructured.Unstructured) error {
+	return purgeAll(ctx, reader, detect.LLMISVCConfigResource, detect.LLMISVCConfigFinalizer, configs)
+}
+
+// purgeAll removes gr's objects from the target, concurrently: deleted, then
+// finalizer taken off — a terminating object goes the moment its last
+// finalizer does, and a controller cannot put one back on an object that is
+// gone. Every request goes through the version the object was listed in —
+// the CRD's storage version (detect.ConfigsGVR, detect.ServedGVR), which
+// needs no conversion: the CRD's conversion webhook is the llmisvc
+// controller's, gone with its release a step before
+// (giantswarm/cluster-manager#39). The first error is returned.
+func purgeAll(ctx context.Context, reader dynamic.Interface, gr schema.GroupResource, finalizer string, objs []unstructured.Unstructured) error {
 	g, gctx := errgroup.WithContext(ctx)
-	for i := range configs {
-		c := &configs[i]
-		g.Go(func() error { return purgeConfig(gctx, reader, c) })
+	for i := range objs {
+		obj := &objs[i]
+		g.Go(func() error { return purgeOne(gctx, reader, gr, finalizer, obj) })
 	}
 	return g.Wait()
 }
 
-// purgeConfig deletes one config and takes its llmisvc finalizer off,
-// retrying the update on a conflict with the controller; gone already is
-// fine.
-func purgeConfig(ctx context.Context, reader dynamic.Interface, c *unstructured.Unstructured) error {
-	ns, name := c.GetNamespace(), c.GetName()
-	res := reader.Resource(detect.LLMISVCConfigResource.WithVersion(c.GroupVersionKind().Version)).Namespace(ns)
+// purgeOne deletes one object and takes finalizer off it, retrying the
+// update on a conflict with the controller; gone already is fine.
+func purgeOne(ctx context.Context, reader dynamic.Interface, gr schema.GroupResource, finalizer string, obj *unstructured.Unstructured) error {
+	ns, name, kind := obj.GetNamespace(), obj.GetName(), obj.GetKind()
+	res := reader.Resource(gr.WithVersion(obj.GroupVersionKind().Version)).Namespace(ns)
 	if err := res.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete LLMInferenceServiceConfig %s/%s: %w", ns, name, err)
+		return fmt.Errorf("delete %s %s/%s: %w", kind, ns, name, err)
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		c, err := res.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
-		finalizers := withoutFinalizer(c.GetFinalizers(), detect.LLMISVCConfigFinalizer)
+		finalizers := withoutFinalizer(c.GetFinalizers(), finalizer)
 		if len(finalizers) == len(c.GetFinalizers()) {
 			return nil
 		}
@@ -424,7 +481,7 @@ func purgeConfig(ctx context.Context, reader dynamic.Interface, c *unstructured.
 		return err
 	})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("clear %s of LLMInferenceServiceConfig %s/%s: %w", detect.LLMISVCConfigFinalizer, ns, name, err)
+		return fmt.Errorf("clear %s of %s %s/%s: %w", finalizer, kind, ns, name, err)
 	}
 	return nil
 }

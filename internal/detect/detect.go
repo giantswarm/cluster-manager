@@ -111,6 +111,12 @@ var (
 	// webhook, gone with the controller's release while the teardown removes
 	// the configs (giantswarm/cluster-manager#39).
 	LLMISVCConfigResource = schema.GroupResource{Group: "serving.kserve.io", Resource: "llminferenceserviceconfigs"}
+	// LLMISVCResource is the LLMInferenceServices — the objects model-manager
+	// composes for the models it serves — without a version for the same
+	// reason: the teardown reads and removes them through the CRD's storage
+	// version (ServedGVR) once the controller and its conversion webhook are
+	// gone.
+	LLMISVCResource = schema.GroupResource{Group: "serving.kserve.io", Resource: "llminferenceservices"}
 )
 
 // Labels the detection reads.
@@ -164,6 +170,13 @@ const (
 	// the CRD exists, and a slice installed next adopts and loses it
 	// (giantswarm/cluster-manager#28).
 	LLMISVCConfigFinalizer = "serving.kserve.io/llmisvcconfig-finalizer"
+	// LLMISVCFinalizer is the controller's finalizer on every
+	// LLMInferenceService. With the controller gone nothing clears it: a
+	// model stopped after a forced teardown sits terminating for as long as
+	// the CRD exists (seen on an installation), so a teardown that takes
+	// the controller away removes the platform's served models itself,
+	// finalizer and all.
+	LLMISVCFinalizer = "serving.kserve.io/llmisvc-finalizer"
 )
 
 // GPUOperator reports the GPU operator on the target, in this order of
@@ -470,22 +483,37 @@ func strandedEvidence(ctx context.Context, reader dynamic.Interface, namespace s
 // (giantswarm/cluster-manager#39). served is false where the CRD is not
 // there; a CRD that cannot be read is an error, never a guessed version.
 func ConfigsGVR(ctx context.Context, reader dynamic.Interface) (gvr schema.GroupVersionResource, served bool, err error) {
-	crd, err := reader.Resource(CRDGVR).Get(ctx, LLMISVCConfigResource.String(), metav1.GetOptions{})
+	return storageGVR(ctx, reader, LLMISVCConfigResource)
+}
+
+// ServedGVR is the LLMInferenceServices API of the target in its CRD's
+// storage version, read now — the version the teardown removes the served
+// objects through once the controller's conversion webhook is gone, as
+// ConfigsGVR is for the configs. served is false where the CRD is not there.
+func ServedGVR(ctx context.Context, reader dynamic.Interface) (gvr schema.GroupVersionResource, served bool, err error) {
+	return storageGVR(ctx, reader, LLMISVCResource)
+}
+
+// storageGVR reads the storage version of gr's CRD on the target. served is
+// false where the CRD is not there; a CRD that cannot be read is an error,
+// never a guessed version.
+func storageGVR(ctx context.Context, reader dynamic.Interface, gr schema.GroupResource) (gvr schema.GroupVersionResource, served bool, err error) {
+	crd, err := reader.Resource(CRDGVR).Get(ctx, gr.String(), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			return schema.GroupVersionResource{}, false, nil
 		}
-		return schema.GroupVersionResource{}, false, fmt.Errorf("read CRD %s: %w", LLMISVCConfigResource, err)
+		return schema.GroupVersionResource{}, false, fmt.Errorf("read CRD %s: %w", gr, err)
 	}
 	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
 	for _, v := range versions {
 		version, _ := v.(map[string]any)
 		if storage, _ := version["storage"].(bool); storage {
 			name, _ := version["name"].(string)
-			return LLMISVCConfigResource.WithVersion(name), true, nil
+			return gr.WithVersion(name), true, nil
 		}
 	}
-	return schema.GroupVersionResource{}, false, fmt.Errorf("CRD %s names no storage version", LLMISVCConfigResource)
+	return schema.GroupVersionResource{}, false, fmt.Errorf("CRD %s names no storage version", gr)
 }
 
 // Configs lists the LLMInferenceServiceConfigs of a namespace on the target
@@ -493,7 +521,22 @@ func ConfigsGVR(ctx context.Context, reader dynamic.Interface) (gvr schema.Group
 // target does not serve has none. Each carries the version it was read in,
 // the one to remove it through.
 func Configs(ctx context.Context, reader dynamic.Interface, namespace string) ([]unstructured.Unstructured, error) {
-	gvr, served, err := ConfigsGVR(ctx, reader)
+	return stored(ctx, reader, LLMISVCConfigResource, namespace)
+}
+
+// ServedObjects lists the LLMInferenceServices of a namespace on the target
+// through the CRD's storage version (ServedGVR), sorted by name — the objects
+// as the teardown removes them, beside ServedModels' view of the models. An
+// API the target does not serve has none.
+func ServedObjects(ctx context.Context, reader dynamic.Interface, namespace string) ([]unstructured.Unstructured, error) {
+	return stored(ctx, reader, LLMISVCResource, namespace)
+}
+
+// stored lists gr's objects of a namespace on the target through the CRD's
+// storage version (storageGVR), sorted by name; each carries the version it
+// was read in, the one to remove it through.
+func stored(ctx context.Context, reader dynamic.Interface, gr schema.GroupResource, namespace string) ([]unstructured.Unstructured, error) {
+	gvr, served, err := storageGVR(ctx, reader, gr)
 	if err != nil || !served {
 		return nil, err
 	}
@@ -506,6 +549,20 @@ func Configs(ctx context.Context, reader dynamic.Interface, namespace string) ([
 	}
 	sort.Slice(items.Items, func(i, j int) bool { return items.Items[i].GetName() < items.Items[j].GetName() })
 	return items.Items, nil
+}
+
+// SplitManaged separates the serving objects model-manager composed (its
+// `app.kubernetes.io/managed-by` label) from the ones made by hand or through
+// GitOps, in order.
+func SplitManaged(objs []unstructured.Unstructured) (managed, others []unstructured.Unstructured) {
+	for i := range objs {
+		if objs[i].GetLabels()[compose.LabelManagedBy] == ManagedByModelManager {
+			managed = append(managed, objs[i])
+		} else {
+			others = append(others, objs[i])
+		}
+	}
+	return managed, others
 }
 
 // Terminating is the subset of objs with a deletionTimestamp.

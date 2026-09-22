@@ -21,7 +21,8 @@ import (
 // finalizer nothing clears. Every serving object model-manager manages in the
 // serving namespace counts now, whatever its phase: one on a node of the
 // pool is a busy node; one on no node is waiting for one, and the delete is
-// refused naming it.
+// refused naming it. With force the teardown removes the platform's served
+// models itself, finalizer and all (teardown.go).
 
 // waitingModel is a served model of model-manager's whose predictor runs on
 // no node: Pending, waiting for a node of the pool — or without a pod yet,
@@ -118,7 +119,7 @@ func (s *Service) waitingGuard(ctx context.Context, t target, pool string, idle 
 		names = append(names, w.model.String())
 		details = append(details, w.String())
 	}
-	reason := fmt.Sprintf("node pool %s runs no busy node on %s, but %d served model(s) wait for a node of the pool: %s — removing the pool strands them (with the cluster's last pool the serving slice, its controller and the backend go too, and the serving object is left behind with a finalizer nothing clears) — %s", pool, t.Cluster, len(waiting), strings.Join(details, "; "), rerun)
+	reason := fmt.Sprintf("node pool %s runs no busy node on %s, but %d served model(s) wait for a node of the pool: %s — removing the pool strands them (with the cluster's last pool the serving slice, its controller and the backend go too; force removes the platform's served models with them, finalizer and all) — %s", pool, t.Cluster, len(waiting), strings.Join(details, "; "), rerun)
 	if len(idle) > 0 {
 		reason += fmt.Sprintf("; %d idle node(s) (%s) go with the pool once the models are unloaded", len(idle), strings.Join(nodeNames(idle), ", "))
 	}
