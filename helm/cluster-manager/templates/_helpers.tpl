@@ -22,12 +22,14 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
-Chart label value.
+Chart label value. A label value is at most 63 characters and begins and
+ends alphanumeric: the cut of a long version (a branch build's
+<version>-dev.<branch>.<date>.<time>.<sha>, or the <version>+<digest>
+helm-controller installs) can land on any run of ".", "_" (from "+") and "-",
+so the whole run is trimmed.
 */}}
 {{- define "cluster-manager.chart" -}}
-{{- /* A label value ends alphanumeric: the 63-char cut of a branch build's
-       version (0.x.y-dev.<branch>.<timestamp>.<sha>) can land on a "." too. */}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" | trimSuffix "." }}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimAll "-._" }}
 {{- end }}
 
 {{/*
