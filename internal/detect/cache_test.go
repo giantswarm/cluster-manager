@@ -43,6 +43,19 @@ func classed(pvc *unstructured.Unstructured, class, size, created string) *unstr
 	return pvc
 }
 
+// tiered is claim with the tier annotations the connectivity chart stamps on
+// it at create; an empty figure is left out.
+func tiered(pvc *unstructured.Unstructured, volumeType, iops, throughput string) *unstructured.Unstructured {
+	annotations := map[string]string{}
+	for key, value := range map[string]string{AnnotationVolumeType: volumeType, AnnotationVolumeIOPS: iops, AnnotationVolumeThroughput: throughput} {
+		if value != "" {
+			annotations[key] = value
+		}
+	}
+	pvc.SetAnnotations(annotations)
+	return pvc
+}
+
 func storageClass(name string, params map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
@@ -80,6 +93,8 @@ func zoneAffinity(key, zone string) map[string]any {
 // provisioners wrote; a claim not Bound has none yet; a volume that names no
 // zone pins nothing; a volume that cannot be read carries the error, never
 // a guessed zone; no claim is an empty list; the list refused is the error.
+// A claim's tier is its StorageClass's where the class can be read, else its
+// tier annotations', else unknown with the note, the source named.
 func TestCacheClaims(t *testing.T) {
 	ctx := context.Background()
 	one := func(c *CacheClaim) []*CacheClaim { return []*CacheClaim{c} }
@@ -117,7 +132,25 @@ func TestCacheClaims(t *testing.T) {
 			storageClass("agent-platform-connectivity-hf-cache", map[string]any{"type": "gp3", "iops": "3000", "throughput": "500"}),
 		}, one(&CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-1", Zone: "eu-central-1b",
 			Capacity: "100Gi", CapacityGiB: 100, StorageClass: "agent-platform-connectivity-hf-cache", Tier: &compose.VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500},
-			ReclaimPolicy: ReclaimDelete, Created: "2026-09-18T20:31:04Z"})},
+			TierSource: TierSourceStorageClass, ReclaimPolicy: ReclaimDelete, Created: "2026-09-18T20:31:04Z"})},
+		// The tier the chart stamps on the claim (giantswarm/agent-platform#605,
+		// giantswarm/cluster-manager#99): the class is read where it exists,
+		// whatever the annotations say; once it is gone, the annotations.
+		{"the class exists: its tier, whatever the claim's annotations say", []runtime.Object{
+			classed(tiered(claim("hf-cache", "Bound", "pvc-1"), "io2", "16000", "1000"), "agent-platform-connectivity-hf-cache", "100Gi", "2026-09-18T20:31:04Z"),
+			withReclaim(volume("pvc-1", zoneAffinity(LabelZone, "eu-central-1b")), ReclaimDelete),
+			storageClass("agent-platform-connectivity-hf-cache", map[string]any{"type": "gp3", "iops": "3000", "throughput": "500"}),
+		}, one(&CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-1", Zone: "eu-central-1b",
+			Capacity: "100Gi", CapacityGiB: 100, StorageClass: "agent-platform-connectivity-hf-cache", Tier: &compose.VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500},
+			TierSource: TierSourceStorageClass, ReclaimPolicy: ReclaimDelete, Created: "2026-09-18T20:31:04Z"})},
+		{"the class gone, the claim's annotations: the tier from them", []runtime.Object{
+			classed(tiered(claim("hf-cache", "Bound", "pvc-1"), "gp3", "3000", "500"), "agent-platform-connectivity-hf-cache-old", "100Gi", "2026-09-18T20:31:04Z"),
+			withReclaim(volume("pvc-1", zoneAffinity(LabelZone, "eu-central-1b")), ReclaimDelete),
+		}, one(&CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Bound", Volume: "pvc-1", Zone: "eu-central-1b",
+			Capacity: "100Gi", CapacityGiB: 100, StorageClass: "agent-platform-connectivity-hf-cache-old", Tier: &compose.VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500},
+			TierSource: TierSourceClaimAnnotations, ReclaimPolicy: ReclaimDelete, Created: "2026-09-18T20:31:04Z"})},
+		{"no class named, the claim's annotations: the tier from them", []runtime.Object{tiered(claim("hf-cache", "Pending", ""), "gp3", "3000", "")},
+			one(&CacheClaim{Namespace: "model-serving", Name: "hf-cache", Phase: "Pending", Tier: &compose.VolumeTier{Type: "gp3", IOPS: 3000}, TierSource: TierSourceClaimAnnotations})},
 		{"the class gone: the tier is not known and says so", []runtime.Object{
 			classed(claim("hf-cache", "Bound", "pvc-1"), "agent-platform-connectivity-hf-cache-old", "100Gi", "2026-09-18T20:31:04Z"),
 			withReclaim(volume("pvc-1", zoneAffinity(LabelZone, "eu-central-1b")), ReclaimDelete),
