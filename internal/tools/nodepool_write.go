@@ -845,7 +845,11 @@ func (s *Service) nodesGuard(ctx context.Context, dyn dynamic.Interface, c *unst
 	}
 	idle := live.idle()
 	if len(busy) == 0 {
-		if err := s.waitingGuard(ctx, t, pool, idle); err != nil {
+		last, err := lastPool(ctx, dyn, ns, c.GetName(), pool)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.waitingGuard(ctx, t, pool, last, idle); err != nil {
 			return nil, err
 		}
 		return idle, nil

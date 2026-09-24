@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
@@ -23,6 +25,16 @@ import (
 // pool is a busy node; one on no node is waiting for one, and the delete is
 // refused naming it. With force the teardown removes the platform's served
 // models itself, finalizer and all (teardown.go).
+//
+// Whose node a predictor waits for (giantswarm/cluster-manager#88): with
+// several pools on the cluster only the pool a Pending predictor waits for
+// strands it. The predictor names that pool by its own node selection — the
+// pool label as a nodeSelector, or required affinity terms on it — or,
+// naming none, Karpenter does, by the NodeClaim it last nominated the pod
+// for, whose name is the pool's NodePool (the pool release) and a suffix. A
+// predictor that says neither can land on any GPU pool and counts for each;
+// with the cluster's last pool every waiting model counts, since the slice
+// goes with it.
 
 // waitingModel is a served model of model-manager's whose predictor runs on
 // no node: Pending, waiting for a node of the pool — or without a pod yet,
@@ -45,11 +57,12 @@ func (w waitingModel) String() string {
 
 // waitingModels lists, among the models served on the target, the ones
 // model-manager manages in the serving namespace whose predictor runs on no
-// node — read as the caller from the namespace's pods, once. A model with a
-// pod on a node is served there (on a node of this pool it is a busy node
-// the guard names first; on another pool's it is that pool's) and does not
-// count.
-func waitingModels(ctx context.Context, reader dynamic.Interface, namespace string, models []detect.ServedModel) ([]waitingModel, error) {
+// node and may wait for a node of pool — read as the caller from the
+// namespace's pods, once. A model with a pod on a node is served there (on a
+// node of this pool it is a busy node the guard names first; on another
+// pool's it is that pool's) and does not count; neither does one whose
+// Pending pods all wait for another pool, unless pool is the cluster's last.
+func waitingModels(ctx context.Context, reader dynamic.Interface, namespace, pool string, last bool, models []detect.ServedModel) ([]waitingModel, error) {
 	var managed []detect.ServedModel
 	for _, m := range models {
 		if m.Managed(namespace) {
@@ -63,7 +76,11 @@ func waitingModels(ctx context.Context, reader dynamic.Interface, namespace stri
 	if err != nil {
 		return nil, fmt.Errorf("list the pods of %s: %w", namespace, err)
 	}
-	scheduled := map[string]bool{}
+	var nominated map[string]string
+	if !last {
+		nominated = nominations(ctx, reader, namespace)
+	}
+	scheduled, elsewhere := map[string]bool{}, map[string]bool{}
 	pending := map[string][]string{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
@@ -80,12 +97,16 @@ func waitingModels(ctx context.Context, reader dynamic.Interface, namespace stri
 			scheduled[key] = true
 			continue
 		}
+		if pools := waitsFor(pod, nominated); !last && pools != nil && !pools[pool] {
+			elsewhere[key] = true
+			continue
+		}
 		pending[key] = append(pending[key], pod.GetNamespace()+"/"+pod.GetName())
 	}
 	var out []waitingModel
 	for _, m := range managed {
 		key := m.Kind + "/" + m.Name
-		if scheduled[key] {
+		if scheduled[key] || (elsewhere[key] && len(pending[key]) == 0) {
 			continue
 		}
 		sort.Strings(pending[key])
@@ -94,19 +115,99 @@ func waitingModels(ctx context.Context, reader dynamic.Interface, namespace stri
 	return out, nil
 }
 
+// waitsFor names the pools a Pending pod can land on: the pool label's value
+// in its nodeSelector, the values its required affinity terms admit when
+// every term constrains the label, else the pool of the NodeClaim Karpenter
+// nominated it for. Nil when nothing names a pool.
+func waitsFor(pod *unstructured.Unstructured, nominated map[string]string) map[string]bool {
+	if v := nestedString(pod, "spec", "nodeSelector", compose.LabelMachinePool); v != "" {
+		return map[string]bool{v: true}
+	}
+	terms, _, _ := unstructured.NestedSlice(pod.Object, "spec", "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms")
+	pools := map[string]bool{}
+	for _, t := range terms {
+		term, _ := t.(map[string]any)
+		exprs, _, _ := unstructured.NestedSlice(term, "matchExpressions")
+		constrained := false
+		for _, e := range exprs {
+			expr, _ := e.(map[string]any)
+			if expr["key"] != compose.LabelMachinePool || expr["operator"] != "In" {
+				continue
+			}
+			constrained = true
+			values, _, _ := unstructured.NestedStringSlice(expr, "values")
+			for _, v := range values {
+				pools[v] = true
+			}
+		}
+		if !constrained {
+			pools = nil // a term that admits any pool
+			break
+		}
+	}
+	if len(pools) > 0 {
+		return pools
+	}
+	if p := nominated[pod.GetName()]; p != "" {
+		return map[string]bool{p: true}
+	}
+	return nil
+}
+
+// nominations maps each pod of namespace Karpenter nominated for a NodeClaim
+// to that claim's pool, from its Nominated events ("Pod should schedule on:
+// nodeclaim/<pool>-<suffix>"), the latest per pod. Best effort: events that
+// cannot be read name no pool, and every waiting model then counts.
+func nominations(ctx context.Context, reader dynamic.Interface, namespace string) map[string]string {
+	events, err := reader.Resource(detect.EventsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{FieldSelector: "reason=Nominated"})
+	if err != nil {
+		return nil
+	}
+	out, at := map[string]string{}, map[string]string{}
+	for i := range events.Items {
+		ev := &events.Items[i]
+		if nestedString(ev, "reason") != "Nominated" || nestedString(ev, "involvedObject", "kind") != "Pod" {
+			continue
+		}
+		_, claim, ok := strings.Cut(nestedString(ev, "message"), "nodeclaim/")
+		if !ok {
+			continue
+		}
+		claim, _, _ = strings.Cut(claim, ",")
+		i := strings.LastIndex(claim, "-")
+		if i <= 0 {
+			continue
+		}
+		pod, when := nestedString(ev, "involvedObject", "name"), eventWhen(ev)
+		if when >= at[pod] {
+			out[pod], at[pod] = strings.TrimSpace(claim[:i]), when
+		}
+	}
+	return out
+}
+
+// eventWhen is an event's latest time as an RFC 3339 string (they sort as
+// times): lastTimestamp, else eventTime.
+func eventWhen(ev *unstructured.Unstructured) string {
+	if t := nestedString(ev, "lastTimestamp"); t != "" {
+		return t
+	}
+	return nestedString(ev, "eventTime")
+}
+
 // waitingGuard is the nodes guard once no node of the pool is busy: refused
 // while a model model-manager serves waits for a node — its predictor would
 // be stranded, the slice and the backend gone from under it with the
 // cluster's last pool —, and while whether one does cannot be told. The
 // refusal names the waiting models and the idle nodes that go with the pool
 // once they are unloaded.
-func (s *Service) waitingGuard(ctx context.Context, t target, pool string, idle []*poolNode) error {
+func (s *Service) waitingGuard(ctx context.Context, t target, pool string, last bool, idle []*poolNode) error {
 	const rerun = "unload them first (model-manager's unload_model) and re-run, or pass force to delete the pool regardless"
 	models, err := detect.ServedModels(ctx, t.Reader)
 	if err != nil {
 		return &ErrRefused{Reason: fmt.Sprintf("node pool %s runs no busy node on %s, but whether a served model waits for one cannot be told (%v): a predictor Pending for a node of the pool would be stranded by the delete — re-run once you may list the cluster's inference services, or pass force to delete the pool regardless", pool, t.Cluster, err)}
 	}
-	waiting, err := waitingModels(ctx, t.Reader, s.cfg.ServingNamespace, models)
+	waiting, err := waitingModels(ctx, t.Reader, s.cfg.ServingNamespace, pool, last, models)
 	if err != nil {
 		return &ErrRefused{Reason: fmt.Sprintf("node pool %s runs no busy node on %s, but whether a served model waits for one cannot be told (%v): a predictor Pending for a node of the pool would be stranded by the delete — re-run once you may list the pods of %s, or pass force to delete the pool regardless", pool, t.Cluster, err, s.cfg.ServingNamespace)}
 	}

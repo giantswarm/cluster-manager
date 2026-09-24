@@ -1154,3 +1154,72 @@ func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no model")
 }
+
+// TestDeleteNodePoolIgnoresAnotherPoolsWaitingModel
+// (giantswarm/cluster-manager#88): with a second GPU pool on the cluster, a
+// model whose predictor waits for a node of that other pool — named by its
+// nodeSelector, or by the NodeClaim Karpenter nominated it for — does not
+// hold this idle pool's delete; one nominated for a node of this pool does,
+// and so does every waiting model once this pool is the cluster's last.
+func TestDeleteNodePoolIgnoresAnotherPoolsWaitingModel(t *testing.T) {
+	ctx := context.Background()
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, DryRun: true}
+	const podName = "llama-3-8b-kserve-6649fb66c8-xnkd2"
+	lab := newLab(t, "installation.yaml").target(t, wc1APIServer, "wc1-waiting.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
+	other := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"name": "wc1-gpu-l40s", "namespace": "org-acme", "labels": map[string]any{
+			compose.LabelChartName: compose.PoolChart, compose.LabelCluster: "wc1", "app.kubernetes.io/managed-by": "cluster-manager", "giantswarm.io/node-pool": "gpu-l40s",
+		}},
+	}}
+	_, err := lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Create(ctx, other, metav1.CreateOptions{})
+	require.NoError(t, err)
+	pods := lab.targets[wc1APIServer].Resource(detect.PodsGVR).Namespace("model-serving")
+	setSelector := func(pool string) {
+		t.Helper()
+		pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
+		require.NoError(t, err)
+		if pool == "" {
+			unstructured.RemoveNestedField(pod.Object, "spec", "nodeSelector")
+		} else {
+			require.NoError(t, unstructured.SetNestedStringMap(pod.Object, map[string]string{compose.LabelMachinePool: pool}, "spec", "nodeSelector"))
+		}
+		_, err = pods.Update(ctx, pod, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+	events := lab.targets[wc1APIServer].Resource(detect.EventsGVR).Namespace("model-serving")
+	nominate := func(name, claim, at string) {
+		t.Helper()
+		_, err := events.Create(ctx, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1", "kind": "Event",
+			"metadata":       map[string]any{"name": name, "namespace": "model-serving"},
+			"involvedObject": map[string]any{"kind": "Pod", "name": podName, "namespace": "model-serving"},
+			"reason":         "Nominated",
+			"message":        "Pod should schedule on: nodeclaim/" + claim,
+			"lastTimestamp":  at,
+		}}, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+
+	setSelector("wc1-gpu-l40s")
+	_, err = svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err, "the waiting model's nodeSelector names the other pool")
+
+	setSelector("")
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "1 served model(s) wait for a node of the pool") // a predictor that names no pool can land on this one
+
+	nominate("llama-3-8b.1", "wc1-gpu-l40s-q2w8e", "2026-09-19T17:40:00Z")
+	_, err = svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err, "Karpenter nominated the predictor for a NodeClaim of the other pool")
+
+	nominate("llama-3-8b.2", "wc1-gpu-a10g-z7k4m", "2026-09-19T17:45:00Z")
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "1 served model(s) wait for a node of the pool") // the latest nomination is for a NodeClaim of this pool
+
+	require.NoError(t, lab.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Delete(ctx, "wc1-gpu-l40s", metav1.DeleteOptions{}))
+	setSelector("wc1-gpu-l40s")
+	_, err = svc.DeleteNodePool(ctx, del)
+	assertRefused(t, err, "1 served model(s) wait for a node of the pool") // with the cluster's last pool every waiting model counts: the slice goes too
+}
