@@ -293,7 +293,7 @@ func TestCreateNodePoolRefusesBeforeWriting(t *testing.T) {
 
 // TestDeleteLastPoolRemovesOperatorAndBackend: with pools gpu-a10g (fixture)
 // and gpu-l4 (created) on wc1, deleting gpu-l4 leaves the operator and the
-// backend; deleting gpu-a10g, the last, takes them.
+// backend, re-written for gpu-a10g; deleting gpu-a10g, the last, takes them.
 func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 	l := newLab(t, "installation.yaml")
 	svc := l.service(Config{Installation: "gazelle"})
@@ -304,7 +304,7 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 	first, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-l4", Mode: ModeApply})
 	require.NoError(t, err)
 	assert.False(t, first.LastPool)
-	assert.Equal(t, []string{"delete", "delete", "delete"}, actions(first), "release, source, values Secret — the operator stays with gpu-a10g")
+	assert.Equal(t, []string{"update", "delete", "delete", "delete"}, actions(first), "the backend re-written for gpu-a10g; source, values Secret, release — the operator stays with gpu-a10g")
 
 	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
 	require.NoError(t, err)

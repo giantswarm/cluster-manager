@@ -1,0 +1,60 @@
+apiVersion: v1
+data:
+  backend.yaml: |
+    apiVersion: agent-platform.giantswarm.io/v1alpha1
+    kind: ModelBackend
+    metadata:
+      name: kserve
+    spec:
+      kind: kserve
+      kserve:
+        discovery:
+          namespace: org-acme
+        gpuPools:
+          wc1-gpu-a10g:
+            instances:
+            - gpuMemoryGiB: 24
+              gpus: 1
+              instanceType: g5.xlarge
+              memoryGiB: 16
+              size: xlarge
+              usableMemoryGiB: 11.9
+              usableVcpu: 3
+              vcpu: 4
+          wc1-gpu-l4:
+            instances:
+            - gpuMemoryGiB: 24
+              gpus: 1
+              instanceType: g6.xlarge
+              memoryGiB: 16
+              size: xlarge
+              usableMemoryGiB: 11.9
+              usableVcpu: 3
+              vcpu: 4
+            - gpuMemoryGiB: 24
+              gpus: 1
+              instanceType: g6.2xlarge
+              memoryGiB: 32
+              size: 2xlarge
+              usableMemoryGiB: 27.1
+              usableVcpu: 7
+              vcpu: 8
+        target:
+          apiServer: https://api.wc1.acme.example.io:6443
+          caBundle: |
+            -----BEGIN CERTIFICATE-----
+            MIIBfixture
+            -----END CERTIFICATE-----
+          cluster: wc1
+          organization: acme
+          servingNamespace: model-serving
+      source: cluster-manager
+kind: ConfigMap
+metadata:
+  labels:
+    agent-platform.giantswarm.io/model-backend: "true"
+    agent-platform.giantswarm.io/model-backend-source: cluster-manager
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: wc1
+  name: model-backend-kserve
+  namespace: agent-platform
