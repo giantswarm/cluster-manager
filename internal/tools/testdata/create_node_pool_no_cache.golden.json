@@ -307,6 +307,12 @@
                 }
               }
             },
+            "networkPolicy": {
+              "additionalIngressNamespaces": [
+                "agent-platform",
+                "ate-system"
+              ]
+            },
             "serving": {
               "runtimeClassName": "nvidia"
             }

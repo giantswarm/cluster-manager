@@ -46,7 +46,31 @@ func TestEnableModelServingOwnCluster(t *testing.T) {
 	issuer, _, _ := unstructured.NestedString(values, "global", "identity", "issuerUrl")
 	assert.Equal(t, "https://dex.gazelle.example.io", issuer, "from the platform's valuesFrom ConfigMap")
 	assert.NotContains(t, backendDoc(out), "gpuPool", "no pool: the document names no sizes")
+	ingress, _, _ := unstructured.NestedStringSlice(values, "modelServing", "networkPolicy", "additionalIngressNamespaces")
+	assert.Equal(t, []string{"agent-platform", compose.DefaultSubstrateNamespace}, ingress, "the namespace the platform's release is deployed in (status.history) and the chart's Substrate namespace: model-manager, the agentgateway data plane and the agents' egress reach the model pods (giantswarm/cluster-manager#103)")
 	assertGolden(t, "enable_model_serving_own_cluster", out)
+}
+
+// TestEnableModelServingOwnClusterIngressNamespaces
+// (giantswarm/cluster-manager#103): the namespaces the platform's release
+// names win over the deployed namespace and the chart's default —
+// gitops.targetNamespace for its workloads, components.substrate
+// .targetNamespace for its Substrate.
+func TestEnableModelServingOwnClusterIngressNamespaces(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	ctx := context.Background()
+	platform, err := l.installation.Resource(HelmReleaseGVR).Namespace("flux-giantswarm").Get(ctx, "agent-platform", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(platform.Object, "platform-workloads", "spec", "values", "gitops", "targetNamespace"))
+	require.NoError(t, unstructured.SetNestedField(platform.Object, "substrate", "spec", "values", "components", "substrate", "targetNamespace"))
+	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("flux-giantswarm").Update(ctx, platform, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	out, err := l.service(Config{Installation: "gazelle"}).EnableModelServing(ctx, serving("gazelle", true))
+	require.NoError(t, err)
+	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
+	ingress, _, _ := unstructured.NestedStringSlice(values, "modelServing", "networkPolicy", "additionalIngressNamespaces")
+	assert.Equal(t, []string{"platform-workloads", "substrate"}, ingress)
 }
 
 // TestEnableModelServingWorkload composes the slice onto wc1 before any
@@ -68,6 +92,8 @@ func TestEnableModelServingWorkload(t *testing.T) {
 	values, _, _ := unstructured.NestedMap(dry.Manifests[1], "spec", "values")
 	_, hasJWKS, _ := unstructured.NestedMap(values, "modelServing", "modelsGateway", "jwtAuthentication")
 	assert.False(t, hasJWKS, "the chart's default JWKS source, nothing composed")
+	_, hasIngress, _ := unstructured.NestedSlice(values, "modelServing", "networkPolicy", "additionalIngressNamespaces")
+	assert.False(t, hasIngress, "the platform's namespaces are the installation's: a workload cluster's model pods admit nothing more (giantswarm/cluster-manager#103)")
 	target, _, _ := unstructured.NestedString(values, "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target)
 	agentgateway, _, _ := unstructured.NestedBool(values, "components", "agentgateway", "enabled")
