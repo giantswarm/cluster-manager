@@ -60,6 +60,12 @@ const (
 	httpsPort int64 = 443
 )
 
+// DefaultSubstrateNamespace is where the platform's Agent Substrate runs —
+// the agents' egress gateway among it — when its release names no
+// components.substrate.targetNamespace: the chart's default, the namespace
+// the substrate chart's Roles and Service names are fixed to.
+const DefaultSubstrateNamespace = "ate-system"
+
 // servingSliceProfile is the serving-slice values profile of the chart
 // (helm/agent-platform/examples/serving-slice.yaml on agent-platform main):
 // the component roster, the `nvidia` RuntimeClass and the models Gateway.
@@ -96,6 +102,13 @@ type PlatformInputs struct {
 	// release leaves unset is the chart's default (DefaultDexNamespace,
 	// DefaultDexJWKSPort).
 	Dex DexService
+	// Namespace is where the platform's workloads run — model-manager and
+	// the agentgateway data plane: its gitops.targetNamespace, else the
+	// namespace its release is deployed in (status.history[0].namespace).
+	Namespace string
+	// SubstrateNamespace is the platform's components.substrate
+	// .targetNamespace; empty is the chart's DefaultSubstrateNamespace.
+	SubstrateNamespace string
 }
 
 // DexService is where the installation's Dex serves its key set in-cluster.
@@ -212,6 +225,38 @@ func SliceJWKS(s SliceSpec) (JWKSSource, error) {
 	return JWKSSource{Host: u.Hostname(), Port: httpsPort}, nil
 }
 
+// SliceIngressNamespaces are the namespaces whose pods the slice's model pods
+// admit on their workload port besides the slice's own (the connectivity
+// chart's modelServing.networkPolicy.additionalIngressNamespaces). On the
+// installation's own cluster the platform's release runs the model's callers
+// outside the slice: model-manager and the agentgateway data plane in the
+// platform's namespace, the agents' egress gateway in the Substrate namespace.
+// The slice's kagent is off, so the chart's own rule for the agents does not
+// render, and without these the policy admitted the slice's namespace alone
+// (giantswarm/cluster-manager#103). A workload cluster runs none of them: its
+// callers come through the slice's own models Gateway and it admits nothing
+// more. Refused on the own cluster when the platform's namespace is unknown.
+func SliceIngressNamespaces(s SliceSpec) ([]string, error) {
+	if !s.OwnCluster {
+		return nil, nil
+	}
+	if s.Platform.Namespace == "" {
+		release := s.Platform.Release
+		if release == "" {
+			release = "the platform's release"
+		}
+		return nil, fmt.Errorf("%s names no namespace for its workloads (gitops.targetNamespace, or a deployed release in status.history): the slice's model pods admit model-manager and the agentgateway data plane from it", release)
+	}
+	substrate := s.Platform.SubstrateNamespace
+	if substrate == "" {
+		substrate = DefaultSubstrateNamespace
+	}
+	if substrate == s.Platform.Namespace {
+		return []string{s.Platform.Namespace}, nil
+	}
+	return []string{s.Platform.Namespace, substrate}, nil
+}
+
 // SliceChartVersion resolves the slice release's chart pin: the spec's
 // explicit version when set, else the version the installation's platform
 // release runs — refused below MinSliceChartVersion, the first chart whose
@@ -297,12 +342,18 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 // modelServing.serving.nodeSelector, the node selector of every model pod
 // (a preset's own merged on top). The model cache is the
 // chart's default, on, unless the spec switches it off (NoCache) or names the
-// claim the predictors mount (CacheClaim, the claim of the pool's zone).
+// claim the predictors mount (CacheClaim, the claim of the pool's zone). On
+// the own cluster the model pods admit the platform's and the Substrate
+// namespace (SliceIngressNamespaces).
 func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 	if s.Platform.Domain == "" {
 		return nil, fmt.Errorf("the platform's global.domain is empty: the slice's domain and models host derive from it")
 	}
 	jwks, err := SliceJWKS(s)
+	if err != nil {
+		return nil, err
+	}
+	ingress, err := SliceIngressNamespaces(s)
 	if err != nil {
 		return nil, err
 	}
@@ -342,6 +393,13 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 			set(selector, "modelServing", "gpuPool", "nodeSelector"),
 			set(selector, "modelServing", "serving", "nodeSelector"),
 		)
+	}
+	if len(ingress) > 0 {
+		namespaces := make([]any, 0, len(ingress))
+		for _, ns := range ingress {
+			namespaces = append(namespaces, ns)
+		}
+		steps = append(steps, set(namespaces, "modelServing", "networkPolicy", "additionalIngressNamespaces"))
 	}
 	switch {
 	case s.NoCache:

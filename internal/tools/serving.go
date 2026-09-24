@@ -337,7 +337,9 @@ func (s *Service) sliceReleaseOf(ctx context.Context, dyn dynamic.Interface, ns,
 
 // platformInputs reads global.domain, global.identity, the wildcard
 // certificate, where the installation's Dex serves its key set in-cluster
-// (gateway.jwksEgress) and the chart version it runs
+// (gateway.jwksEgress), the namespaces its workloads and its Substrate run in
+// (gitops.targetNamespace, else the release's deployed namespace;
+// components.substrate.targetNamespace) and the chart version it runs
 // (status.history[0].chartVersion) from the installation's own release of
 // the agent-platform chart: the HelmRelease named agent-platform, else the
 // one release of the chart that is not cluster-manager's. Secrets it
@@ -394,18 +396,30 @@ func (s *Service) platformInputs(ctx context.Context, dyn dynamic.Interface) (co
 	out.TLSSecretName, _, _ = unstructured.NestedString(vals, "gatewayApi", "gateway", "tls", "secretName")
 	out.Dex.Namespace, _, _ = unstructured.NestedString(vals, "gateway", "jwksEgress", "namespace")
 	out.Dex.Port = nestedInt(&unstructured.Unstructured{Object: vals}, "gateway", "jwksEgress", "port")
+	out.Namespace, _, _ = unstructured.NestedString(vals, "gitops", "targetNamespace")
+	if out.Namespace == "" {
+		out.Namespace = runningNamespace(hr)
+	}
+	out.SubstrateNamespace, _, _ = unstructured.NestedString(vals, "components", "substrate", "targetNamespace")
 	return out, nil
 }
 
-// runningChartVersion is the chart version a HelmRelease runs: the newest
-// entry of its status.history, empty before the first deployment.
+// runningChartVersion is the chart version a HelmRelease runs, and
+// runningNamespace the namespace its release is deployed in: the newest entry
+// of its status.history, empty before the first deployment.
 func runningChartVersion(hr *unstructured.Unstructured) string {
+	return newestHistory(hr, "chartVersion")
+}
+
+func runningNamespace(hr *unstructured.Unstructured) string { return newestHistory(hr, "namespace") }
+
+func newestHistory(hr *unstructured.Unstructured, field string) string {
 	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
 	if len(history) == 0 {
 		return ""
 	}
 	newest, _ := history[0].(map[string]any)
-	v, _ := newest["chartVersion"].(string)
+	v, _ := newest[field].(string)
 	return v
 }
 

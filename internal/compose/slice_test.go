@@ -15,6 +15,7 @@ func platform() PlatformInputs {
 		Domain:        "gazelle.example.io",
 		Identity:      map[string]any{"issuerUrl": "https://dex.gazelle.example.io", "clientId": "dex-k8s-authenticator", "existingSecret": "agent-platform-identity"},
 		TLSSecretName: "gazelle-wildcard-tls",
+		Namespace:     "agent-platform",
 	}
 }
 
@@ -101,6 +102,11 @@ func TestSliceGoldens(t *testing.T) {
 			assert.Equal(t, tc.spec.OwnCluster, hasEgress, "gateway.jwksEgress travels with the in-cluster host — the connectivity chart refuses the one without the other; a workload cluster names neither")
 			if hasEgress {
 				assert.Equal(t, map[string]any{"enabled": true, "namespace": DefaultDexNamespace, "port": DefaultDexJWKSPort}, egress, "the host's namespace and port, the facts the platform's release states")
+			}
+			ingress, hasIngress, _ := unstructured.NestedStringSlice(values, "modelServing", "networkPolicy", "additionalIngressNamespaces")
+			assert.Equal(t, tc.spec.OwnCluster, hasIngress, "the model pods admit the platform's callers on the own cluster alone; a workload cluster's come through the slice's own models Gateway (giantswarm/cluster-manager#103)")
+			if hasIngress {
+				assert.Equal(t, []string{"agent-platform", DefaultSubstrateNamespace}, ingress, "model-manager and the agentgateway data plane in the platform's namespace, the agents' egress gateway in the Substrate namespace")
 			}
 			for _, component := range ServingComponents {
 				if component == "agentgateway" {
@@ -216,6 +222,46 @@ func TestSliceJWKS(t *testing.T) {
 				egress, _, _ := unstructured.NestedMap(values, "gateway", "jwksEgress")
 				assert.Equal(t, map[string]any{"enabled": true, "namespace": got.Namespace, "port": got.Port}, egress, "gateway.jwksEgress names the namespace and port the host does")
 			}
+		})
+	}
+}
+
+// TestSliceIngressNamespaces (giantswarm/cluster-manager#103): the own
+// cluster's model pods admit the platform's namespace and the Substrate
+// namespace the platform's release names, the chart's default without one,
+// each once; a workload cluster admits nothing more; an own cluster whose
+// platform names no namespace is refused rather than composed without it.
+func TestSliceIngressNamespaces(t *testing.T) {
+	named := platform()
+	named.SubstrateNamespace = "substrate"
+	shared := platform()
+	shared.SubstrateNamespace = shared.Namespace
+	unknown := platform()
+	unknown.Namespace = ""
+	cases := []struct {
+		name string
+		spec SliceSpec
+		want []string
+		err  string
+	}{
+		{"own-cluster", SliceSpec{OwnCluster: true, Platform: platform()}, []string{"agent-platform", DefaultSubstrateNamespace}, ""},
+		{"substrate-named", SliceSpec{OwnCluster: true, Platform: named}, []string{"agent-platform", "substrate"}, ""},
+		{"substrate-in-platform-namespace", SliceSpec{OwnCluster: true, Platform: shared}, []string{"agent-platform"}, ""},
+		{"workload", SliceSpec{Platform: platform()}, nil, ""},
+		{"workload-namespace-unknown", SliceSpec{Platform: unknown}, nil, ""},
+		{"own-cluster-namespace-unknown", SliceSpec{OwnCluster: true, Platform: unknown}, nil, "flux-giantswarm/agent-platform names no namespace for its workloads"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := SliceIngressNamespaces(tc.spec)
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+				_, err = SliceValues(wc1(), tc.spec)
+				require.ErrorContains(t, err, tc.err, "the slice values are refused with it")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
