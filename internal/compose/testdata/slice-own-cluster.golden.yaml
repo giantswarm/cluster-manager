@@ -117,6 +117,10 @@ spec:
           jwks:
             host: dex.giantswarm.svc.cluster.local
             port: 5556
+      networkPolicy:
+        additionalIngressNamespaces:
+        - agent-platform
+        - ate-system
       serving:
         nodeSelector:
           giantswarm.io/machine-pool: gazelle-gpu-l4

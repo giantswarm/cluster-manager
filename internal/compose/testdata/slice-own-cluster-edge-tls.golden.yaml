@@ -116,6 +116,10 @@ spec:
         tls:
           issuerRef:
             name: letsencrypt-giantswarm
+      networkPolicy:
+        additionalIngressNamespaces:
+        - agent-platform
+        - ate-system
       serving:
         nodeSelector:
           giantswarm.io/machine-pool: gazelle-gpu-l4
