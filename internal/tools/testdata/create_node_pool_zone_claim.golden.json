@@ -325,7 +325,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-giantswarm\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
+        "backend.yaml": "apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: ModelBackend\nmetadata:\n  name: kserve\nspec:\n  kind: kserve\n  kserve:\n    discovery:\n      namespace: org-giantswarm\n    gpuPools:\n      gazelle-gpu-l4:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n          memoryGiB: 16\n          size: xlarge\n          usableMemoryGiB: 11.9\n          usableVcpu: 3\n          vcpu: 4\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.2xlarge\n          memoryGiB: 32\n          size: 2xlarge\n          usableMemoryGiB: 27.1\n          usableVcpu: 7\n          vcpu: 8\n      gazelle-gpu-l40s:\n        instances:\n        - gpuMemoryGiB: 48\n          gpus: 1\n          instanceType: g6e.2xlarge\n          memoryGiB: 64\n          size: 2xlarge\n          usableMemoryGiB: 57.5\n          usableVcpu: 7\n          vcpu: 8\n        - gpuMemoryGiB: 48\n          gpus: 1\n          instanceType: g6e.4xlarge\n          memoryGiB: 128\n          size: 4xlarge\n          usableMemoryGiB: 118.3\n          usableVcpu: 15\n          vcpu: 16\n    target:\n      cluster: local\n      organization: giantswarm\n      servingNamespace: model-serving\n  source: cluster-manager\n"
       },
       "kind": "ConfigMap",
       "metadata": {

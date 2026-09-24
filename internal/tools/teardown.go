@@ -119,6 +119,24 @@ func (td *teardown) delete(res dynamic.ResourceInterface, act ObjectAction) erro
 	return nil
 }
 
+// apply lands one planned create or update when the budget allows and
+// records it with its manifest; an unchanged object is recorded as it
+// stands.
+func (td *teardown) apply(p applyPlan) error {
+	td.out.Manifests = append(td.out.Manifests, redacted(p.obj))
+	if p.act.Action == actionUnchanged {
+		td.out.Objects = append(td.out.Objects, p.act)
+		return nil
+	}
+	if td.fits() && !td.dryRun {
+		if err := p.write(td.ctx); err != nil {
+			return err
+		}
+	}
+	td.record(p.act)
+	return nil
+}
+
 // deleteNodeClaims removes the pool's idle nodes through their NodeClaims on
 // the cluster, as the caller, before anything else: Karpenter drains each
 // node and terminates its instance within the pool's terminationGracePeriod,

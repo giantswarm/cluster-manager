@@ -164,7 +164,8 @@ type WriteResult struct {
 	ControlPlaneVersion string         `json:"controlPlaneVersion,omitempty"`
 	MachineImage        string         `json:"machineImage,omitempty"`
 	Objects             []ObjectAction `json:"objects"`
-	// Manifests are the rendered objects (create) — the dry-run's answer.
+	// Manifests are the rendered objects (create; on delete, the backend
+	// document re-written for the pools that remain) — the dry-run's answer.
 	Manifests []map[string]any `json:"manifests,omitempty"`
 	// GPUOperator is the operator detected on the cluster before the write
 	// (create): present with its provider — nothing is composed —, or
@@ -179,7 +180,9 @@ type WriteResult struct {
 	// place).
 	Serving detect.Component `json:"serving,omitempty"`
 	Slice   *SliceRelease    `json:"slice,omitempty"`
-	// Backend is the kserve backend registered with model-manager (create).
+	// Backend is the kserve backend registered with model-manager (create;
+	// on the delete of a pool that is not the last, the document re-written
+	// for the pools that remain).
 	Backend *BackendRegistration `json:"backend,omitempty"`
 	// LastPool marks a delete of the cluster's last GPU pool: the operator
 	// and slice releases cluster-manager created and the backend it
@@ -350,15 +353,16 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if slice == nil && !cache {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("cache false: serving on %s is provided by %s (%s), not composed by cluster-manager — the model cache is that serving layer's setting, not this pool's; leave cache out, or change the setting where that layer is configured", target.Cluster, providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
-	// The backend document names the sizes of the pool the predictors are
-	// pinned to: this one when it is the cluster's only pool; with several
-	// none is pinned and the document names no sizes, so a re-run never
-	// judges a load against a pool it may not land on.
-	var instances []compose.InstanceShape
-	if pinned != "" {
-		instances = shapes
+	// The backend document names every pool's sizes, this one's as composed:
+	// the one pool's, the pool the predictors are pinned to, or each of
+	// several by release name, so model-manager judges a load against the
+	// pool it lands on, one with no node yet included
+	// (giantswarm/cluster-manager#89).
+	pools, err := backendPools(target.Cluster, r.releases, in.Pool.Name, shapes)
+	if err != nil {
+		return nil, err
 	}
-	backend, err := s.backendDocument(target, instances, r.backend)
+	backend, err := s.backendDocument(target, pools, r.backend)
 	if err != nil {
 		return nil, err
 	}
@@ -408,9 +412,12 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 type poolReads struct {
 	facts     compose.Cluster
 	cpVersion string
-	pools     []string
-	operator  operatorReads
-	slice     sliceReads
+	// releases are the cluster's pool releases of cluster-manager's by pool
+	// name, pools their names with the pool the write creates.
+	releases map[string]*unstructured.Unstructured
+	pools    []string
+	operator operatorReads
+	slice    sliceReads
 	// backend is model-manager's kserve backend document as it exists on
 	// the installation, nil for none.
 	backend  *unstructured.Unstructured
@@ -443,7 +450,8 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	})
 	g.Go(func() (err error) {
 		defer timed(gctx, "pool releases")()
-		r.pools, err = poolNames(gctx, dyn, c.GetNamespace(), c.GetName(), in.Pool.Name)
+		r.releases, err = ownPools(gctx, dyn, c.GetNamespace(), c.GetName())
+		r.pools = poolNamesOf(r.releases, in.Pool.Name)
 		return err
 	})
 	g.Go(func() error {
@@ -557,14 +565,14 @@ func existingBackend(ctx context.Context, dyn dynamic.Interface, ns string) (*un
 }
 
 // backendDocument renders the kserve backend document for the target — with
-// the shapes of the pinned pool, none for no pin — and refuses when
-// model-manager's one kserve document (existing, nil for none) is registered
-// for another cluster.
-func (s *Service) backendDocument(t target, instances []compose.InstanceShape, existing *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+// the shapes of the cluster's GPU pools by release name (backendPools) — and
+// refuses when model-manager's one kserve document (existing, nil for none)
+// is registered for another cluster.
+func (s *Service) backendDocument(t target, pools map[string][]compose.InstanceShape, existing *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if t.backendErr != nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the kserve backend of %s cannot be registered with model-manager: %v", t.Cluster, t.backendErr)}
 	}
-	backend, err := compose.KServeBackend(s.cfg.ModelManagerNamespace, t.backend, instances)
+	backend, err := compose.KServeBackend(s.cfg.ModelManagerNamespace, t.backend, pools)
 	if err != nil {
 		return nil, err
 	}
@@ -631,6 +639,10 @@ func backendTargetName(t compose.BackendTarget) string {
 // operator, the backend registration, the slice release, and the pool's own
 // objects last, its HelmRelease the very last: the re-run finds the pool and
 // continues where the teardown stands (giantswarm/cluster-manager#28, #37).
+// With a pool that is not the last, the kserve backend document
+// cluster-manager registered for the cluster is re-written for the pools
+// that remain, right after the idle nodes: the one pool's form for the one
+// left, keyed by release name for several (giantswarm/cluster-manager#89).
 //
 // The call answers within the aggregator's deadline for a tool call: every
 // object is planned before the first write (every refusal first), the writes
@@ -675,9 +687,21 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	var backend *applyPlan
+	if !last {
+		if backend, err = s.remainingBackend(ctx, dyn, c, t, in.Name); err != nil {
+			return nil, err
+		}
+	}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
 	if err := td.deleteNodeClaims(t.Reader, idle); err != nil {
 		return nil, err
+	}
+	if backend != nil {
+		out.Backend = &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.obj.GetNamespace(), Name: backend.obj.GetName(), Target: backendTargetName(t.backend)}
+		if err := td.apply(*backend); err != nil {
+			return nil, err
+		}
 	}
 	if slice != nil {
 		if err := s.servingTeardown(td, t, in.Force); err != nil {
@@ -730,6 +754,36 @@ func (s *Service) removalTargets(ctx context.Context, dyn dynamic.Interface, c *
 		objectRef{HelmReleaseGVR, ns, release},
 	)
 	return targets, slice, kept, last, nil
+}
+
+// remainingBackend plans the re-write of the kserve backend document for
+// the cluster's pools that remain once pool goes (backendPools): nil when
+// model-manager's document is not the one cluster-manager registered for the
+// cluster — a delete never registers one. Refused, before any write, when
+// the document cannot be rendered for the target.
+func (s *Service) remainingBackend(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, pool string) (*applyPlan, error) {
+	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, c.GetName())
+	if err != nil || !registered {
+		return nil, err
+	}
+	releases, err := ownPools(ctx, dyn, c.GetNamespace(), c.GetName())
+	if err != nil {
+		return nil, err
+	}
+	delete(releases, pool)
+	pools, err := backendPools(c.GetName(), releases, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := s.backendDocument(t, pools, nil)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := planApply(ctx, dyn, doc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan, nil
 }
 
 // ownedSlice is the cluster's slice release when it exists and is

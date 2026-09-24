@@ -59,8 +59,8 @@ type SliceRelease struct {
 // EnableModelServing creates the cluster's slice release with the serving
 // slice on — or updates the one that exists, never a second release of the
 // chart on one cluster — and registers the cluster's kserve backend with
-// model-manager, the document carrying the pinned pool's instance shapes
-// (read from its release) when the cluster has one pool. A pool is not
+// model-manager, the document carrying the instance shapes of the cluster's
+// GPU pools, read from their releases (backendPools). A pool is not
 // required. Refused where the platform's own release or a human provides
 // serving already. LLMInferenceServiceConfigs a serving layer that went left
 // terminating in the release namespace are healed before the slice lands
@@ -81,10 +81,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 		return nil, err
 	}
 	target := s.target(ctx, dyn, c)
-	pool, err := onlyPool(ctx, dyn, c.GetNamespace(), c.GetName(), "")
+	releases, err := ownPools(ctx, dyn, c.GetNamespace(), c.GetName())
 	if err != nil {
 		return nil, err
 	}
+	pool := onlyOf(poolNamesOf(releases, ""))
 	reads, err := s.readSlice(ctx, dyn, target)
 	if err != nil {
 		return nil, err
@@ -115,7 +116,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	pin.claim = claims.named(pin.claimName)
 	claims.priced(infra.region, reads.cache)
-	instances, err := poolShapes(ctx, dyn, c.GetNamespace(), c.GetName(), pool)
+	pools, err := backendPools(c.GetName(), releases, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +124,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	backend, err := s.backendDocument(target, instances, existing)
+	backend, err := s.backendDocument(target, pools, existing)
 	if err != nil {
 		return nil, err
 	}
@@ -461,30 +462,45 @@ func (s *Service) sliceCluster(ctx context.Context, dyn dynamic.Interface, c *un
 	return facts, nil
 }
 
-// poolNames are the cluster's GPU pools of cluster-manager's, by pool name,
-// sorted: its pool releases plus adding (the pool a write creates), counted
-// once. The operator's Node Feature Discovery worker is pinned to all of
-// them (compose.PoolAffinity); the slice's predictors to the one of them.
-func poolNames(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) ([]string, error) {
+// ownPools are the cluster's GPU pool releases of cluster-manager's, by pool
+// name.
+func ownPools(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (map[string]*unstructured.Unstructured, error) {
 	pools, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: compose.LabelChartName + "=" + compose.PoolChart + "," + compose.LabelCluster + "=" + cluster + "," + compose.LabelManagedBy + "=" + compose.ManagedBy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list pool releases of %s: %w", cluster, err)
 	}
-	names := map[string]bool{}
-	if adding != "" {
-		names[adding] = true
-	}
+	out := make(map[string]*unstructured.Unstructured, len(pools.Items))
 	for i := range pools.Items {
-		names[pools.Items[i].GetLabels()[compose.LabelPool]] = true
+		out[pools.Items[i].GetLabels()[compose.LabelPool]] = &pools.Items[i]
 	}
-	out := make([]string, 0, len(names))
-	for name := range names {
+	return out, nil
+}
+
+// poolNames are the cluster's GPU pools of cluster-manager's, by pool name,
+// sorted: its pool releases plus adding (the pool a write creates), counted
+// once. The operator's Node Feature Discovery worker is pinned to all of
+// them (compose.PoolAffinity); the slice's predictors to the one of them.
+func poolNames(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) ([]string, error) {
+	releases, err := ownPools(ctx, dyn, ns, cluster)
+	if err != nil {
+		return nil, err
+	}
+	return poolNamesOf(releases, adding), nil
+}
+
+// poolNamesOf names the pools of releases plus adding, counted once, sorted.
+func poolNamesOf(releases map[string]*unstructured.Unstructured, adding string) []string {
+	out := make([]string, 0, len(releases)+1)
+	if _, ok := releases[adding]; adding != "" && !ok {
+		out = append(out, adding)
+	}
+	for name := range releases {
 		out = append(out, name)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
 }
 
 // onlyPool is the GPU pool the slice's predictors are pinned to: the
@@ -508,25 +524,30 @@ func onlyOf(names []string) string {
 	return names[0]
 }
 
-// poolShapes is the instance shapes of the cluster's pool, read from its
-// release's values (the chart's pool.accelerator and pool.sizes; no sizes is
-// the chart's default) — what the backend document names for the pool the
-// predictors are pinned to. Nil for no pool.
-func poolShapes(ctx context.Context, dyn dynamic.Interface, ns, cluster, pool string) ([]compose.InstanceShape, error) {
-	if pool == "" {
-		return nil, nil
+// backendPools are the instance shapes of the cluster's GPU pools as the
+// kserve backend document names them (compose.KServeBackend), by release
+// name — the node label giantswarm.io/machine-pool the chart stamps: each
+// pool release's, read from its values (the chart's pool.accelerator and
+// pool.sizes; no sizes is the chart's default), and adding's — the pool a
+// create_node_pool composes, empty for none — as composed (shapes), never
+// what its release declared before the write (giantswarm/cluster-manager#89).
+func backendPools(cluster string, releases map[string]*unstructured.Unstructured, adding string, shapes []compose.InstanceShape) (map[string][]compose.InstanceShape, error) {
+	out := make(map[string][]compose.InstanceShape, len(releases)+1)
+	for pool, hr := range releases {
+		if pool == adding {
+			continue
+		}
+		accelerator, sizes := poolValues(hr)
+		poolShapes, err := compose.Shapes(accelerator, sizes)
+		if err != nil {
+			return nil, fmt.Errorf("pool %s of %s (HelmRelease %s/%s): %w", pool, cluster, hr.GetNamespace(), hr.GetName(), err)
+		}
+		out[compose.ReleaseName(cluster, pool)] = poolShapes
 	}
-	name := compose.ReleaseName(cluster, pool)
-	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
+	if adding != "" {
+		out[compose.ReleaseName(cluster, adding)] = shapes
 	}
-	accelerator, sizes := poolValues(hr)
-	shapes, err := compose.Shapes(accelerator, sizes)
-	if err != nil {
-		return nil, fmt.Errorf("pool %s of %s (HelmRelease %s/%s): %w", pool, cluster, ns, name, err)
-	}
-	return shapes, nil
+	return out, nil
 }
 
 // poolValues reads a pool release's accelerator and sizes: the chart's
