@@ -53,6 +53,24 @@ const (
 // ClaimBound is a claim's status.phase once a volume is bound to it.
 const ClaimBound = "Bound"
 
+// The tier annotations the connectivity chart stamps on a cache claim at
+// create (giantswarm/agent-platform#605): the EBS CSI StorageClass parameters
+// the claim was provisioned with — `type`, `iops`, `throughput` (MiB/s) —, so
+// its tier survives its class, which is Helm-owned and goes with its release
+// or with a change of its parameters while the claim stays.
+const (
+	AnnotationVolumeType       = "agent-platform.giantswarm.io/volume-type"
+	AnnotationVolumeIOPS       = "agent-platform.giantswarm.io/volume-iops"
+	AnnotationVolumeThroughput = "agent-platform.giantswarm.io/volume-throughput"
+)
+
+// Where a claim's tier is read from: its StorageClass, or — the class gone
+// or not readable — the claim's tier annotations.
+const (
+	TierSourceStorageClass     = "storageClass"
+	TierSourceClaimAnnotations = "claimAnnotations"
+)
+
 // CacheClaim is one model cache claim of the serving namespace as
 // list_clusters and create_node_pool report it.
 type CacheClaim struct {
@@ -76,12 +94,14 @@ type CacheClaim struct {
 	// the same in GiB (giantswarm/cluster-manager#83).
 	Capacity    string  `json:"capacity,omitempty"`
 	CapacityGiB float64 `json:"capacityGiB,omitempty"`
-	// StorageClass is the claim's class; Tier what that class provisions
-	// (volume type, IOPS, throughput), read from the class — nil with
-	// TierNote saying why it is not known: the class is gone (a Helm-owned
-	// class goes with its release while the claim stays), or not readable.
+	// StorageClass is the claim's class; Tier what its volume is provisioned
+	// with (volume type, IOPS, throughput), read from the class where it can
+	// be read, else from the claim's tier annotations (the class is gone: a
+	// Helm-owned class goes with its release while the claim stays) —
+	// TierSource says which —, nil with TierNote saying why it is not known.
 	StorageClass string              `json:"storageClass,omitempty"`
 	Tier         *compose.VolumeTier `json:"tier,omitempty"`
+	TierSource   string              `json:"tierSource,omitempty"`
 	TierNote     string              `json:"tierNote,omitempty"`
 	// ReclaimPolicy is the bound volume's: Delete, the volume goes with the
 	// claim; Retain, it stays and is billed until deleted by hand.
@@ -196,8 +216,8 @@ func CacheClaims(ctx context.Context, reader dynamic.Interface, namespace, base 
 }
 
 // claimState fills in a claim's phase, volume, capacity, class and creation
-// time from the object; its tier from its StorageClass; and, once Bound, the
-// zone its volume is bound to and the volume's reclaim policy.
+// time from the object; its tier (claimTier); and, once Bound, the zone its
+// volume is bound to and the volume's reclaim policy.
 func claimState(ctx context.Context, reader dynamic.Interface, pvc *unstructured.Unstructured, c *CacheClaim) {
 	c.Phase, _, _ = unstructured.NestedString(pvc.Object, "status", "phase")
 	c.Volume, _, _ = unstructured.NestedString(pvc.Object, "spec", "volumeName")
@@ -212,23 +232,22 @@ func claimState(ctx context.Context, reader dynamic.Interface, pvc *unstructured
 	if q, err := resource.ParseQuantity(capacity); err == nil && capacity != "" {
 		c.Capacity, c.CapacityGiB = capacity, compose.QuantityGiB(q)
 	}
+	// The claim's name, printed before the reads fill in its fields at once:
+	// printing c itself copies the whole struct while they are written.
+	name := c.String()
 	var wg sync.WaitGroup
-	if c.StorageClass != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			classTier(ctx, reader, c)
-		}()
-	} else {
-		c.TierNote = "the claim names no StorageClass: its volume's tier cannot be told"
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.Tier, c.TierSource, c.TierNote = claimTier(ctx, reader, pvc, c.StorageClass, name)
+	}()
 	if c.Phase == ClaimBound && c.Volume != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			pv, err := reader.Resource(PersistentVolumeGVR).Get(ctx, c.Volume, metav1.GetOptions{})
 			if err != nil {
-				c.Error = fmt.Sprintf("get PersistentVolume %s of claim %s: %v", c.Volume, c, err)
+				c.Error = fmt.Sprintf("get PersistentVolume %s of claim %s: %v", c.Volume, name, err)
 				return
 			}
 			c.Zone = volumeZone(pv)
@@ -238,23 +257,45 @@ func claimState(ctx context.Context, reader dynamic.Interface, pvc *unstructured
 	wg.Wait()
 }
 
-// classTier reads the claim's tier from its StorageClass: the EBS CSI
-// driver's parameters. A class that is gone — Helm-owned, it goes with its
-// release while the claim stays; a bound volume works on without it — or
-// that cannot be read as the caller leaves the tier unknown with the note.
-func classTier(ctx context.Context, reader dynamic.Interface, c *CacheClaim) {
-	sc, err := reader.Resource(StorageClassGVR).Get(ctx, c.StorageClass, metav1.GetOptions{})
-	if err != nil {
-		c.TierNote = fmt.Sprintf("StorageClass %s of claim %s cannot be read (%v): the volume's tier — what it is billed for beside its storage — cannot be told", c.StorageClass, c, err)
-		return
+// claimTier reads the claim's tier from its StorageClass, named class —
+// the EBS CSI driver's parameters — where the class can be read, whatever the
+// claim's annotations say (source TierSourceStorageClass). A class that is
+// gone (Helm-owned, it goes with its release or a change of its parameters
+// while the claim stays; a bound volume works on without it), not readable as
+// the caller, or not named leaves the tier to the claim's annotations
+// (annotationTier, source TierSourceClaimAnnotations); a claim without them
+// leaves the tier nil with the note saying why it is not known.
+func claimTier(ctx context.Context, reader dynamic.Interface, pvc *unstructured.Unstructured, class, claim string) (tier *compose.VolumeTier, source, note string) {
+	if class == "" {
+		note = "the claim names no StorageClass: its volume's tier cannot be told"
+	} else {
+		sc, err := reader.Resource(StorageClassGVR).Get(ctx, class, metav1.GetOptions{})
+		if err == nil {
+			params, _, _ := unstructured.NestedStringMap(sc.Object, "parameters")
+			if t := compose.TierOf(params); t.Type != "" {
+				return &t, TierSourceStorageClass, ""
+			}
+			return nil, "", fmt.Sprintf("StorageClass %s of claim %s names no volume type in its parameters: the tier cannot be told", class, claim)
+		}
+		note = fmt.Sprintf("StorageClass %s of claim %s cannot be read (%v): the volume's tier — what it is billed for beside its storage — cannot be told", class, claim, err)
 	}
-	params, _, _ := unstructured.NestedStringMap(sc.Object, "parameters")
-	tier := compose.TierOf(params)
-	if tier.Type == "" {
-		c.TierNote = fmt.Sprintf("StorageClass %s of claim %s names no volume type in its parameters: the tier cannot be told", c.StorageClass, c)
-		return
+	if t := annotationTier(pvc); t.Type != "" {
+		return &t, TierSourceClaimAnnotations, ""
 	}
-	c.Tier = &tier
+	return nil, "", note
+}
+
+// annotationTier is the tier the claim's annotations name
+// (AnnotationVolumeType, AnnotationVolumeIOPS, AnnotationVolumeThroughput),
+// read as the StorageClass parameters they mirror; its Type is empty when the
+// claim names none.
+func annotationTier(pvc *unstructured.Unstructured) compose.VolumeTier {
+	a := pvc.GetAnnotations()
+	return compose.TierOf(map[string]string{
+		"type":       a[AnnotationVolumeType],
+		"iops":       a[AnnotationVolumeIOPS],
+		"throughput": a[AnnotationVolumeThroughput],
+	})
 }
 
 // volumeZone is the one zone a volume's required node affinity names — the
