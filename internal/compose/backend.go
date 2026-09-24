@@ -57,11 +57,11 @@ type BackendTarget struct {
 }
 
 // documentShape is one size as model-manager's backend document declares it
-// (spec.kserve.gpuPool.instances[]): the node as AWS lists it and what it
-// leaves a predictor. model-manager reads the document strictly — a key it
-// does not declare fails the parse and with it the fit check — so the
-// shape's other fields (the price, the instance store) are the answer's and
-// are never written here.
+// (spec.kserve.gpuPool.instances[], spec.kserve.gpuPools[<pool>].instances[]):
+// the node as AWS lists it and what it leaves a predictor. model-manager reads
+// the document strictly — a key it does not declare fails the parse and with
+// it the fit check — so the shape's other fields (the price, the instance
+// store) are the answer's and are never written here.
 type documentShape struct {
 	InstanceType    string  `json:"instanceType"`
 	Size            string  `json:"size"`
@@ -83,13 +83,18 @@ func documentShapes(shapes []InstanceShape) []documentShape {
 
 // KServeBackend renders the kserve backend document into model-manager's
 // namespace, labelled with the cluster it registers so the last pool's
-// deletion finds it. instances are the shapes of the GPU pool the predictors
-// are pinned to, written as spec.kserve.gpuPool.instances — the list
-// model-manager's fit check judges a model against while the pool has no
+// deletion finds it. pools are the instance shapes of the cluster's GPU pools
+// by release name (the value of the node label giantswarm.io/machine-pool):
+// what model-manager's fit check judges a model against while a pool has no
 // node, and load_model refuses what no size hosts (model-manager 0.23.7,
-// giantswarm/model-manager#97); none writes no gpuPool block, and the
+// giantswarm/model-manager#97). One pool is written as
+// spec.kserve.gpuPool.instances, the pool the predictors are pinned to;
+// several as spec.kserve.gpuPools, each pool's instances under its release
+// name, so model-manager judges — and pins — a model against the pool it
+// picks, a pool with no node yet included (giantswarm/cluster-manager#89,
+// giantswarm/model-manager#152); none writes neither block, and the
 // discovery ConfigMap's taint and node selector stand either way.
-func KServeBackend(namespace string, t BackendTarget, instances []InstanceShape) (*unstructured.Unstructured, error) {
+func KServeBackend(namespace string, t BackendTarget, pools map[string][]InstanceShape) (*unstructured.Unstructured, error) {
 	target := map[string]any{
 		"cluster":          t.Cluster,
 		"organization":     t.Organization,
@@ -106,8 +111,17 @@ func KServeBackend(namespace string, t BackendTarget, instances []InstanceShape)
 	if t.DiscoveryNamespace != "" {
 		kserve["discovery"] = map[string]any{"namespace": t.DiscoveryNamespace}
 	}
-	if len(instances) > 0 {
-		kserve["gpuPool"] = map[string]any{"instances": documentShapes(instances)}
+	switch {
+	case len(pools) == 1:
+		for _, instances := range pools {
+			kserve["gpuPool"] = map[string]any{"instances": documentShapes(instances)}
+		}
+	case len(pools) > 1:
+		keyed := make(map[string]any, len(pools))
+		for release, instances := range pools {
+			keyed[release] = map[string]any{"instances": documentShapes(instances)}
+		}
+		kserve["gpuPools"] = keyed
 	}
 	doc := map[string]any{
 		"apiVersion": BackendAPIVersion,

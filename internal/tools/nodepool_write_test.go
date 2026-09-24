@@ -557,6 +557,77 @@ func TestCreateNodePoolBackendDocumentFollowsTheSizes(t *testing.T) {
 	assert.Contains(t, backendDoc(drift), "instanceType: g6.4xlarge\n", "the chart's default sizes on the re-run")
 }
 
+// TestCreateNodePoolBackendDocumentKeysEveryPool (giantswarm/cluster-manager#89):
+// with a second pool on the cluster the backend document names every pool's
+// shapes under spec.kserve.gpuPools, keyed by release name (the node label
+// giantswarm.io/machine-pool), so model-manager judges a load against a pool
+// with no node yet: the fixture's pool as its release declares it (the
+// chart's default sizes), the new one as composed — and a re-run with other
+// sizes follows them.
+func TestCreateNodePoolBackendDocumentKeysEveryPool(t *testing.T) {
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+
+	narrow := l4("wc1", "gpu-l4", false)
+	narrow.Pool.Sizes = []string{"xlarge"}
+	out, err := svc.CreateNodePool(ctx, narrow)
+	require.NoError(t, err)
+	doc := backendDoc(out)
+	assert.NotContains(t, doc, "gpuPool:", "several pools: no one-pool block")
+	assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "the other pool's shapes, read from its release")
+	assert.Contains(t, doc, "instanceType: g5.4xlarge\n", "the chart's default sizes of a release that names none")
+	assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n          memoryGiB: 16\n          size: xlarge\n          usableMemoryGiB: 11.9\n          usableVcpu: 3\n          vcpu: 4\n    target:\n", "the new pool's shapes as composed, its one size")
+	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: compose.BackendConfigMapName, Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
+
+	drift, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	backend := backendAction(drift)
+	assert.Equal(t, "would-update", backend.Action, "the document follows the pool's sizes")
+	assert.Equal(t, []string{"data.backend.yaml"}, backend.Changes)
+	assert.Contains(t, backendDoc(drift), "instanceType: g6.4xlarge\n", "the chart's default sizes on the re-run")
+}
+
+// TestDeleteNodePoolRewritesTheBackendForThePoolsLeft (giantswarm/cluster-manager#89):
+// deleting one of two pools re-writes the backend document for the pool
+// left, in the one-pool form, right after the idle nodes and before the
+// pool's own objects; its dry-run shows the document and writes nothing.
+func TestDeleteNodePoolRewritesTheBackendForThePoolsLeft(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
+	require.NoError(t, err)
+
+	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-l4", Mode: ModeApply, DryRun: true})
+	require.NoError(t, err)
+	assert.False(t, dry.LastPool)
+	assert.Equal(t, []string{"would-update", "would-delete", "would-delete", "would-delete"}, actions(dry))
+	assert.Equal(t, ObjectAction{APIVersion: "v1", Kind: "ConfigMap", Name: compose.BackendConfigMapName, Namespace: "agent-platform", Action: "would-update", Changes: []string{"data.backend.yaml"}}, dry.Objects[0])
+	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the one pool left, in the one-pool form")
+	assert.NotContains(t, backendDoc(dry), "gpuPools")
+	assert.NotContains(t, backendDoc(dry), "g6.", "the deleted pool's shapes go")
+	assert.Contains(t, registeredBackend(t, l), "gpuPools:", "a dry run writes nothing")
+
+	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-l4", Mode: ModeApply})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"update", "delete", "delete", "delete"}, actions(out))
+	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: compose.BackendConfigMapName, Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
+	assert.Equal(t, backendDoc(dry), registeredBackend(t, l), "the document on the installation is the one the dry run showed")
+
+	one, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
+	assert.Contains(t, backendDoc(one), "gpuPools:", "a second pool again: the keyed form")
+}
+
+// registeredBackend is the kserve backend document on the installation.
+func registeredBackend(t *testing.T, l *lab) string {
+	t.Helper()
+	cm, err := l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Get(context.Background(), compose.BackendConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err)
+	doc, _, _ := unstructured.NestedString(cm.Object, "data", "backend.yaml")
+	return doc
+}
+
 // backendDoc is the kserve backend document among the answer's manifests.
 func backendDoc(out *WriteResult) string {
 	for _, m := range out.Manifests {

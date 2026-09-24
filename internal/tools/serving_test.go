@@ -190,9 +190,9 @@ func TestEnableModelServingKeepsTheZoneClaim(t *testing.T) {
 
 // TestCreateNodePoolUpdatesTheSliceInPlace: with the slice on wc1 from
 // enable_model_serving, a second pool makes create_node_pool update the one
-// release — its dry-run names the changed paths (the selector goes, and the
-// backend document's sizes with it: two pools, no pool pinned) — and never
-// composes a second release of the chart.
+// release — its dry-run names the changed paths (the selector goes: two
+// pools, no pool pinned; the backend document keys both pools' sizes by
+// release name) — and never composes a second release of the chart.
 func TestCreateNodePoolUpdatesTheSliceInPlace(t *testing.T) {
 	l := newLab(t, "installation.yaml")
 	svc := l.service(Config{Installation: "gazelle"})
@@ -202,10 +202,12 @@ func TestCreateNodePoolUpdatesTheSliceInPlace(t *testing.T) {
 
 	drift, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"would-create", "would-create", "would-create", "unchanged", "would-update", "would-update", "would-create", "would-create"}, actions(drift), "pool new; the slice's source stands, its release updates; the backend loses the pinned pool's sizes; operator new")
+	assert.Equal(t, []string{"would-create", "would-create", "would-create", "unchanged", "would-update", "would-update", "would-create", "would-create"}, actions(drift), "pool new; the slice's source stands, its release updates; the backend names both pools; operator new")
 	assert.Equal(t, []string{"spec.values.modelServing.gpuPool.nodeSelector.giantswarm.io/machine-pool", "spec.values.modelServing.serving.nodeSelector.giantswarm.io/machine-pool"}, drift.Objects[4].Changes)
-	assert.Equal(t, []string{"data.backend.yaml"}, drift.Objects[5].Changes, "two pools: no pool is pinned, the document names no sizes")
-	assert.NotContains(t, backendDoc(drift), "gpuPool")
+	assert.Equal(t, []string{"data.backend.yaml"}, drift.Objects[5].Changes, "two pools: the one-pool block becomes the keyed one")
+	assert.NotContains(t, backendDoc(drift), "gpuPool:")
+	assert.Contains(t, backendDoc(drift), "gpuPools:\n      wc1-gpu-a10g:\n")
+	assert.Contains(t, backendDoc(drift), "      wc1-gpu-l4:\n")
 	assertGolden(t, "create_node_pool_updates_slice", drift)
 
 	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
