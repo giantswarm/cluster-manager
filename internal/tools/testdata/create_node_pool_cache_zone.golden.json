@@ -307,6 +307,12 @@
                 }
               }
             },
+            "networkPolicy": {
+              "additionalIngressNamespaces": [
+                "agent-platform",
+                "ate-system"
+              ]
+            },
             "serving": {
               "runtimeClassName": "nvidia"
             }
@@ -569,6 +575,7 @@
       "iops": 3000,
       "throughputMiBps": 500
     },
+    "tierSource": "storageClass",
     "reclaimPolicy": "Delete",
     "created": "2026-09-16T10:12:00Z",
     "price": {
@@ -592,6 +599,7 @@
         "iops": 3000,
         "throughputMiBps": 500
       },
+      "tierSource": "storageClass",
       "reclaimPolicy": "Delete",
       "created": "2026-09-16T10:12:00Z",
       "price": {
