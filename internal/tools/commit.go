@@ -216,11 +216,17 @@ func commitError(err error) error {
 
 // releaseFiles renders the composed objects as the files of the cluster's
 // directory: one file per release (its source and the HelmRelease, named
-// after them), a Secret in a file of its own named as a secret file.
+// after them), a Secret in a file of its own named as a secret file. The
+// ownerReferences apply mode sets to the live Cluster are left out: they name
+// that object's UID, which a file in git must not carry — the cluster
+// recreated from the same repository would have its pools collected — and
+// the Kustomization that owns the cluster's files removes them with it.
 func releaseFiles(dir string, objs []*unstructured.Unstructured) (map[string][]byte, error) {
 	docs := map[string][][]byte{}
 	var order []string
 	for _, obj := range objs {
+		obj = obj.DeepCopy()
+		obj.SetOwnerReferences(nil)
 		name := obj.GetName() + ".yaml"
 		if obj.GetKind() == "Secret" {
 			name = obj.GetName() + "-secret.enc.yaml"

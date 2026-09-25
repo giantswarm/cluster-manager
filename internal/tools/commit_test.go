@@ -97,6 +97,7 @@ func TestCreateNodePoolCommit(t *testing.T) {
 	pool := string(files[commitDir+"/wc1-gpu-l4.yaml"])
 	assert.Contains(t, pool, "kind: OCIRepository")
 	assert.Contains(t, pool, "kind: HelmRelease")
+	assert.NotContains(t, pool, "ownerReferences", "no live UID in git")
 	resources, err := kustomizationResources(files[commitDir+"/kustomization.yaml"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"wc1-agent-platform.yaml", "wc1-gpu-l4-values-secret.enc.yaml", "wc1-gpu-l4.yaml", "wc1-gpu-operator.yaml"}, resources)
