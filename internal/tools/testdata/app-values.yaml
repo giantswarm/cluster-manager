@@ -131,7 +131,7 @@ metadata:
   name: layers-top
   namespace: org-acme
 data:
-  values: |
+  values.yaml: |
     top: top
 ---
 # No values at all.
@@ -179,3 +179,28 @@ spec:
       name: layers-pre
       namespace: org-acme
       priority: 10
+---
+# A values ConfigMap with two keys: which one is the values is not told.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: several-keys
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+  config:
+    configMap:
+      name: several-keys-config
+      namespace: org-acme
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: several-keys-config
+  namespace: org-acme
+data:
+  values: |
+    a: b
+  values.yaml: |
+    a: c

@@ -1,8 +1,8 @@
 # wc2's own release in the workload clusters' GitOps layout: an App CR with
 # spec.config and spec.extraConfigs and no spec.userConfig. The layers merge
 # to installation.yaml's wc2-user-values: the installation's values under
-# the cluster's (priority 10), the cluster's config, a later override of its
-# proxy (priority 75).
+# the cluster's (priority 10, under the key values.yaml), the cluster's
+# config, a later override of its proxy (priority 75).
 apiVersion: application.giantswarm.io/v1alpha1
 kind: App
 metadata:
@@ -31,7 +31,7 @@ metadata:
   name: cluster-app-installation-values
   namespace: org-acme
 data:
-  values: |
+  values.yaml: |
     global:
       managementCluster: gazelle
       connectivity:

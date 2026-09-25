@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 )
@@ -61,7 +62,7 @@ func appValues(ctx context.Context, dyn dynamic.Interface, app *unstructured.Uns
 		if l.kind != appValuesConfigMap {
 			continue
 		}
-		vals, err := configMapValues(ctx, dyn, l.namespace, l.name, "values")
+		vals, err := appConfigMapValues(ctx, dyn, l.namespace, l.name)
 		if apierrors.IsNotFound(err) {
 			missing = append(missing, l.String())
 			continue
@@ -79,6 +80,32 @@ func appValues(ctx context.Context, dyn dynamic.Interface, app *unstructured.Uns
 		return nil, fmt.Errorf("the App %s keeps its values only in Secrets (%s): the pool's snapshot is read from values ConfigMaps, never from credentials", ref, strings.Join(listed, ", "))
 	}
 	return merged, nil
+}
+
+// appConfigMapValues is the values document of an App's ConfigMap: its one
+// key, whatever the key's name, as app-operator reads it (the GitOps
+// layout's installation values are under values.yaml, a cluster's config
+// under values). A ConfigMap with several keys is refused: app-operator
+// refuses it as spec.config or spec.userConfig and, as an extraConfigs
+// entry, reads whichever key it meets first.
+func appConfigMapValues(ctx context.Context, dyn dynamic.Interface, ns, name string) (map[string]any, error) {
+	cm, err := dyn.Resource(ConfigMapGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get values ConfigMap %s/%s: %w", ns, name, err)
+	}
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	switch len(keys) {
+	case 0:
+		return map[string]any{}, nil
+	case 1:
+		return parseValues(ns, name, keys[0], data[keys[0]])
+	}
+	return nil, fmt.Errorf("values ConfigMap %s/%s carries %d keys (%s): app-operator reads an App's values from a ConfigMap's one key", ns, name, len(keys), strings.Join(keys, ", "))
 }
 
 // appValuesLayers is every values source the App names, in app-operator's

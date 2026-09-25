@@ -1116,6 +1116,11 @@ func configMapValues(ctx context.Context, dyn dynamic.Interface, ns, name, key s
 		return nil, fmt.Errorf("get values ConfigMap %s/%s: %w", ns, name, err)
 	}
 	raw, _, _ := unstructured.NestedString(cm.Object, "data", key)
+	return parseValues(ns, name, key, raw)
+}
+
+// parseValues is the values document under a ConfigMap's key.
+func parseValues(ns, name, key, raw string) (map[string]any, error) {
 	vals := map[string]any{}
 	if err := yaml.Unmarshal([]byte(raw), &vals); err != nil {
 		return nil, fmt.Errorf("values ConfigMap %s/%s key %s: %w", ns, name, key, err)
