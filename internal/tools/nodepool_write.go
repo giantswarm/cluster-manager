@@ -1278,13 +1278,13 @@ func applyAll(ctx context.Context, dyn dynamic.Interface, objs []*unstructured.U
 		return err
 	}
 	first := len(out.Objects)
-	for i := range plans {
-		act := plans[i].act
+	for _, p := range plans {
+		act := p.act
 		if dryRun && act.Action != actionUnchanged {
 			act.Action = "would-" + act.Action
 		}
 		out.Objects = append(out.Objects, act)
-		out.Manifests = append(out.Manifests, redacted(objs[i]))
+		out.Manifests = append(out.Manifests, redacted(p.obj))
 	}
 	if dryRun {
 		return nil

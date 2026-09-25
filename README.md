@@ -127,4 +127,3 @@ as files into the repository that owns the cluster and open one pull request as 
   Kustomization that does not prune, `liveSteps` names `delete_node_pool` in mode apply after the merge,
   which tears the serving layer down in order. Apply mode refuses to change or delete a release Flux still
   applies from git (the Kustomization's inventory lists it) and removes what a merged removal left behind.
-
