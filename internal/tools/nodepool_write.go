@@ -1069,7 +1069,8 @@ func releaseComponents(release *unstructured.Unstructured) map[string]string {
 
 // clusterValues is the cluster's own values: the fleet's HelmRelease named
 // like the cluster (spec.valuesFrom ConfigMaps under spec.values, Flux's
-// precedence), else the App CR of that name (its user-values ConfigMap).
+// precedence), else the App CR of that name (its values ConfigMaps,
+// app-operator's precedence).
 // Secrets referenced from either are not read: their content is credentials.
 func clusterValues(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (map[string]any, error) {
 	ns, name := c.GetNamespace(), c.GetName()
@@ -1077,15 +1078,7 @@ func clusterValues(ctx context.Context, dyn dynamic.Interface, c *unstructured.U
 		return helmReleaseValues(ctx, dyn, hr)
 	}
 	if app, err := dyn.Resource(AppGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
-		cmName, _, _ := unstructured.NestedString(app.Object, "spec", "userConfig", "configMap", "name")
-		cmNS, _, _ := unstructured.NestedString(app.Object, "spec", "userConfig", "configMap", "namespace")
-		if cmNS == "" {
-			cmNS = ns
-		}
-		if cmName == "" {
-			return nil, fmt.Errorf("the App %s/%s names no user-values ConfigMap: the pool's snapshot comes from the cluster's values", ns, name)
-		}
-		return configMapValues(ctx, dyn, cmNS, cmName, "values")
+		return appValues(ctx, dyn, app)
 	}
 	return nil, &ErrNotFound{What: fmt.Sprintf("values of cluster %s (neither a HelmRelease nor an App named %s in %s)", name, name, ns)}
 }

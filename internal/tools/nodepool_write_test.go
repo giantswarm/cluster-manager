@@ -141,6 +141,23 @@ func TestCreateNodePoolAppLayout(t *testing.T) {
 	assertGolden(t, "create_node_pool_app_layout", out)
 }
 
+// TestCreateNodePoolAppConfigLayers: wc2's App in the workload clusters'
+// GitOps layout (spec.config and spec.extraConfigs, no spec.userConfig)
+// merges, as app-operator does, to the values of the user-values layout:
+// the pool renders exactly as TestCreateNodePoolAppLayout's.
+func TestCreateNodePoolAppConfigLayers(t *testing.T) {
+	lab := newLab(t, "installation.yaml")
+	apps := lab.installation.Resource(AppGVR).Namespace("org-acme")
+	require.NoError(t, apps.Delete(context.Background(), "wc2", metav1.DeleteOptions{}))
+	lab.add(t, lab.installation, "app-config-layers.yaml")
+	out, err := lab.service(Config{Installation: "gazelle"}).CreateNodePool(context.Background(), l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
+	proxy, _, _ := unstructured.NestedMap(values, "cluster", "proxy")
+	assert.Equal(t, "http://proxy.acme.example.io:3128", proxy["httpProxy"], "the priority-75 override over spec.config")
+	assertGolden(t, "create_node_pool_app_layout", out)
+}
+
 // TestCreateNodePoolIdempotent: apply creates, the re-run is unchanged, a
 // changed input is the update and its dry-run names the difference.
 func TestCreateNodePoolIdempotent(t *testing.T) {
