@@ -1,0 +1,206 @@
+# App CRs for appValues: every values source app-operator merges, listed out
+# of merge order, and the Apps it refuses.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: layers
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+  config:
+    configMap:
+      name: layers-config
+      namespace: org-acme
+  userConfig:
+    configMap:
+      name: layers-user
+      namespace: org-acme
+    secret:
+      name: layers-user-secret
+      namespace: org-acme
+  extraConfigs:
+    - kind: configMap
+      name: layers-top
+      namespace: org-acme
+      priority: 150
+    - kind: configMap
+      name: layers-post-first
+      namespace: org-acme
+      priority: 75
+    - kind: secret
+      name: layers-credentials
+      namespace: org-acme
+      priority: 120
+    - kind: configMap
+      name: layers-pre
+      namespace: org-acme
+      priority: 10
+    - name: layers-default
+      namespace: org-acme
+    - kind: configMap
+      name: layers-post-second
+      namespace: org-acme
+      priority: 75
+    - kind: configMap
+      name: layers-at-cluster
+      namespace: org-acme
+      priority: 50
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-pre
+  namespace: org-acme
+data:
+  values: |
+    pre: pre
+    below: pre
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-default
+  namespace: org-acme
+data:
+  values: |
+    pre: default
+    below: default
+    default: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-at-cluster
+  namespace: org-acme
+data:
+  values: |
+    atCluster: extra
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-config
+  namespace: org-acme
+data:
+  values: |
+    pre: config
+    default: config
+    atCluster: config
+    post: config
+    user: config
+    nested:
+      fromConfig: config
+      overridden: config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-post-first
+  namespace: org-acme
+data:
+  values: |
+    post: first
+    user: post
+    sameLevel: first
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-post-second
+  namespace: org-acme
+data:
+  values: |
+    sameLevel: second
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-user
+  namespace: org-acme
+data:
+  values: |
+    user: user
+    top: user
+    nested:
+      overridden: user
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layers-top
+  namespace: org-acme
+data:
+  values.yaml: |
+    top: top
+---
+# No values at all.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: no-values
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+---
+# Values only in Secrets: credentials, never read.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: secrets-only
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+  userConfig:
+    secret:
+      name: secrets-only-user
+  extraConfigs:
+    - kind: secret
+      name: secrets-only-extra
+      namespace: org-acme
+---
+# One ConfigMap it names exists, the other does not.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: missing
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+  config:
+    configMap:
+      name: missing-config
+      namespace: org-acme
+  extraConfigs:
+    - kind: configMap
+      name: layers-pre
+      namespace: org-acme
+      priority: 10
+---
+# A values ConfigMap with two keys: which one is the values is not told.
+apiVersion: application.giantswarm.io/v1alpha1
+kind: App
+metadata:
+  name: several-keys
+  namespace: org-acme
+spec:
+  catalog: cluster
+  name: cluster-aws
+  config:
+    configMap:
+      name: several-keys-config
+      namespace: org-acme
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: several-keys-config
+  namespace: org-acme
+data:
+  values: |
+    a: b
+  values.yaml: |
+    a: c
