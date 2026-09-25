@@ -1311,3 +1311,70 @@ func TestDeleteNodePoolIgnoresAnotherPoolsWaitingModel(t *testing.T) {
 	_, err = svc.DeleteNodePool(ctx, del)
 	assertRefused(t, err, "1 served model(s) wait for a node of the pool") // with the cluster's last pool every waiting model counts: the slice goes too
 }
+
+// TestReRunKeepsWhatOtherWritersOwn (giantswarm/cluster-manager#107): a
+// re-run with the same arguments is unchanged although the API server
+// defaulted spec.uninstall.deletionPropagation and other writers added a
+// finalizer, a label and an annotation; a re-run that changes the pool
+// updates it and keeps them all — helm-controller's finalizer above all,
+// without which the delete orphans the pool.
+func TestReRunKeepsWhatOtherWritersOwn(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
+	require.NoError(t, err)
+	res := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	hr, err := res.Get(ctx, "wc1-gpu-l4", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []string{fluxFinalizer}, hr.GetFinalizers(), "helm-controller reconciled it")
+	require.NoError(t, unstructured.SetNestedField(hr.Object, "background", "spec", "uninstall", "deletionPropagation"))
+	labels := hr.GetLabels()
+	labels["helm.toolkit.fluxcd.io/name"] = "wc1-gpu-l4"
+	hr.SetLabels(labels)
+	hr.SetAnnotations(map[string]string{"reconcile.fluxcd.io/requestedAt": "2026-09-25T10:00:00Z"})
+	_, err = res.Update(ctx, hr, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	again, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
+	require.NoError(t, err)
+	for _, o := range again.Objects {
+		assert.Equal(t, actionUnchanged, o.Action, "%s %s: %v", o.Kind, o.Name, o.Changes)
+	}
+
+	bigger := l4("wc1", "gpu-l4", false)
+	bigger.Pool.MaxGPUs = 8
+	changed, err := svc.CreateNodePool(ctx, bigger)
+	require.NoError(t, err)
+	var updated bool
+	for _, o := range changed.Objects {
+		if o.Kind == "HelmRelease" && o.Name == "wc1-gpu-l4" {
+			updated = o.Action == actionUpdate
+		}
+	}
+	require.True(t, updated, "maxGPUs changes the pool release")
+	hr, err = res.Get(ctx, "wc1-gpu-l4", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{fluxFinalizer}, hr.GetFinalizers(), "the update keeps helm-controller's finalizer")
+	assert.Equal(t, "wc1-gpu-l4", hr.GetLabels()["helm.toolkit.fluxcd.io/name"], "and another writer's label")
+	assert.Equal(t, "2026-09-25T10:00:00Z", hr.GetAnnotations()["reconcile.fluxcd.io/requestedAt"], "and another writer's annotation")
+	assert.Equal(t, compose.ManagedBy, hr.GetLabels()[compose.LabelManagedBy], "cluster-manager's own labels are written")
+}
+
+// TestDeleteNodePoolRefusesAnOrphaningDelete (giantswarm/cluster-manager#107):
+// a pool release without helm-controller's finalizer would be removed
+// without its uninstall, so the delete refuses and names the reconcile.
+func TestDeleteNodePoolRefusesAnOrphaningDelete(t *testing.T) {
+	l := newLab(t, "installation.yaml").target(t, wc1APIServer, "wc1-nodeclaims.yaml", servingAPIs...)
+	ctx := context.Background()
+	res := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	hr, err := res.Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	require.NoError(t, err)
+	hr.SetFinalizers(nil)
+	_, err = res.Update(ctx, hr, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	_, err = l.service(Config{Installation: "gazelle"}).DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	assertRefused(t, err, "HelmRelease org-acme/wc1-gpu-a10g carries no finalizers.fluxcd.io: helm-controller has not reconciled it since its last write, and deleting it now removes it without uninstalling the pool — its MachinePool and Karpenter NodePool would stay and could still launch a GPU node; re-run once helm-controller has reconciled it (within its interval, or at once with `flux reconcile helmrelease -n org-acme wc1-gpu-a10g`)")
+	_, err = res.Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
+	assert.NoError(t, err, "nothing was deleted")
+}

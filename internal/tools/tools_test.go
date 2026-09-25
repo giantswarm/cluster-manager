@@ -52,9 +52,20 @@ func loadFixtures(t *testing.T, name string) []runtime.Object {
 		require.NoError(t, err, doc)
 		u := &unstructured.Unstructured{}
 		require.NoError(t, json.Unmarshal(j, &u.Object), doc)
+		reconciled(u)
 		objs = append(objs, u)
 	}
 	return objs
+}
+
+// reconciled gives a HelmRelease helm-controller's finalizer, as its first
+// reconcile does: the fixtures' releases have been reconciled, and one a
+// test creates is at once (newFake's reactor). A fixture that states
+// finalizers keeps them.
+func reconciled(u *unstructured.Unstructured) {
+	if u.GetKind() == "HelmRelease" && u.GetFinalizers() == nil {
+		u.SetFinalizers([]string{fluxFinalizer})
+	}
 }
 
 // isCommentOnly reports whether a YAML document carries nothing but
@@ -116,6 +127,12 @@ var servingAPIs = []schema.GroupVersionResource{detect.LLMISVCGVR, configsStorag
 func newFake(t *testing.T, fixture string, absent ...schema.GroupVersionResource) dynamic.Interface {
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, loadFixtures(t, fixture)...)
+	dyn.PrependReactor("create", HelmReleaseGVR.Resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if u, ok := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured); ok {
+			reconciled(u)
+		}
+		return false, nil, nil
+	})
 	for _, gvr := range absent {
 		dyn.PrependReactor("list", gvr.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewNotFound(gvr.GroupResource(), "")
