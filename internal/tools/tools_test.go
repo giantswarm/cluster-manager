@@ -88,6 +88,8 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.NodeClaimGVR:             "NodeClaimList",
 	detect.EventsGVR:                "EventList",
 	detect.GatewayGVR:               "GatewayList",
+	detect.CertificateGVR:           "CertificateList",
+	detect.ChallengeGVR:             "ChallengeList",
 	JobGVR:                          "JobList",
 	detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 }

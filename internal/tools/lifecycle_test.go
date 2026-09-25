@@ -16,11 +16,17 @@ import (
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
-// add puts a fixture's objects into a fake client beside what it has.
+// add puts a fixture's objects into a fake client beside what it has. A
+// Gateway goes in under its resource: the tracker's guess from the kind is
+// "gatewaies".
 func (l *lab) add(t *testing.T, dyn dynamic.Interface, fixture string) *lab {
 	t.Helper()
 	tracker := dyn.(*dynamicfake.FakeDynamicClient).Tracker()
 	for _, obj := range loadFixtures(t, fixture) {
+		if u := obj.(*unstructured.Unstructured); u.GetKind() == "Gateway" {
+			require.NoError(t, tracker.Create(detect.GatewayGVR, u, u.GetNamespace()))
+			continue
+		}
 		require.NoError(t, tracker.Add(obj))
 	}
 	return l

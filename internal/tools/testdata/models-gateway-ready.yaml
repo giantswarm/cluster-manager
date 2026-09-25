@@ -1,0 +1,60 @@
+# The models Gateway on wc2 once its Certificate is issued: the
+# Gateway, its https listener and the models-tls Certificate all ready.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: models
+  namespace: org-acme
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: models.wc2.acme.example.io
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: models-tls
+status:
+  conditions:
+    - type: Accepted
+      status: "True"
+      reason: Accepted
+    - type: Programmed
+      status: "True"
+      reason: Programmed
+  listeners:
+    - name: https
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+        - type: Programmed
+          status: "True"
+          reason: Programmed
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: models-tls
+  namespace: org-acme
+spec:
+  secretName: models-tls
+  dnsNames:
+    - models.wc2.acme.example.io
+  issuerRef:
+    name: letsencrypt-giantswarm
+    kind: ClusterIssuer
+    group: cert-manager.io
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: Ready
+      message: Certificate is up to date and has not expired

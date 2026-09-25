@@ -337,7 +337,9 @@ func Serving(ctx context.Context, t Target) Component {
 // cluster-manager's slice release and every child of it with their Ready
 // conditions, the llm-d controller's available replicas, the counts of
 // LLMInferenceServiceConfigs in the release namespace and of published
-// serving presets, and the models Gateway's Programmed condition. The backend
+// serving presets, and the models Gateway's readiness — Programmed, its models
+// listener's Programmed and ResolvedRefs, the listener Certificate's Ready,
+// named in the evidence while any of them holds it back. The backend
 // registration is the caller's to fill in (it lives in model-manager's
 // namespace on the installation).
 func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
@@ -394,6 +396,9 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 	r.Presets = count(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingPreset+"=true")
 	r.ModelsGateway = modelsGateway(ctx, t.Reader)
 	c := verdict(found)
+	if gw := r.ModelsGateway; gw != nil && gw.Message != "" {
+		c.Evidence = append(c.Evidence, "Gateway "+gw.Namespace+"/"+gw.Name+" not ready ("+gw.Message+")")
+	}
 	c.Evidence = append(c.Evidence, apis...)
 	c.Evidence = append(c.Evidence, stranded...)
 	c.Evidence = append(c.Evidence, children...)

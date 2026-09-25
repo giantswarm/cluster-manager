@@ -24,6 +24,12 @@ var (
 	EventsGVR = schema.GroupVersionResource{Version: "v1", Resource: "events"}
 	// GatewayGVR is the Gateway API's Gateway — the slice's models Gateway.
 	GatewayGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	// CertificateGVR is cert-manager's Certificate — the models listener's,
+	// issued into the Secret the listener references.
+	CertificateGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
+	// ChallengeGVR is cert-manager's ACME Challenge: a pending one says why
+	// the models listener's Certificate is not issued.
+	ChallengeGVR = schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: "v1", Resource: "challenges"}
 )
 
 const (
@@ -36,6 +42,9 @@ const (
 	// ConditionProgrammed is the Gateway API's condition saying a Gateway's
 	// data plane is set up.
 	ConditionProgrammed = "Programmed"
+	// ConditionResolvedRefs is the Gateway API's listener condition saying
+	// its references — the TLS certificate's Secret — resolved.
+	ConditionResolvedRefs = "ResolvedRefs"
 	// modelsHostPrefix is the host the slice's models Gateway listens on.
 	modelsHostPrefix = "models."
 )
@@ -173,12 +182,52 @@ type BackendState struct {
 	Error string `json:"error,omitempty"`
 }
 
-// GatewayState is a Gateway's readiness: its Programmed condition.
+// GatewayState is the models Gateway's readiness: its Programmed condition,
+// the models listener's Programmed and ResolvedRefs, and the Certificate of
+// the listener's Secret. Ready is true only when all of them are: a Gateway
+// reads Programmed while its https listener has no certificate, and every
+// client then fails the TLS handshake (giantswarm/cluster-manager#110).
 type GatewayState struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Ready     *bool  `json:"ready"`
+	// Reason is the Programmed condition's reason while the Gateway is
+	// Ready or not Programmed; else the listener's or the Certificate's
+	// reason that holds it back.
+	Reason string `json:"reason,omitempty"`
+	// Message says what holds the Gateway back, empty while it is Ready.
+	Message string `json:"message,omitempty"`
+	// Listener is the listener on models.<domain>.
+	Listener ListenerState `json:"listener"`
+	// Certificate is the cert-manager Certificate issuing the listener's
+	// Secret, null where none does (the platform's wildcard Secret serves
+	// the host) or the cluster cannot list them.
+	Certificate *CertificateState `json:"certificate"`
+}
+
+// ListenerState is a Gateway listener's Programmed and ResolvedRefs
+// conditions, each null until the controller reports it.
+type ListenerState struct {
+	Name         string `json:"name"`
+	Hostname     string `json:"hostname"`
+	Programmed   *bool  `json:"programmed"`
+	ResolvedRefs *bool  `json:"resolvedRefs"`
+	// Reason is the reason of the first of them that is not True.
+	Reason string `json:"reason,omitempty"`
+}
+
+// CertificateState is a cert-manager Certificate's Ready condition and,
+// while it is not Ready, the reason of the ACME Challenge pending for the
+// host.
+type CertificateState struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Ready     *bool  `json:"ready"`
 	Reason    string `json:"reason,omitempty"`
+	Message   string `json:"message,omitempty"`
+	// Challenge is the pending ACME Challenge's state and reason for the
+	// host, empty where none is pending.
+	Challenge string `json:"challenge,omitempty"`
 }
 
 // NewReleaseState reads a HelmRelease's Ready condition and deletion.
@@ -269,18 +318,179 @@ func modelsGateway(ctx context.Context, reader dynamic.Interface) *GatewayState 
 		listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
 		for _, l := range listeners {
 			m, _ := l.(map[string]any)
-			if host, _ := m["hostname"].(string); !strings.HasPrefix(host, modelsHostPrefix) {
+			host, _ := m["hostname"].(string)
+			if !strings.HasPrefix(host, modelsHostPrefix) {
 				continue
 			}
-			state := &GatewayState{Name: gw.GetName(), Namespace: gw.GetNamespace()}
+			name, _ := m["name"].(string)
+			state := &GatewayState{Name: gw.GetName(), Namespace: gw.GetNamespace(), Listener: listenerState(gw, name, host)}
+			if secret := certificateSecret(m); secret != "" {
+				state.Certificate = listenerCertificate(ctx, reader, gw.GetNamespace(), secret, host)
+			}
 			if cond, found := condition(gw, ConditionProgrammed); found {
 				ready := cond.Status == "True"
 				state.Ready, state.Reason = &ready, cond.Reason
 			}
+			state.judge()
 			return state
 		}
 	}
 	return nil
+}
+
+// judge holds a Programmed Gateway back while its models listener or the
+// listener's Certificate is not ready, naming both with why: a listener
+// without its certificate says InvalidCertificateRef, the Certificate why it
+// is not issued.
+func (g *GatewayState) judge() {
+	if g.Ready == nil || !*g.Ready {
+		return
+	}
+	var reasons, details []string
+	l := g.Listener
+	switch {
+	case l.Programmed == nil || l.ResolvedRefs == nil:
+		reasons = append(reasons, "Pending")
+		details = append(details, "listener "+l.Name+" reports no Programmed or ResolvedRefs condition yet")
+	case !*l.ResolvedRefs || !*l.Programmed:
+		reasons = append(reasons, l.Reason)
+		details = append(details, "listener "+l.Name+" not ready ("+listenerDetail(l)+")")
+	}
+	if c := g.Certificate; c != nil && (c.Ready == nil || !*c.Ready) {
+		reason := c.Reason
+		if reason == "" {
+			reason = "Pending"
+		}
+		detail := "Certificate " + c.Namespace + "/" + c.Name + " not Ready"
+		if c.Message != "" {
+			detail += ": " + c.Message
+		}
+		if c.Challenge != "" {
+			detail += "; ACME challenge " + c.Challenge
+		}
+		reasons, details = append(reasons, reason), append(details, detail)
+	}
+	if len(details) == 0 {
+		return
+	}
+	notReady := false
+	g.Ready, g.Reason, g.Message = &notReady, reasons[0], strings.Join(details, "; ")
+}
+
+// listenerDetail names the listener's conditions that are not True.
+func listenerDetail(l ListenerState) string {
+	var out []string
+	if !*l.Programmed {
+		out = append(out, ConditionProgrammed+"=False")
+	}
+	if !*l.ResolvedRefs {
+		out = append(out, ConditionResolvedRefs+"=False")
+	}
+	detail := strings.Join(out, ", ")
+	if l.Reason != "" {
+		detail += " [" + l.Reason + "]"
+	}
+	return detail
+}
+
+// listenerState reads a listener's Programmed and ResolvedRefs from the
+// Gateway's status.listeners.
+func listenerState(gw *unstructured.Unstructured, name, host string) ListenerState {
+	state := ListenerState{Name: name, Hostname: host}
+	statuses, _, _ := unstructured.NestedSlice(gw.Object, "status", "listeners")
+	for _, s := range statuses {
+		m, _ := s.(map[string]any)
+		if m["name"] != name {
+			continue
+		}
+		conds := &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"conditions": m["conditions"]}}}
+		for _, typ := range []string{ConditionResolvedRefs, ConditionProgrammed} {
+			cond, found := condition(conds, typ)
+			if !found {
+				continue
+			}
+			ok := cond.Status == "True"
+			if typ == ConditionResolvedRefs {
+				state.ResolvedRefs = &ok
+			} else {
+				state.Programmed = &ok
+			}
+			if !ok && state.Reason == "" {
+				state.Reason = cond.Reason
+			}
+		}
+	}
+	return state
+}
+
+// certificateSecret is the name of the Secret a listener's TLS references,
+// empty where it references none.
+func certificateSecret(listener map[string]any) string {
+	refs, _, _ := unstructured.NestedSlice(listener, "tls", "certificateRefs")
+	for _, r := range refs {
+		m, _ := r.(map[string]any)
+		if kind, _ := m["kind"].(string); kind != "" && kind != "Secret" {
+			continue
+		}
+		if name, _ := m["name"].(string); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// listenerCertificate is the Certificate issuing a Secret in the namespace,
+// with the pending ACME Challenge for the host while it is not Ready; nil
+// where none issues it or the target cannot list them.
+func listenerCertificate(ctx context.Context, reader dynamic.Interface, namespace, secret, host string) *CertificateState {
+	certs, err := list(ctx, reader, CertificateGVR, namespace, "")
+	if err != nil {
+		return nil
+	}
+	for i := range certs.Items {
+		cert := &certs.Items[i]
+		if name, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); name != secret {
+			continue
+		}
+		state := &CertificateState{Name: cert.GetName(), Namespace: cert.GetNamespace()}
+		if cond, found := ReadyCondition(cert); found {
+			ready := cond.Status == "True"
+			state.Ready, state.Reason = &ready, cond.Reason
+			if !ready {
+				state.Message = strings.Join(strings.Fields(cond.Message), " ")
+			}
+		}
+		if state.Ready == nil || !*state.Ready {
+			state.Challenge = pendingChallenge(ctx, reader, namespace, host)
+		}
+		return state
+	}
+	return nil
+}
+
+// pendingChallenge is the state and reason of the ACME Challenge for the
+// host in the namespace, empty where none is pending or the target cannot
+// list them.
+func pendingChallenge(ctx context.Context, reader dynamic.Interface, namespace, host string) string {
+	challenges, err := list(ctx, reader, ChallengeGVR, namespace, "")
+	if err != nil {
+		return ""
+	}
+	for i := range challenges.Items {
+		ch := &challenges.Items[i]
+		if name, _, _ := unstructured.NestedString(ch.Object, "spec", "dnsName"); name != host {
+			continue
+		}
+		state, _, _ := unstructured.NestedString(ch.Object, "status", "state")
+		reason, _, _ := unstructured.NestedString(ch.Object, "status", "reason")
+		kind, _, _ := unstructured.NestedString(ch.Object, "spec", "type")
+		out := strings.TrimSpace(kind + " " + state)
+		if reason = strings.Join(strings.Fields(reason), " "); reason != "" {
+			out += ": " + reason
+		}
+		return out
+	}
+	return ""
 }
 
 // ConditionOf reads one condition of an object's status.conditions by type;
