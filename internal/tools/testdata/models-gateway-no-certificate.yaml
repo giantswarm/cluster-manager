@@ -1,0 +1,75 @@
+# The models Gateway on wc2 while its listener has no certificate
+# (giantswarm/cluster-manager#110): the Gateway reads Programmed, its https
+# listener ResolvedRefs=False because the models-tls Certificate is never
+# issued — the ClusterIssuer's DNS-01 challenge cannot find the zone.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: models
+  namespace: org-acme
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: models.wc2.acme.example.io
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: models-tls
+status:
+  conditions:
+    - type: Accepted
+      status: "True"
+      reason: Accepted
+    - type: Programmed
+      status: "True"
+      reason: Programmed
+  listeners:
+    - name: https
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+        - type: ResolvedRefs
+          status: "False"
+          reason: InvalidCertificateRef
+          message: secret org-acme/models-tls not found
+        - type: Programmed
+          status: "True"
+          reason: Programmed
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: models-tls
+  namespace: org-acme
+spec:
+  secretName: models-tls
+  dnsNames:
+    - models.wc2.acme.example.io
+  issuerRef:
+    name: letsencrypt-giantswarm
+    kind: ClusterIssuer
+    group: cert-manager.io
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: DoesNotExist
+      message: Issuing certificate as Secret does not exist
+---
+apiVersion: acme.cert-manager.io/v1
+kind: Challenge
+metadata:
+  name: models-tls-1-2718281828-3141592653
+  namespace: org-acme
+spec:
+  type: DNS-01
+  dnsName: models.wc2.acme.example.io
+status:
+  state: pending
+  reason: "Error presenting challenge: failed to determine Route 53 hosted zone ID: zone not found for _acme-challenge.models.wc2.acme.example.io."

@@ -72,3 +72,73 @@ func TestGPUOperatorOperandsUnreadable(t *testing.T) {
 	assert.Contains(t, got.OperandsError, "etcdserver: request timed out")
 	assert.Empty(t, got.OperandsMessage, "a failed read is not scale-to-zero")
 }
+
+// The models Gateway is ready only with its https listener's certificate
+// (giantswarm/cluster-manager#110): a Gateway reads Programmed while the
+// listener's Certificate is never issued and every client fails the TLS
+// handshake. Serving then reads not ready, naming the listener, the
+// Certificate and the pending ACME challenge.
+func TestListClustersModelsGateway(t *testing.T) {
+	gateway := func(t *testing.T, fixture string) *detect.GatewayState {
+		t.Helper()
+		l := newLab(t, "installation.yaml")
+		l.add(t, l.targets[wc2APIServer], fixture)
+		serving := clusterNamed(t, l, "wc2").Serving
+		gw := serving.Readiness.ModelsGateway
+		require.NotNil(t, gw)
+		return gw
+	}
+
+	t.Run("listener without its certificate", func(t *testing.T) {
+		gw := gateway(t, "models-gateway-no-certificate.yaml")
+		notReady := false
+		assert.Equal(t, &notReady, gw.Ready)
+		assert.Equal(t, "InvalidCertificateRef", gw.Reason)
+		assert.Equal(t, "listener https not ready (ResolvedRefs=False [InvalidCertificateRef])", gw.Message)
+		assert.Equal(t, "https", gw.Listener.Name)
+		assert.Equal(t, &notReady, gw.Listener.ResolvedRefs)
+		require.NotNil(t, gw.Certificate)
+		assert.Equal(t, "org-acme/models-tls", gw.Certificate.Namespace+"/"+gw.Certificate.Name)
+		assert.Equal(t, &notReady, gw.Certificate.Ready)
+		assert.Equal(t, "DoesNotExist", gw.Certificate.Reason)
+		assert.Equal(t, "DNS-01 pending: Error presenting challenge: failed to determine Route 53 hosted zone ID: zone not found for _acme-challenge.models.wc2.acme.example.io.", gw.Certificate.Challenge)
+	})
+
+	t.Run("listener resolved, certificate pending", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		l.add(t, l.targets[wc2APIServer], "models-gateway-no-certificate.yaml")
+		// The listener resolves a Secret left from before while the
+		// Certificate renews and its challenge fails.
+		gws := l.targets[wc2APIServer].Resource(detect.GatewayGVR).Namespace("org-acme")
+		obj, err := gws.Get(context.Background(), "models", metav1.GetOptions{})
+		require.NoError(t, err)
+		listeners, _, _ := unstructured.NestedSlice(obj.Object, "status", "listeners")
+		conds := listeners[0].(map[string]any)["conditions"].([]any)
+		conds[1] = map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs"}
+		require.NoError(t, unstructured.SetNestedSlice(obj.Object, listeners, "status", "listeners"))
+		_, err = gws.Update(context.Background(), obj, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		serving := clusterNamed(t, l, "wc2").Serving
+		gw := serving.Readiness.ModelsGateway
+		require.NotNil(t, gw)
+		notReady := false
+		assert.Equal(t, &notReady, gw.Ready)
+		assert.Equal(t, "DoesNotExist", gw.Reason)
+		assert.Equal(t, "Certificate org-acme/models-tls not Ready: Issuing certificate as Secret does not exist; ACME challenge DNS-01 pending: Error presenting challenge: failed to determine Route 53 hosted zone ID: zone not found for _acme-challenge.models.wc2.acme.example.io.", gw.Message)
+		assert.Contains(t, serving.Evidence, "Gateway org-acme/models not ready ("+gw.Message+")")
+	})
+
+	t.Run("certificate issued", func(t *testing.T) {
+		gw := gateway(t, "models-gateway-ready.yaml")
+		ready := true
+		assert.Equal(t, &ready, gw.Ready)
+		assert.Equal(t, "Programmed", gw.Reason)
+		assert.Empty(t, gw.Message)
+		assert.Equal(t, &ready, gw.Listener.Programmed)
+		assert.Equal(t, &ready, gw.Listener.ResolvedRefs)
+		require.NotNil(t, gw.Certificate)
+		assert.Equal(t, &ready, gw.Certificate.Ready)
+		assert.Empty(t, gw.Certificate.Challenge)
+	})
+}
