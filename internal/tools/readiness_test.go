@@ -94,7 +94,7 @@ func TestListClustersModelsGateway(t *testing.T) {
 		notReady := false
 		assert.Equal(t, &notReady, gw.Ready)
 		assert.Equal(t, "InvalidCertificateRef", gw.Reason)
-		assert.Equal(t, "listener https not ready (ResolvedRefs=False [InvalidCertificateRef])", gw.Message)
+		assert.Equal(t, "listener https not ready (ResolvedRefs=False [InvalidCertificateRef]); Certificate org-acme/models-tls not Ready: Issuing certificate as Secret does not exist; ACME challenge DNS-01 pending: Error presenting challenge: failed to determine Route 53 hosted zone ID: zone not found for _acme-challenge.models.wc2.acme.example.io.", gw.Message)
 		assert.Equal(t, "https", gw.Listener.Name)
 		assert.Equal(t, &notReady, gw.Listener.ResolvedRefs)
 		require.NotNil(t, gw.Certificate)

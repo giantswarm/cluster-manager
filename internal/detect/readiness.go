@@ -339,36 +339,42 @@ func modelsGateway(ctx context.Context, reader dynamic.Interface) *GatewayState 
 }
 
 // judge holds a Programmed Gateway back while its models listener or the
-// listener's Certificate is not ready, naming which and why.
+// listener's Certificate is not ready, naming both with why: a listener
+// without its certificate says InvalidCertificateRef, the Certificate why it
+// is not issued.
 func (g *GatewayState) judge() {
 	if g.Ready == nil || !*g.Ready {
 		return
 	}
-	notReady := false
+	var reasons, details []string
 	l := g.Listener
 	switch {
 	case l.Programmed == nil || l.ResolvedRefs == nil:
-		g.Reason, g.Message = "Pending", "listener "+l.Name+" reports no Programmed or ResolvedRefs condition yet"
+		reasons = append(reasons, "Pending")
+		details = append(details, "listener "+l.Name+" reports no Programmed or ResolvedRefs condition yet")
 	case !*l.ResolvedRefs || !*l.Programmed:
-		g.Reason, g.Message = l.Reason, "listener "+l.Name+" not ready ("+listenerDetail(l)+")"
-	default:
-		c := g.Certificate
-		if c == nil || (c.Ready != nil && *c.Ready) {
-			return
+		reasons = append(reasons, l.Reason)
+		details = append(details, "listener "+l.Name+" not ready ("+listenerDetail(l)+")")
+	}
+	if c := g.Certificate; c != nil && (c.Ready == nil || !*c.Ready) {
+		reason := c.Reason
+		if reason == "" {
+			reason = "Pending"
 		}
-		g.Reason = c.Reason
-		if g.Reason == "" {
-			g.Reason = "Pending"
-		}
-		g.Message = "Certificate " + c.Namespace + "/" + c.Name + " not Ready"
+		detail := "Certificate " + c.Namespace + "/" + c.Name + " not Ready"
 		if c.Message != "" {
-			g.Message += ": " + c.Message
+			detail += ": " + c.Message
 		}
 		if c.Challenge != "" {
-			g.Message += "; ACME challenge " + c.Challenge
+			detail += "; ACME challenge " + c.Challenge
 		}
+		reasons, details = append(reasons, reason), append(details, detail)
 	}
-	g.Ready = &notReady
+	if len(details) == 0 {
+		return
+	}
+	notReady := false
+	g.Ready, g.Reason, g.Message = &notReady, reasons[0], strings.Join(details, "; ")
 }
 
 // listenerDetail names the listener's conditions that are not True.
