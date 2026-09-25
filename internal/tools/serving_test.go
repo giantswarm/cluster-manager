@@ -73,6 +73,40 @@ func TestEnableModelServingOwnClusterIngressNamespaces(t *testing.T) {
 	assert.Equal(t, []string{"platform-workloads", "substrate"}, ingress)
 }
 
+// TestEnableModelServingOwnClusterRerunAddsIngressNamespaces
+// (giantswarm/cluster-manager#103): a slice composed before the ingress list
+// existed gains it when enable_model_serving runs again. The dry run names
+// that one path, the apply writes it, and a further run is unchanged.
+func TestEnableModelServingOwnClusterRerunAddsIngressNamespaces(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	_, err := svc.EnableModelServing(ctx, serving("gazelle", false))
+	require.NoError(t, err)
+	releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-giantswarm")
+	slice, err := releases.Get(ctx, "gazelle-agent-platform", metav1.GetOptions{})
+	require.NoError(t, err)
+	unstructured.RemoveNestedField(slice.Object, "spec", "values", "modelServing", "networkPolicy")
+	_, err = releases.Update(ctx, slice, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	dry, err := svc.EnableModelServing(ctx, serving("gazelle", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"unchanged", "would-update", "unchanged"}, actions(dry))
+	assert.Equal(t, []string{"spec.values.modelServing.networkPolicy.additionalIngressNamespaces"}, dry.Objects[1].Changes, "nothing else in the slice changes")
+
+	_, err = svc.EnableModelServing(ctx, serving("gazelle", false))
+	require.NoError(t, err)
+	slice, err = releases.Get(ctx, "gazelle-agent-platform", metav1.GetOptions{})
+	require.NoError(t, err)
+	ingress, _, _ := unstructured.NestedStringSlice(slice.Object, "spec", "values", "modelServing", "networkPolicy", "additionalIngressNamespaces")
+	assert.Equal(t, []string{"agent-platform", compose.DefaultSubstrateNamespace}, ingress)
+
+	again, err := svc.EnableModelServing(ctx, serving("gazelle", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"unchanged", "unchanged", "unchanged"}, actions(again))
+}
+
 // TestEnableModelServingWorkload composes the slice onto wc1 before any
 // pool of this call: the one pool release wc1 has (gpu-a10g) pins the
 // predictors, the target knob names the kubeconfig Secret, agentgateway is
