@@ -3,7 +3,10 @@ cluster-manager is running.
 
   MCP : http://{{ include "cluster-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
 {{- end }}
-{{- if .Values.oauth.enabled }}
+{{- if and .Values.oauth.enabled .Values.github.enabled }}
+
+muster connects through the GitHub App's per-person login: the bearer is the person's App user token (commit mode's pull request), and the platform identity provider's ID token rides next to it in X-Muster-Id-Token (forwardIdentity).
+{{- else if .Values.oauth.enabled }}
 
 Every call must carry a bearer token of the platform identity provider; muster forwards the session's token (forwardToken).
 {{- else }}
