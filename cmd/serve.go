@@ -18,6 +18,7 @@ import (
 
 	"github.com/giantswarm/cluster-manager/internal/api"
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 	"github.com/giantswarm/cluster-manager/internal/kube"
 	"github.com/giantswarm/cluster-manager/internal/registry"
 	"github.com/giantswarm/cluster-manager/internal/server"
@@ -127,6 +128,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if err != nil {
 		return fmt.Errorf("cluster-manager needs Kubernetes access: %w", err)
 	}
+	// The DNS-01 zone discovery is judged as cert-manager runs it: through
+	// the pod's recursive nameservers.
+	zones, err := detect.SystemResolver()
+	if err != nil {
+		return fmt.Errorf("cluster-manager needs a DNS resolver: %w", err)
+	}
 	// Per-call clients: the caller's own when the request carries the
 	// caller's token (downstream OAuth), the ServiceAccount's otherwise.
 	svc := tools.New(
@@ -145,6 +152,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		// The platform's charts from their registry, anonymously: what the
 		// slice would install is read from there before it exists.
 		tools.WithChartReader(&registry.Client{HTTP: &http.Client{Timeout: 20 * time.Second}}),
+		tools.WithSOAQuerier(zones),
 	)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}

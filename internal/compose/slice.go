@@ -182,6 +182,17 @@ type SliceSpec struct {
 	CacheClaim string
 }
 
+// SliceIssuer is the ClusterIssuer the slice asks for the models host's
+// certificate: CertificateIssuer, unless the platform's wildcard serves it
+// (the own cluster with the platform's gatewayApi.gateway.tls.secretName);
+// empty for none.
+func SliceIssuer(s SliceSpec) string {
+	if s.OwnCluster && s.Platform.TLSSecretName != "" {
+		return ""
+	}
+	return s.CertificateIssuer
+}
+
 // SliceReleaseName names the slice release of a cluster.
 func SliceReleaseName(cluster string) string { return cluster + SliceReleaseSuffix }
 
@@ -381,11 +392,11 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 			set(jwks.Port, "gateway", "jwksEgress", "port"),
 		)
 	}
-	switch {
+	switch issuer := SliceIssuer(s); {
+	case issuer != "":
+		steps = append(steps, set(issuer, "modelServing", "modelsGateway", "tls", "issuerRef", "name"))
 	case s.OwnCluster && s.Platform.TLSSecretName != "":
 		steps = append(steps, set(s.Platform.TLSSecretName, "gatewayApi", "gateway", "tls", "secretName"))
-	case s.CertificateIssuer != "":
-		steps = append(steps, set(s.CertificateIssuer, "modelServing", "modelsGateway", "tls", "issuerRef", "name"))
 	}
 	if s.Pool != "" {
 		selector := map[string]any{LabelMachinePool: ReleaseName(c.Name, s.Pool)}

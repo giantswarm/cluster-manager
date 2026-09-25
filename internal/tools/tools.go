@@ -138,6 +138,9 @@ type Service struct {
 	// serving presets a slice would publish before it exists (nil: the
 	// presets are judged from the cluster's ConfigMaps alone).
 	charts compose.ChartReader
+	// zones answers the SOA lookups of a DNS-01 issuer's zone discovery
+	// (judgeIssuance).
+	zones detect.SOAQuerier
 }
 
 // Option configures a Service beyond its Config.
@@ -149,6 +152,12 @@ type Option func(*Service)
 // (compose.ReadShippedPresets).
 func WithChartReader(r compose.ChartReader) Option {
 	return func(s *Service) { s.charts = r }
+}
+
+// WithSOAQuerier is the resolver the DNS-01 zone discovery of the models
+// host's ClusterIssuer is judged with (detect.SystemResolver).
+func WithSOAQuerier(q detect.SOAQuerier) Option {
+	return func(s *Service) { s.zones = q }
 }
 
 // New builds the tools over the per-call clients of the installation and,
