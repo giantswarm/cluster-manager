@@ -149,3 +149,41 @@ trusts the client id alone.
 {{- end -}}
 {{- join "," $auds -}}
 {{- end }}
+
+{{/*
+OTLP trace export env, rendered only with observability.otel.endpoint.
+*/}}
+{{- define "cluster-manager.otelEnv" -}}
+{{- with .Values.observability.otel }}
+{{- if .endpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ .endpoint | quote }}
+- name: OTEL_EXPORTER_OTLP_PROTOCOL
+  value: {{ .protocol | quote }}
+{{- with .headers }}
+- name: OTEL_EXPORTER_OTLP_HEADERS
+  value: {{ . | quote }}
+{{- end }}
+- name: OTEL_TRACES_SAMPLER
+  value: {{ .sampler | quote }}
+{{- with .samplerArg }}
+- name: OTEL_TRACES_SAMPLER_ARG
+  value: {{ . | quote }}
+{{- end }}
+- name: POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: POD_NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: NODE_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: spec.nodeName
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: {{ printf "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.node.name=$(NODE_NAME)%s" (ternary (printf ",%s" .resourceAttributes) "" (ne .resourceAttributes "")) | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
