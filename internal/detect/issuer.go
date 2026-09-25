@@ -2,6 +2,8 @@ package detect
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -221,7 +223,11 @@ func (r *Resolver) QuerySOA(ctx context.Context, fqdn string) (dnsmessage.RCode,
 func (r *Resolver) query(ctx context.Context, ns string, name dnsmessage.Name) (dnsmessage.RCode, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
-	id := uint16(time.Now().UnixNano())
+	var idBytes [2]byte
+	if _, err := rand.Read(idBytes[:]); err != nil {
+		return 0, nil, err
+	}
+	id := binary.BigEndian.Uint16(idBytes[:])
 	msg := dnsmessage.Message{
 		Header:    dnsmessage.Header{ID: id, RecursionDesired: true},
 		Questions: []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeSOA, Class: dnsmessage.ClassINET}},
