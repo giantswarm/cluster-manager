@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/dynamic"
@@ -58,6 +59,8 @@ type serveOptions struct {
 	ssoAllowPrivateIPs            bool
 	allowPublicClientRegistration bool
 	downstreamOAuth               bool
+	githubAuthorizationServer     string
+	githubAPIURL                  string
 }
 
 func newServeCmd() *cobra.Command {
@@ -101,6 +104,8 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (SSO_ALLOW_PRIVATE_IPS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("CLUSTER_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none). Needs --enable-oauth and an apiserver that trusts the IdP (CLUSTER_MANAGER_DOWNSTREAM_OAUTH)")
+	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's registration to (https://github.com/apps/giantswarm-cluster-manager): the bearer of every call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: the bearer is the forwarded IdP ID token and commit mode is not offered. Needs --enable-oauth (CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
+	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("CLUSTER_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (CLUSTER_MANAGER_GITHUB_API_URL)")
 	return cmd
 }
 
@@ -108,6 +113,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log := slog.Default()
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
+	}
+	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
+		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
 	}
 
 	// OTLP export when OTEL_EXPORTER_OTLP_ENDPOINT is set (the chart's
@@ -136,24 +144,36 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	// Per-call clients: the caller's own when the request carries the
 	// caller's token (downstream OAuth), the ServiceAccount's otherwise.
-	svc := tools.New(
-		func(ctx context.Context) tools.Clients {
-			k := clients.For(ctx)
-			return tools.Clients{Dynamic: k.Dynamic, Discovery: k.Discovery}
-		},
-		func(ctx context.Context, apiServer string, ca []byte) (dynamic.Interface, error) {
-			target, err := clients.ForTarget(ctx, apiServer, ca)
-			if err != nil {
-				return nil, err
-			}
-			return target.Dynamic, nil
-		},
-		tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget},
+	clientsFor := func(ctx context.Context) tools.Clients {
+		k := clients.For(ctx)
+		return tools.Clients{Dynamic: k.Dynamic, Discovery: k.Discovery}
+	}
+	targetsFor := func(ctx context.Context, apiServer string, ca []byte) (dynamic.Interface, error) {
+		target, err := clients.ForTarget(ctx, apiServer, ca)
+		if err != nil {
+			return nil, err
+		}
+		return target.Dynamic, nil
+	}
+	toolsCfg := tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget}
+	opts := []tools.Option{
 		// The platform's charts from their registry, anonymously: what the
 		// slice would install is read from there before it exists.
 		tools.WithChartReader(&registry.Client{HTTP: &http.Client{Timeout: 20 * time.Second}}),
 		tools.WithSOAQuerier(zones),
-	)
+	}
+	if o.githubAuthorizationServer != "" {
+		// Commit mode: the pull request is opened as the person, with the
+		// App user token the pinned registration carries.
+		apiURL := o.githubAPIURL
+		opts = append(opts, tools.WithGitHub(func(token string) (tools.GitHubRemote, error) {
+			if apiURL == server.DefaultGitHubAPIURL {
+				return commit.NewGitHub(token)
+			}
+			return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
+		}))
+	}
+	svc := tools.New(clientsFor, targetsFor, toolsCfg, opts...)
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
 	if o.oauthEnabled {
@@ -172,12 +192,15 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			AllowPublicClientRegistration: o.allowPublicClientRegistration,
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
+		if o.githubAuthorizationServer != "" {
+			cfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
+		}
 	}
 	srv, err := server.New(cfg, api.NewMCPServer(svc, version), log)
 	if err != nil {
 		return err
 	}
-	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation)
+	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation, "commit", o.githubAuthorizationServer != "")
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

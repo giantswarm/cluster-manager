@@ -141,6 +141,9 @@ type Service struct {
 	// zones answers the SOA lookups of a DNS-01 issuer's zone discovery
 	// (judgeIssuance).
 	zones detect.SOAQuerier
+	// remote builds the caller's GitHub remote for commit mode (nil: commit
+	// mode is not offered — the server is not pinned to its GitHub App).
+	remote RemoteFor
 }
 
 // Option configures a Service beyond its Config.

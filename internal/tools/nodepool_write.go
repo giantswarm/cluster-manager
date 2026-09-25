@@ -29,8 +29,9 @@ var (
 	AppGVR       = detect.AppGVR
 )
 
-// Write modes. Only apply exists in this stage; commit (a pull request as
-// the person) arrives with the epic's next proof (bumblebee-plans#46 D11).
+// Write modes: apply lands the objects on the installation as the person,
+// commit opens the pull request as the person in the repository that owns
+// the cluster.
 const (
 	ModeApply  = "apply"
 	ModeCommit = "commit"
@@ -227,8 +228,10 @@ type WriteResult struct {
 	// within the caller's deadline: the objects it did not reach are listed
 	// with action `pending`, and NextStep says what to do — re-run, the
 	// pending objects are written first (giantswarm/cluster-manager#34).
-	Partial  bool   `json:"partial,omitempty"`
-	NextStep string `json:"nextStep,omitempty"`
+	// Commit is the pull request of a write in mode commit.
+	Commit   *CommitResult `json:"commit,omitempty"`
+	Partial  bool          `json:"partial,omitempty"`
+	NextStep string        `json:"nextStep,omitempty"`
 }
 
 // BackendRegistration is the backend document create_node_pool writes.
@@ -300,7 +303,7 @@ func (a ObjectAction) String() string {
 // the log at debug.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := checkMode(in.Mode); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -390,6 +393,14 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
 			return nil, err
 		}
+	}
+	if in.Mode == ModeCommit {
+		releases := append(append(objs, sliceObjs...), operatorObjs...)
+		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start); err != nil {
+			return nil, err
+		}
+		logApplied(ctx, "create_node_pool", out, start)
+		return out, nil
 	}
 	// A pool that used to carry credentials and no longer does: the stale
 	// Secret goes.
@@ -654,7 +665,7 @@ func backendTargetName(t compose.BackendTarget) string {
 // giantswarm/cluster-manager#34's pattern.
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := checkMode(in.Mode); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -686,6 +697,24 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, err
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last, SliceKept: kept}
+	if in.Mode == ModeCommit {
+		var backend *applyPlan
+		if !last {
+			if backend, err = s.remainingBackend(ctx, dyn, c, t, in.Name); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.commitDelete(ctx, dyn, c, in, targets, backend, last, out, start); err != nil {
+			return nil, err
+		}
+		logApplied(ctx, "delete_node_pool", out, start)
+		return out, nil
+	}
+	if ks, err := inGit(ctx, dyn, hr); err != nil {
+		return nil, err
+	} else if ks != "" {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s is in git: Flux Kustomization %s applies it, so a live delete would be undone — remove the pool with mode commit, and after the merge, where the Kustomization does not prune, with mode apply", ns, release, ks)}
+	}
 	plans, err := planDeletes(ctx, dyn, targets)
 	if err != nil {
 		return nil, err
@@ -851,14 +880,21 @@ func backendRegisteredFor(ctx context.Context, dyn dynamic.Interface, ns, cluste
 	return compose.OwnedBy(cm) && cm.GetLabels()[compose.LabelCluster] == cluster, nil
 }
 
-func checkMode(mode string) error {
-	switch mode {
-	case ModeApply:
+// checkMode refuses a mode the tool or this server does not offer. Commit
+// mode needs the App-pinned registration (the GitHub token it opens the pull
+// request with) and exists for the node-pool writes.
+func (s *Service) checkMode(mode string, commits bool) error {
+	switch {
+	case mode == ModeApply:
 		return nil
-	case ModeCommit:
-		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not available yet in this server version; use mode apply — the objects land on the installation as you and are removed with the cluster"}
+	case mode == ModeCommit && !commits:
+		return &ErrRefused{Reason: "mode commit covers create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
+	case mode == ModeCommit && !s.CommitAvailable():
+		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply"}
+	case mode == ModeCommit:
+		return nil
 	default:
-		return &ErrRefused{Reason: fmt.Sprintf("mode %q: apply is the only mode this server version offers", mode)}
+		return &ErrRefused{Reason: fmt.Sprintf("mode %q: want %s or %s", mode, ModeApply, ModeCommit)}
 	}
 }
 
@@ -1305,6 +1341,11 @@ func planApply(ctx context.Context, dyn dynamic.Interface, obj *unstructured.Uns
 	case !compose.OwnedBy(existing):
 		return p, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s exists and %s: apply mode lands new objects only and never patches an object someone else owns — %s", obj.GetKind(), obj.GetNamespace(), obj.GetName(), ownerDescription(existing), removalHint(existing))}
 	default:
+		if ks, err := inGit(ctx, dyn, existing); err != nil {
+			return p, err
+		} else if ks != "" {
+			return p, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s is in git: Flux Kustomization %s applies it, so apply mode never changes it live — use mode commit", obj.GetKind(), obj.GetNamespace(), obj.GetName(), ks)}
+		}
 		p.existing = existing
 		p.act.Changes = changedPaths(existing, obj)
 		p.act.Action = actionUpdate
@@ -1373,7 +1414,7 @@ func ownerDescription(obj *unstructured.Unstructured) string {
 // own: the git repository for a GitOps-owned one, else its owner.
 func removalHint(obj *unstructured.Unstructured) string {
 	if obj.GetLabels()[labelKustomizeName] != "" {
-		return "change it in the git repository that owns the cluster (mode commit, once available), or pick another pool name"
+		return "change it in the git repository that owns the cluster (mode commit), or pick another pool name"
 	}
 	return "remove it by the means that created it, or pick another pool name"
 }

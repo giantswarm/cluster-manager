@@ -43,9 +43,9 @@ type Cluster struct {
 	// ZonesNote saying why they cannot be read.
 	Zones     []string `json:"zones"`
 	ZonesNote string   `json:"zonesNote,omitempty"`
-	// CommitTarget is the git repository and directory owning the cluster
-	// (from its Flux provenance), null when the cluster has none or commit
-	// mode is not available.
+	// CommitTarget is where commit mode writes the cluster's releases: the
+	// git repository, branch and directory from the Flux provenance of the
+	// cluster's HelmRelease or App, null when no Kustomization owns it.
 	CommitTarget *CommitTarget `json:"commitTarget"`
 }
 
@@ -78,10 +78,33 @@ type PoolRelease struct {
 	Deleting bool `json:"deleting,omitempty"`
 }
 
-// CommitTarget is where commit mode would write a cluster's files.
+// CommitTarget is where commit mode writes a cluster's releases.
 type CommitTarget struct {
+	// Repository is owner/name, Branch the one the Kustomization follows.
 	Repository string `json:"repository"`
-	Path       string `json:"path"`
+	Branch     string `json:"branch"`
+	// Path is the directory the releases go to: CommitDirectory under the
+	// Kustomization's spec.path.
+	Path string `json:"path"`
+	// Kustomization (namespace/name) lands the files; Prune says whether a
+	// file removed from git is removed from the installation too.
+	Kustomization string `json:"kustomization"`
+	Prune         bool   `json:"prune"`
+	// Note says why the provenance could not be read, the rest then empty.
+	Note string `json:"note,omitempty"`
+}
+
+// commitTargetOf is the cluster's commit target for list_clusters: nil when
+// no Kustomization owns it, the reason when it cannot be followed.
+func commitTargetOf(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) *CommitTarget {
+	loc, err := commitLocationOf(ctx, dyn, c)
+	switch {
+	case errors.Is(err, errNotFromGit):
+		return nil
+	case err != nil:
+		return &CommitTarget{Note: err.Error()}
+	}
+	return loc.target()
 }
 
 // ClusterList is list_clusters' answer: the clusters, and whether the
@@ -186,9 +209,7 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 		PoolReleases:   pools,
 		Zones:          infra.zonesList(),
 		ZonesNote:      infra.zonesReason,
-		// TODO(giantswarm/giantswarm#37637, commit mode): repository and
-		// path from the Flux provenance of the cluster's owning object.
-		CommitTarget: nil,
+		CommitTarget:   commitTargetOf(ctx, dyn, c),
 	}
 }
 

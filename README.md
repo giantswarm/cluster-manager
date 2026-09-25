@@ -32,7 +32,9 @@ Through muster the tools appear as `x_cluster-manager_<tool>`.
 The model cache is the cluster's setting with a standing cost (giantswarm/cluster-manager#83). The slice release is the cluster's one, so every pool serves from the claim it mounts, and a claim is a gp3 volume billed every month it exists — after every pool is removed too — until `remove_model_cache` deletes it. Every claim an answer names (`list_clusters`' `serving.readiness.cacheClaims[]`, the writes' `cacheClaim` and `cacheClaims[]`) carries its capacity, StorageClass and tier (volume type, IOPS, throughput, read from the class), since when it stands, its monthly list price in the cluster's region (`price{monthlyUSD, source, asOf}`, or `priceNote` saying why there is none — a class that is gone leaves the tier unknown, and a storage-only figure is never passed off as the price) and, in `list_clusters`, whether the slice mounts it (`mounted`). The `cache` block of `create_node_pool` and `enable_model_serving` carries the same for the claim the slice mounts — as read (`exists`, `since`), or as the connectivity chart at the slice's version would create it (`capacity`, `tier`, `monthlyPriceUSD` from the chart's defaults) — and its note says the cost stands until the cache is removed. `cache: false` while the cluster's slice release runs with the cache on is refused (`refused{cacheOn{claim, claimName, remedies}}`): the flip would switch the cache off for the models served on every pool while the claim stays and keeps costing; leave the cache on, or remove it. A first slice with `cache: false` stands, and `cache: true` on a slice that ran without it is the slice's upgrade for every pool, said so in the note. The prices are AWS's published list prices (`hack/aws-on-demand-prices.py` regenerates `internal/compose/prices_table.go`, EC2 on-demand and EBS gp3, for the regions the fleet runs in).
 
 Every write tool takes `dryRun` (the rendered manifests, or on a re-run the difference) and
-`mode: apply | commit`; `commit` (a pull request as the caller) follows in the epic's later stage.
+`mode: apply | commit`. `apply` lands the objects on the installation as the caller. `commit`
+(`create_node_pool` and `delete_node_pool`) opens the pull request as the caller in the git repository
+that owns the cluster instead — see *Commit mode* below.
 An apply answers within the aggregator's deadline for a tool call: everything it reads is read
 once and concurrently before anything is composed, the objects are planned together (every
 refusal before the first write) and land one after the other — `create_node_pool`: pool, slice,
@@ -94,3 +96,35 @@ make helm-lint helm-template
 Releases are automatic: every merge to `main` is tagged from Conventional Commits and CircleCI
 publishes the image to `gsoci.azurecr.io/giantswarm/cluster-manager` and the chart to the
 Giant Swarm catalog.
+
+## Commit mode
+
+`create_node_pool` and `delete_node_pool` with `mode: commit` write the releases apply would land
+as files into the repository that owns the cluster and open one pull request as the caller:
+
+- **Where.** The cluster's HelmRelease or App (named like the cluster) carries the labels of the Flux
+  Kustomization that applies it; the Kustomization's GitRepository and `spec.path` name the
+  repository, branch and directory (`list_clusters`' `commitTarget`). The files go to
+  `<path>/cluster-manager/`: one file per release (`<release>.yaml`, the OCIRepository and the
+  HelmRelease), the pool's registry credentials in `<release>-values-secret.enc.yaml` encrypted for the
+  age recipients the repository's `.sops.yaml` names for the path (a repository without age recipients
+  for it is refused), and a `kustomization.yaml` listing them. A parent directory with its own
+  `kustomization.yaml` gets the `cluster-manager` entry; without one Flux generates it and includes the
+  directory by itself.
+- **As whom.** The server is registered with muster pinned to the GitHub App
+  `giantswarm-cluster-manager` (chart `github.enabled`): muster runs the App's consent once per person and
+  puts their user token on every call, which the server verifies with `GET /user` and opens the pull
+  request with; `auth.forwardIdentity` puts the person's IdP ID token in `X-Muster-Id-Token` next to it,
+  validated as a forwarded bearer is otherwise and used for Kubernetes, so apply mode is unchanged. One
+  registration carries both. `get_info` answers `modes.commit: true` only then.
+- **What the answer says.** `commit{repository, base, directory, kustomization, prune, branch, files[],
+  pullRequest, number, author, liveSteps[]}`; `dryRun` shows every file with its content (a secret file
+  without) and opens nothing; a re-run whose files the base already carries opens nothing. The kserve
+  backend registration is model-manager's runtime state on the installation, not a file of the cluster's
+  repository: it is written live, as in apply.
+- **Removal.** The removal pull request deletes the pool's files (with the last pool the operator's and
+  the slice's too) and the kustomization entries; the nodes guard runs first as in apply. On a
+  Kustomization that does not prune, `liveSteps` names `delete_node_pool` in mode apply after the merge,
+  which tears the serving layer down in order. Apply mode refuses to change or delete a release Flux still
+  applies from git (the Kustomization's inventory lists it) and removes what a merged removal left behind.
+

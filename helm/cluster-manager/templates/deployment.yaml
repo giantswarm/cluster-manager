@@ -75,6 +75,10 @@ spec:
             {{- if .Values.oauth.downstream.enabled }}
             - --downstream-oauth=true
             {{- end }}
+            {{- if .Values.github.enabled }}
+            - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}
+            - --github-api-url={{ .Values.github.apiURL }}
+            {{- end }}
             {{- if eq .Values.oauth.provider "dex" }}
             - --dex-issuer-url={{ include "cluster-manager.oauthDexIssuerURL" . }}
             - --dex-client-id={{ include "cluster-manager.oauthDexClientID" . }}
