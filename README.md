@@ -78,6 +78,11 @@ Every flag has an environment variable named next to it in `--help`; flags win. 
 with `oauth.enabled`, the mcp-oauth resource-server flags from the platform identity contract
 (`global.identity`).
 
+Traces go out over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the chart's
+`observability.otel.endpoint`); the standard `OTEL_*` variables configure the exporter and the
+sampler. Spans: `POST /mcp`, `mcp.<method>` per JSON-RPC request (`gen_ai.tool.name` on
+`mcp.tools/call`) and `tool.<name>` per tool handler.
+
 ## Development
 
 ```sh

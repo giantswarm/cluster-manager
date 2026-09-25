@@ -92,8 +92,11 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.oauth.enabled .Values.extraEnv }}
+          {{- if or .Values.oauth.enabled .Values.observability.otel.endpoint .Values.extraEnv }}
           env:
+            {{- with include "cluster-manager.otelEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- if .Values.oauth.enabled }}
             {{- if eq .Values.oauth.provider "google" }}
             {{- if .Values.oauth.google.clientID }}

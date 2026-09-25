@@ -35,4 +35,21 @@ done <<'VERSIONS'
 0.1.1-dev.renovate-helm-un.2026-09-22.14-54---.h1a2b3c4 cluster-manager-0.1.1-dev.renovate-helm-un.2026-09-22.14-54
 VERSIONS
 
+# OTLP export is opt-in: no OTEL_ variable without observability.otel.endpoint,
+# and with it the exporter, the parent-based sampler and the pod's k8s
+# resource attributes.
+if helm template t "$CHART" | grep -q 'OTEL_'; then
+  fail "the default render sets an OTEL_ variable"
+fi
+otel=$(helm template t "$CHART" --set observability.otel.endpoint=http://otlp-gateway.kube-system.svc:4317 --set observability.otel.headers=X-Scope-OrgID=giantswarm)
+for want in \
+  'OTEL_EXPORTER_OTLP_ENDPOINT' 'value: "http://otlp-gateway.kube-system.svc:4317"' \
+  'OTEL_EXPORTER_OTLP_PROTOCOL' 'value: "grpc"' \
+  'OTEL_EXPORTER_OTLP_HEADERS' 'value: "X-Scope-OrgID=giantswarm"' \
+  'OTEL_TRACES_SAMPLER' 'value: "parentbased_traceidratio"' \
+  'OTEL_TRACES_SAMPLER_ARG' 'value: "0.1"' \
+  'value: "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.node.name=$(NODE_NAME)"'; do
+  grep -qF -- "$want" <<<"$otel" || fail "observability.otel.endpoint renders no '$want'"
+done
+
 echo "verify-chart: ok"

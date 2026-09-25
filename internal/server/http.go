@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Config configures the listener.
@@ -70,12 +71,18 @@ func New(cfg Config, mcpSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, er
 
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           mux,
+		Handler:           otelhttp.NewHandler(mux, "cluster-manager", otelhttp.WithFilter(traced)),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: MCP streams outlive any fixed value.
 		IdleTimeout: 120 * time.Second,
 	}
 	return s, nil
+}
+
+// traced leaves the probes out of the traces: the kubelet calls them every
+// few seconds and they carry no caller.
+func traced(r *http.Request) bool {
+	return r.URL.Path != "/healthz" && r.URL.Path != "/readyz"
 }
 
 // guard requires an authenticated caller when OAuth is on.
