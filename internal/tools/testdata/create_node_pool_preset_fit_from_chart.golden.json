@@ -573,7 +573,12 @@
     "chartVersion": "4.44.1",
     "domain": "wc1.acme.example.io",
     "modelsHost": "models.wc1.acme.example.io",
-    "jwks": "https://dex.gazelle.example.io/keys"
+    "jwks": "https://dex.gazelle.example.io/keys",
+    "certificate": {
+      "issuer": "letsencrypt-giantswarm",
+      "solver": "dns01",
+      "zone": "acme.example.io."
+    }
   },
   "backend": {
     "kind": "kserve",

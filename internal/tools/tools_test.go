@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/dns/dnsmessage"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -90,6 +91,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.GatewayGVR:               "GatewayList",
 	detect.CertificateGVR:           "CertificateList",
 	detect.ChallengeGVR:             "ChallengeList",
+	detect.ClusterIssuerGVR:         "ClusterIssuerList",
 	JobGVR:                          "JobList",
 	detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 }
@@ -138,22 +140,47 @@ const (
 type lab struct {
 	installation dynamic.Interface
 	targets      map[string]dynamic.Interface
+	// zones is the DNS the targets' ClusterIssuer discovers its DNS-01
+	// zone in: every cluster's base domain its own zone.
+	zones *fakeZones
 }
 
 func newLab(t *testing.T, fixture string) *lab {
 	t.Helper()
-	l := &lab{installation: newFake(t, fixture, servingAPIs...), targets: map[string]dynamic.Interface{}}
+	l := &lab{installation: newFake(t, fixture, servingAPIs...), targets: map[string]dynamic.Interface{}, zones: &fakeZones{soa: map[string]bool{"acme.example.io.": true, "example.io.": true}}}
 	l.target(t, wc1APIServer, "wc1.yaml", servingAPIs...)
 	l.target(t, wc2APIServer, "wc2.yaml")
 	return l
 }
 
 // target sets what the cluster at apiServer shows (a fixture under
-// testdata/targets), with the APIs it does not serve.
+// testdata/targets, beside the fleet's ClusterIssuer of targets/issuer.yaml),
+// with the APIs it does not serve.
 func (l *lab) target(t *testing.T, apiServer, fixture string, absent ...schema.GroupVersionResource) *lab {
 	t.Helper()
-	l.targets[apiServer] = newFake(t, filepath.Join("targets", fixture), absent...)
+	dyn := newFake(t, filepath.Join("targets", fixture), absent...)
+	for _, obj := range loadFixtures(t, filepath.Join("targets", "issuer.yaml")) {
+		_, err := dyn.Resource(detect.ClusterIssuerGVR).Create(context.Background(), obj.(*unstructured.Unstructured), metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+	l.targets[apiServer] = dyn
 	return l
+}
+
+// fakeZones answers SOA lookups: a name in soa is a zone apex, one in
+// servfail fails, every other name does not exist.
+type fakeZones struct {
+	soa, servfail map[string]bool
+}
+
+func (z *fakeZones) QuerySOA(_ context.Context, fqdn string) (dnsmessage.RCode, []string, error) {
+	switch {
+	case z.servfail[fqdn]:
+		return dnsmessage.RCodeServerFailure, nil, nil
+	case z.soa[fqdn]:
+		return dnsmessage.RCodeSuccess, []string{fqdn}, nil
+	}
+	return dnsmessage.RCodeNameError, nil, nil
 }
 
 // unreachable makes the cluster at apiServer unreadable as the caller.
@@ -187,7 +214,7 @@ func (l *lab) service(cfg Config, opts ...Option) *Service {
 			return dyn, nil
 		},
 		cfg,
-		opts...,
+		append([]Option{WithSOAQuerier(l.zones)}, opts...)...,
 	)
 }
 

@@ -54,6 +54,10 @@ type SliceRelease struct {
 	// the platform's Dex service in-cluster on the installation's own
 	// cluster, the public issuer on a workload cluster.
 	JWKS string `json:"jwks"`
+	// Certificate is how the models host's certificate is issued, judged
+	// before anything is applied (judgeIssuance); nil when the platform's
+	// wildcard serves the host.
+	Certificate *detect.Issuance `json:"certificate,omitempty"`
 }
 
 // EnableModelServing creates the cluster's slice release with the serving
@@ -109,6 +113,9 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, pin.sliceCache())
 	if err != nil {
+		return nil, err
+	}
+	if err := s.judgeIssuance(ctx, target, slice); err != nil {
 		return nil, err
 	}
 	if slice == nil {
@@ -311,7 +318,36 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 		Name: objs[1].GetName(), Namespace: objs[1].GetNamespace(), ChartVersion: nestedString(objs[0], "spec", "ref", "tag"),
 		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool, JWKS: jwks.URL(),
 	}
+	if issuer := compose.SliceIssuer(spec); issuer != "" {
+		slice.Certificate = &detect.Issuance{Issuer: issuer}
+	}
 	return serving, slice, objs, nil
+}
+
+// judgeIssuance judges, on the target cluster, whether the slice's
+// ClusterIssuer can issue the models host's certificate — for DNS-01,
+// whether its challenge's zone discovery resolves — and records how
+// (giantswarm/cluster-manager#110). One that cannot is a refusal naming the
+// cause, the dry run's included: a slice applied over it reports Programmed
+// while every client fails the TLS handshake. Nothing to judge without a
+// slice or where the platform's wildcard serves the host.
+func (s *Service) judgeIssuance(ctx context.Context, t target, slice *SliceRelease) error {
+	if slice == nil || slice.Certificate == nil {
+		return nil
+	}
+	issuer, host := slice.Certificate.Issuer, slice.ModelsHost
+	if t.Reader == nil {
+		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether ClusterIssuer %s on %s can issue the certificate of %s (%s): make the cluster readable as you and re-run", issuer, t.Cluster, host, t.Reason)}
+	}
+	if s.zones == nil {
+		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether ClusterIssuer %s on %s can issue the certificate of %s: cluster-manager runs without a DNS resolver", issuer, t.Cluster, host)}
+	}
+	issuance, err := detect.JudgeIssuance(ctx, t.Reader, s.zones, issuer, host)
+	if err != nil {
+		return &ErrRefused{Reason: fmt.Sprintf("the models host %s on %s would get no certificate: %v", host, t.Cluster, err)}
+	}
+	slice.Certificate = &issuance
+	return nil
 }
 
 // sliceReleaseOf reads the cluster's releases of the agent-platform chart:

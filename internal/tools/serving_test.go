@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -353,4 +354,36 @@ func TestDeleteLastPoolKeepsASharedSlice(t *testing.T) {
 	assert.True(t, out.LastPool)
 	assert.Equal(t, "org-acme/wc1-agent-platform", out.SliceKept)
 	assert.Equal(t, []string{"would-delete", "would-delete"}, actions(out), "pool release and source (no operator of cluster-manager's on wc1 here); the slice and the backend stay")
+}
+
+// TestServingRefusedWhereDNS01ZoneDiscoveryFails
+// (giantswarm/cluster-manager#110): the ClusterIssuer solves by DNS-01 and
+// the SOA lookup of the models host's challenge name answers SERVFAIL (a
+// wildcard CNAME pointing at itself). enable_model_serving's and
+// create_node_pool's dry runs are refused naming the lookup, and so is the
+// apply: nothing is written.
+func TestServingRefusedWhereDNS01ZoneDiscoveryFails(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	l.zones.servfail = map[string]bool{"_acme-challenge.models.wc1.acme.example.io.": true}
+	svc := l.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	want := "the models host models.wc1.acme.example.io on wc1 would get no certificate: ClusterIssuer letsencrypt-giantswarm solves models.wc1.acme.example.io by DNS-01, but the zone of _acme-challenge.models.wc1.acme.example.io cannot be discovered (SOA lookup of _acme-challenge.models.wc1.acme.example.io. answers SERVFAIL)"
+	for _, dryRun := range []bool{true, false} {
+		_, err := svc.EnableModelServing(ctx, serving("wc1", dryRun))
+		assertRefused(t, err, want)
+	}
+	_, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	assertRefused(t, err, want)
+	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-agent-platform", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "nothing applied")
+}
+
+// TestServingRefusedWithoutTheClusterIssuer: a ClusterIssuer the workload
+// cluster does not run never issues the models host's certificate.
+func TestServingRefusedWithoutTheClusterIssuer(t *testing.T) {
+	l := newLab(t, "installation.yaml")
+	ctx := context.Background()
+	require.NoError(t, l.targets[wc1APIServer].Resource(detect.ClusterIssuerGVR).Delete(ctx, compose.DefaultCertificateIssuer, metav1.DeleteOptions{}))
+	_, err := l.service(Config{Installation: "gazelle"}).EnableModelServing(ctx, serving("wc1", true))
+	assertRefused(t, err, "the models host models.wc1.acme.example.io on wc1 would get no certificate: ClusterIssuer letsencrypt-giantswarm does not exist")
 }

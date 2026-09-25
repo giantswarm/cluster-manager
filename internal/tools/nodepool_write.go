@@ -350,6 +350,9 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	if err := s.judgeIssuance(ctx, target, slice); err != nil {
+		return nil, err
+	}
 	if slice == nil && !cache {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("cache false: serving on %s is provided by %s (%s), not composed by cluster-manager — the model cache is that serving layer's setting, not this pool's; leave cache out, or change the setting where that layer is configured", target.Cluster, providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
