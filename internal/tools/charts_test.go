@@ -57,14 +57,14 @@ func (f *fakeCharts) Chart(_ context.Context, ref registry.Ref, version string) 
 
 const connectivityChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-connectivity"
 
-// The fixture's platform runs agent-platform 4.44.1 (installation.yaml);
-// the connectivity range resolves to 4.45.0, which ships the resized L4
+// The fixture's platform runs agent-platform 4.85.0 (installation.yaml);
+// the connectivity range resolves to 4.86.0, which ships the resized L4
 // preset, a 14B preset no L4 hosts and a preset only a 2xlarge hosts.
 func shippedPresetCharts() *fakeCharts {
 	return (&fakeCharts{}).
-		add(compose.SliceChartURL, "4.44.1", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
-		add(connectivityChartURL, "4.44.1", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
-		add(connectivityChartURL, "4.45.0", map[string]string{
+		add(compose.SliceChartURL, "4.85.0", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
+		add(connectivityChartURL, "4.85.0", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
+		add(connectivityChartURL, "4.86.0", map[string]string{
 			// The cache claim's defaults: 100Gi on the chart's own class, gp3 at
 			// 500 MiB/s and the tier's 3000 IOPS (giantswarm/cluster-manager#83).
 			"values.yaml": "modelServing:\n  cache:\n    enabled: true\n    pvc:\n      name: hf-cache\n      size: 100Gi\n    storageClass:\n      create: true\n      provisioner: ebs.csi.aws.com\n      parameters:\n        type: gp3\n        iops: \"3000\"\n        throughput: \"500\"\n",

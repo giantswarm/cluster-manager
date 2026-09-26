@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `<cluster>-agent-platform` slice release places its components per target (giantswarm/agent-platform#688): it sets `gitops.target.name` to the cluster and `gitops.targetNamespace` to `agent-platform` on a workload cluster (the org namespace on the installation's own cluster, where the platform's own release already runs in `agent-platform`), so two workload clusters of one organization no longer collide on the children's names. The teardown deletes the children as `<cluster>-<component>`, and the serving readiness, the teardown and the healing of stranded LLMInferenceServiceConfigs read the configs in the slice's namespace on the target. The slice's chart floor is agent-platform 4.85.0, the first that honours both values; below it the slice is refused, naming the upgrade.
 - One registration, pinned to the GitHub App, like giantswarm-repo-manager and giantswarm-platform-manager: with `github.enabled` the chart renders the one MCPServer pinned to `giantswarm-cluster-manager` with `auth.forwardIdentity` again, and the second registration `<name>-commit`, the commit path (`mcp.commitPath`, `--commit-path`) and `--commit-registration` are gone. Every tool waits for the person's one-time App consent (`muster auth login --server cluster-manager`); apply mode and the reads keep acting on Kubernetes as the person through the forwarded ID token, commit mode opens the pull request with the App user token.
 
 ### Fixed

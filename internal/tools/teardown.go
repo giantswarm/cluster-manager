@@ -48,11 +48,11 @@ import (
 // owner references. A serving object made by hand or through GitOps is
 // someone else's and is named, not touched.
 const (
-	// runtimeConfigsRelease is the slice's child HelmRelease of the
-	// well-known configs, named after its component in the meta chart.
+	// runtimeConfigsRelease is the component of the slice's child
+	// HelmRelease of the well-known configs (compose.SliceChildName).
 	runtimeConfigsRelease = "kserve-runtime-configs"
-	// llmisvcResourcesRelease is the slice's child HelmRelease of the llm-d
-	// controller and its webhook.
+	// llmisvcResourcesRelease is the component of the slice's child
+	// HelmRelease of the llm-d controller and its webhook.
 	llmisvcResourcesRelease = "kserve-llmisvc-resources"
 	// requestedAtAnnotation asks Flux to reconcile an object now, the way
 	// `flux reconcile` does.
@@ -231,7 +231,7 @@ func (td *teardown) deleteAll(plans []deletePlan) error {
 // servingTeardown removes the slice's serving objects that must go before
 // the slice release, in order: the llm-d controller's child release; the
 // served models model-manager composed in the serving namespace and the
-// LLMInferenceServiceConfigs of the release namespace on the target once no
+// LLMInferenceServiceConfigs of the slice's namespace on the target once no
 // controller runs there — waited for within the budget, removed with their
 // finalizer taken off; the configs' child release. A child release Flux
 // could not uninstall while the configs were still there is asked to retry
@@ -240,18 +240,18 @@ func (td *teardown) deleteAll(plans []deletePlan) error {
 func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 	ns, cluster := t.Namespace, t.Cluster
 	if t.Reader == nil && !force {
-		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether the LLMInferenceServiceConfigs of %s on %s are gone (%s): the serving slice is removed in order so none is left terminating — make the cluster readable as you and re-run, or pass force to remove the slice regardless", ns, cluster, t.Reason)}
+		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether the LLMInferenceServiceConfigs of %s on %s are gone (%s): the serving slice is removed in order so none is left terminating — make the cluster readable as you and re-run, or pass force to remove the slice regardless", t.SliceNamespace, cluster, t.Reason)}
 	}
 	slice := compose.SliceReleaseName(cluster)
-	if err := td.deleteChildRelease(ns, slice, llmisvcResourcesRelease); err != nil {
+	if err := td.deleteChildRelease(ns, slice, compose.SliceChildName(cluster, llmisvcResourcesRelease)); err != nil {
 		return err
 	}
 	if t.Reader == nil {
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("whether LLMInferenceServiceConfigs remain in %s on %s cannot be told (%s): one left terminating with %s uncleared breaks the next serving slice installed there — check the namespace, or heal it by re-running create_node_pool once the cluster is readable as you", ns, cluster, t.Reason, detect.LLMISVCConfigFinalizer))
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("whether LLMInferenceServiceConfigs remain in %s on %s cannot be told (%s): one left terminating with %s uncleared breaks the next serving slice installed there — check the namespace, or heal it by re-running create_node_pool once the cluster is readable as you", t.SliceNamespace, cluster, t.Reason, detect.LLMISVCConfigFinalizer))
 	} else if err := td.purgeWhenControllerGone(t, s.cfg.ServingNamespace); err != nil {
 		return err
 	}
-	return td.deleteChildRelease(ns, slice, runtimeConfigsRelease)
+	return td.deleteChildRelease(ns, slice, compose.SliceChildName(cluster, runtimeConfigsRelease))
 }
 
 // purgeWhenControllerGone removes, once no llm-d controller runs on the
@@ -267,7 +267,7 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 // A serving object someone else made (by hand, through GitOps) is named and
 // left: it is theirs to remove where it was created.
 func (td *teardown) purgeWhenControllerGone(t target, servingNamespace string) error {
-	configs, err := detect.Configs(td.ctx, t.Reader, t.Namespace)
+	configs, err := detect.Configs(td.ctx, t.Reader, t.SliceNamespace)
 	if err != nil {
 		return err
 	}
@@ -321,11 +321,11 @@ func (td *teardown) purgeWhenControllerGone(t target, servingNamespace string) e
 		names := strings.Join(detect.Names(configs), ", ")
 		switch {
 		case td.cut:
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are pending (%s): their release's uninstall and any delete are denied by the llmisvc webhook while the controller runs, and %s is cleared by nothing once it is gone — the re-run removes them with the finalizer taken off: %s", len(configs), t.Namespace, t.Cluster, reason, detect.LLMISVCConfigFinalizer, names))
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are pending (%s): their release's uninstall and any delete are denied by the llmisvc webhook while the controller runs, and %s is cleared by nothing once it is gone — the re-run removes them with the finalizer taken off: %s", len(configs), t.SliceNamespace, t.Cluster, reason, detect.LLMISVCConfigFinalizer, names))
 		case td.dryRun:
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s would be removed by cluster-manager with %s taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s would be removed by cluster-manager with %s taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): %s", len(configs), t.SliceNamespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
 		default:
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s removed by cluster-manager with %s taken off (the llmisvc controller's webhook denies every delete while it runs, and nothing clears the finalizer once it is gone): %s", len(configs), t.Namespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s removed by cluster-manager with %s taken off (the llmisvc controller's webhook denies every delete while it runs, and nothing clears the finalizer once it is gone): %s", len(configs), t.SliceNamespace, t.Cluster, detect.LLMISVCConfigFinalizer, names))
 		}
 	}
 	return nil
@@ -369,7 +369,7 @@ func healStrandedConfigs(ctx context.Context, t target, dryRun bool, out *WriteR
 	if t.Reader == nil {
 		return nil
 	}
-	configs, err := detect.Configs(ctx, t.Reader, t.Namespace)
+	configs, err := detect.Configs(ctx, t.Reader, t.SliceNamespace)
 	if err != nil {
 		return err
 	}
@@ -378,7 +378,7 @@ func healStrandedConfigs(ctx context.Context, t target, dryRun bool, out *WriteR
 		return nil
 	}
 	if detect.LLMISVCControllerRuns(ctx, t.Reader) {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are terminating while an llmisvc controller runs (%s): models still referencing them hold them — unload those models, or wait for the controller to clear them; a slice release installed over a terminating config adopts and loses it", len(stranded), t.Namespace, t.Cluster, strings.Join(detect.Names(stranded), ", ")))
+		out.Warnings = append(out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s are terminating while an llmisvc controller runs (%s): models still referencing them hold them — unload those models, or wait for the controller to clear them; a slice release installed over a terminating config adopts and loses it", len(stranded), t.SliceNamespace, t.Cluster, strings.Join(detect.Names(stranded), ", ")))
 		return nil
 	}
 	if !dryRun {
@@ -397,7 +397,7 @@ func healStrandedConfigs(ctx context.Context, t target, dryRun bool, out *WriteR
 		}
 		out.Objects = append(out.Objects, act)
 	}
-	out.Warnings = append(out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s %s by cluster-manager with %s taken off (left terminating by a serving layer that went, no llmisvc controller to clear the finalizer; removed so the slice's release creates them afresh): %s", len(stranded), t.Namespace, t.Cluster, verb, detect.LLMISVCConfigFinalizer, strings.Join(detect.Names(stranded), ", ")))
+	out.Warnings = append(out.Warnings, fmt.Sprintf("%d LLMInferenceServiceConfig(s) in %s on %s %s by cluster-manager with %s taken off (left terminating by a serving layer that went, no llmisvc controller to clear the finalizer; removed so the slice's release creates them afresh): %s", len(stranded), t.SliceNamespace, t.Cluster, verb, detect.LLMISVCConfigFinalizer, strings.Join(detect.Names(stranded), ", ")))
 	return nil
 }
 

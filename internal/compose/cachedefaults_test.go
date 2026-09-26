@@ -33,17 +33,17 @@ const connectivityCacheValues = `modelServing:
 func TestReadCacheDefaults(t *testing.T) {
 	ctx := context.Background()
 	charts := (&fakeCharts{}).
-		add(SliceChartURL, "4.44.1", map[string][]byte{"values.yaml": releasedWithChartValues("")}).
-		add(connectivityURL, "4.44.1", map[string][]byte{"values.yaml": []byte(connectivityCacheValues)}).
+		add(SliceChartURL, "4.85.0", map[string][]byte{"values.yaml": releasedWithChartValues("")}).
+		add(connectivityURL, "4.85.0", map[string][]byte{"values.yaml": []byte(connectivityCacheValues)}).
 		add(SliceChartURL, "4.50.0", map[string][]byte{"values.yaml": releasedWithChartValues("")}).
 		add(connectivityURL, "4.50.0", map[string][]byte{"values.yaml": []byte("modelServing:\n  cache:\n    pvc:\n      size: 200Gi\n    storageClass:\n      create: false\n      name: gp3\n")}).
 		add(SliceChartURL, "4.51.0", map[string][]byte{"values.yaml": releasedWithChartValues("")}).
 		add(connectivityURL, "4.51.0", map[string][]byte{"values.yaml": []byte("modelServing:\n  cache:\n    enabled: true\n")})
 
-	d, err := ReadCacheDefaults(ctx, charts, "4.44.1")
+	d, err := ReadCacheDefaults(ctx, charts, "4.85.0")
 	require.NoError(t, err)
-	assert.Equal(t, &CacheDefaults{MetaVersion: "4.44.1", Chart: "agent-platform-connectivity", Version: "4.44.1", Size: "100Gi", SizeGiB: 100, Tier: VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500}}, d)
-	assert.Equal(t, "the defaults of agent-platform-connectivity 4.44.1, the chart the slice's agent-platform 4.44.1 release resolves", d.Source())
+	assert.Equal(t, &CacheDefaults{MetaVersion: "4.85.0", Chart: "agent-platform-connectivity", Version: "4.85.0", Size: "100Gi", SizeGiB: 100, Tier: VolumeTier{Type: "gp3", IOPS: 3000, ThroughputMiBps: 500}}, d)
+	assert.Equal(t, "the defaults of agent-platform-connectivity 4.85.0, the chart the slice's agent-platform 4.85.0 release resolves", d.Source())
 
 	noClass, err := ReadCacheDefaults(ctx, charts, "4.50.0")
 	require.NoError(t, err)

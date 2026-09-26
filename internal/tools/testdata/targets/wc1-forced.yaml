@@ -83,13 +83,13 @@ apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-decode-worker-data-parallel
-  namespace: org-acme
+  namespace: agent-platform
   labels:
-    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/name: wc1-kserve-runtime-configs
     helm.toolkit.fluxcd.io/namespace: org-acme
   annotations:
     meta.helm.sh/release-name: kserve-runtime-configs
-    meta.helm.sh/release-namespace: org-acme
+    meta.helm.sh/release-namespace: agent-platform
   finalizers:
     - serving.kserve.io/llmisvcconfig-finalizer
 spec:
@@ -99,13 +99,13 @@ apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-scheduler
-  namespace: org-acme
+  namespace: agent-platform
   labels:
-    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/name: wc1-kserve-runtime-configs
     helm.toolkit.fluxcd.io/namespace: org-acme
   annotations:
     meta.helm.sh/release-name: kserve-runtime-configs
-    meta.helm.sh/release-namespace: org-acme
+    meta.helm.sh/release-namespace: agent-platform
   finalizers:
     - serving.kserve.io/llmisvcconfig-finalizer
 spec:
@@ -115,13 +115,13 @@ apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceServiceConfig
 metadata:
   name: kserve-config-llm-template
-  namespace: org-acme
+  namespace: agent-platform
   labels:
-    helm.toolkit.fluxcd.io/name: kserve-runtime-configs
+    helm.toolkit.fluxcd.io/name: wc1-kserve-runtime-configs
     helm.toolkit.fluxcd.io/namespace: org-acme
   annotations:
     meta.helm.sh/release-name: kserve-runtime-configs
-    meta.helm.sh/release-namespace: org-acme
+    meta.helm.sh/release-namespace: agent-platform
   finalizers:
     - serving.kserve.io/llmisvcconfig-finalizer
 spec:
@@ -147,7 +147,7 @@ spec:
       clientConfig:
         service:
           name: llmisvc-webhook-server-service
-          namespace: org-acme
+          namespace: agent-platform
           path: /convert
       conversionReviewVersions: [v1]
   versions:
@@ -177,7 +177,7 @@ spec:
       clientConfig:
         service:
           name: llmisvc-webhook-server-service
-          namespace: org-acme
+          namespace: agent-platform
           path: /convert
       conversionReviewVersions: [v1]
   versions:

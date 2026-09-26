@@ -81,6 +81,10 @@ func Unknown(reason string) Component { return Component{Status: StatusUnknown, 
 type Target struct {
 	Cluster   string
 	Namespace string
+	// SliceNamespace is where the serving slice's components land on the
+	// target (compose.SliceTargetNamespace): its configs and stranded
+	// objects are read there.
+	SliceNamespace string
 	// Installation reads the installation: the releases in `org-<org>`
 	// that target the cluster.
 	Installation dynamic.Interface
@@ -381,7 +385,7 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 		}
 	}
 	apis := servedAPIs(ctx, t.Reader)
-	stranded := strandedEvidence(ctx, t.Reader, t.Namespace)
+	stranded := strandedEvidence(ctx, t.Reader, t.SliceNamespace)
 	if len(found) == 0 {
 		c := Component{Status: StatusAbsent}
 		for _, api := range apis {
@@ -391,7 +395,7 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 		return c, r
 	}
 	if gvr, served, err := ConfigsGVR(ctx, t.Reader); err == nil && served {
-		r.Configs = count(ctx, t.Reader, gvr, t.Namespace, "")
+		r.Configs = count(ctx, t.Reader, gvr, t.SliceNamespace, "")
 	}
 	r.Presets = count(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingPreset+"=true")
 	r.ModelsGateway = modelsGateway(ctx, t.Reader)
