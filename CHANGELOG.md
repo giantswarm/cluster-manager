@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- One registration, pinned to the GitHub App, like giantswarm-repo-manager and giantswarm-platform-manager: with `github.enabled` the chart renders the one MCPServer pinned to `giantswarm-cluster-manager` with `auth.forwardIdentity` again, and the second registration `<name>-commit`, the commit path (`mcp.commitPath`, `--commit-path`) and `--commit-registration` are gone. Every tool waits for the person's one-time App consent (`muster auth login --server cluster-manager`); apply mode and the reads keep acting on Kubernetes as the person through the forwarded ID token, commit mode opens the pull request with the App user token.
+
 ### Fixed
 
 - A management cluster whose GitRepository uses GitHub's SSH endpoint on port 443 (`ssh://git@ssh.github.com:443/owner/name.git`) has a commit target: `list_clusters` named the own cluster's target `not a GitHub repository URL`, and commit mode could not open its pull request. gitops-commit v0.9.1 accepts the host `ssh.github.com`.
@@ -28,7 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Reads, dry runs and apply mode work without the GitHub App's consent (giantswarm/cluster-manager#120). With `github.enabled` the one MCPServer was pinned to the App, so muster connected it only after the person had authorized the App, and every tool answered `auth_required` until then. The chart now renders two registrations of the same server: the main MCPServer always forwards the IdP token (`forwardToken`) and serves every tool, refusing `mode: commit` with a message naming the commit registration and its login; with `github.enabled` the MCPServer `<name>-commit` points at the new commit path (`mcp.commitPath`, `--commit-path`, default `/commit/mcp`), pinned to the App as before, and serves `create_node_pool`, `delete_node_pool` and `get_info`. The server learns that registration's name from `--commit-registration`; `get_info` names it (`commitRegistration`).
 - A re-run of `create_node_pool` no longer drops helm-controller's finalizer, and `delete_node_pool` no longer orphans a pool (giantswarm/cluster-manager#107). An update now keeps what other writers own on the live object: its finalizers and every label and annotation cluster-manager does not compose. A label only another writer set is no longer counted as drift. `spec.uninstall.deletionPropagation`, which the API server defaults, joined the drift check's defaults, so a re-run with the same arguments answers `unchanged`. `delete_node_pool` refuses a pool release that carries no `finalizers.fluxcd.io` and names the reconcile, since deleting it would skip the uninstall and leave the MachinePool and the Karpenter NodePool.
 
 ### Removed
