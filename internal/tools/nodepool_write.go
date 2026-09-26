@@ -22,7 +22,6 @@ import (
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
-	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
 // Resources the write tools read besides the read tools'.
@@ -309,7 +308,7 @@ func (a ObjectAction) String() string {
 // the log at debug.
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(ctx, in.Mode, true); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -405,7 +404,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if in.Mode == ModeCommit {
 		releases := append(append(objs, sliceObjs...), operatorObjs...)
 		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start); err != nil {
-			return nil, s.commitError(err)
+			return nil, err
 		}
 		logApplied(ctx, "create_node_pool", out, start)
 		return out, nil
@@ -673,7 +672,7 @@ func backendTargetName(t compose.BackendTarget) string {
 // giantswarm/cluster-manager#34's pattern.
 func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(ctx, in.Mode, true); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -720,7 +719,7 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			}
 		}
 		if err := s.commitDelete(ctx, dyn, c, in, targets, backend, last, out, start); err != nil {
-			return nil, s.commitError(err)
+			return nil, err
 		}
 		logApplied(ctx, "delete_node_pool", out, start)
 		return out, nil
@@ -897,11 +896,8 @@ func backendRegisteredFor(ctx context.Context, dyn dynamic.Interface, ns, cluste
 
 // checkMode refuses a mode the tool or this server does not offer. Commit
 // mode needs the App-pinned registration (the GitHub token it opens the pull
-// request with) and exists for the node-pool writes: a call through the main
-// registration, which carries no GitHub authorization, is refused naming the
-// commit registration.
-func (s *Service) checkMode(ctx context.Context, mode string, commits bool) error {
-	_, withGitHub := identity.GitHubFromContext(ctx)
+// request with) and exists for the node-pool writes.
+func (s *Service) checkMode(mode string, commits bool) error {
 	switch {
 	case mode == ModeApply:
 		return nil
@@ -909,8 +905,6 @@ func (s *Service) checkMode(ctx context.Context, mode string, commits bool) erro
 		return &ErrRefused{Reason: "mode commit covers create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
 	case mode == ModeCommit && !s.CommitAvailable():
 		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply"}
-	case mode == ModeCommit && !withGitHub:
-		return s.refuseWithoutGitHub()
 	case mode == ModeCommit:
 		return nil
 	default:
