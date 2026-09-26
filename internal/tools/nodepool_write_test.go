@@ -1103,6 +1103,17 @@ func TestCreateNodePoolWithoutCache(t *testing.T) {
 	assertRefused(t, err, "cache false: serving on wc2 is provided by the platform's own release")
 }
 
+// TestCreateNodePoolCacheOmittedOnProvidedServing (giantswarm/cluster-manager#116):
+// cache left out on a cluster whose serving the platform's release provides
+// is not read as cache false; the serving layer's setting stands.
+func TestCreateNodePoolCacheOmittedOnProvidedServing(t *testing.T) {
+	svc := newLab(t, "installation.yaml").service(Config{Installation: "gazelle"})
+	in := l4("wc2", "gpu-l4b", true)
+	in.Cache = nil
+	_, err := svc.CreateNodePool(context.Background(), in)
+	require.NoError(t, err)
+}
+
 // TestCreateNodePoolCacheClaimWithoutAZone (giantswarm/cluster-manager#59): a
 // claim that is not Bound, or whose volume names no zone, pins nothing and
 // the answer says what was found; a volume that cannot be read as the
