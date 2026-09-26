@@ -166,7 +166,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.44.1"
+          "tag": "4.85.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -283,8 +283,10 @@
                 "secretRef": {
                   "name": "gazelle-kubeconfig"
                 }
-              }
-            }
+              },
+              "name": "gazelle"
+            },
+            "targetNamespace": "org-giantswarm"
           },
           "global": {
             "domain": "gazelle.example.io",
@@ -511,7 +513,7 @@
   "slice": {
     "name": "gazelle-agent-platform",
     "namespace": "org-giantswarm",
-    "chartVersion": "4.44.1",
+    "chartVersion": "4.85.0",
     "domain": "gazelle.example.io",
     "modelsHost": "models.gazelle.example.io",
     "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"

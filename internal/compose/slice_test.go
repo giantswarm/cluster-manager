@@ -11,7 +11,7 @@ import (
 func platform() PlatformInputs {
 	return PlatformInputs{
 		Release:       "flux-giantswarm/agent-platform",
-		ChartVersion:  "4.44.1",
+		ChartVersion:  "4.85.0",
 		Domain:        "gazelle.example.io",
 		Identity:      map[string]any{"issuerUrl": "https://dex.gazelle.example.io", "clientId": "dex-k8s-authenticator", "existingSecret": "agent-platform-identity"},
 		TLSSecretName: "gazelle-wildcard-tls",
@@ -285,12 +285,12 @@ func TestSliceChartVersion(t *testing.T) {
 		want    string
 		refusal string
 	}{
-		{"platform's version", SliceSpec{Platform: platform()}, "4.44.1", ""},
-		{"digest as build metadata dropped", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.45.0+1c7eb3256e07"}}, "4.45.0", ""},
-		{"below the floor with build metadata", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.43.2+c78155660389"}}, "", "runs agent-platform chart 4.43.2, below 4.44.0"},
+		{"platform's version", SliceSpec{Platform: platform()}, "4.85.0", ""},
+		{"digest as build metadata dropped", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.86.0+1c7eb3256e07"}}, "4.86.0", ""},
+		{"below the floor with build metadata", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.84.2+c78155660389"}}, "", "runs agent-platform chart 4.84.2, below 4.85.0"},
 		{"exactly the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinSliceChartVersion}}, MinSliceChartVersion, ""},
-		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.43.2"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.43.2, below 4.44.0, the first whose serving slice is the llm-d control plane alone (the classic KServe controller and its components kserve-crd and kserve-resources removed, giantswarm/agent-platform#574): upgrade the platform to 4.44.0 or newer and re-run"},
-		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.44.0-rc.1"}}, "", "runs agent-platform chart 4.44.0-rc.1, below 4.44.0"},
+		{"below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.84.2"}}, "", "flux-giantswarm/agent-platform runs agent-platform chart 4.84.2, below 4.85.0, the first that names a targeted release's children per target and installs them into their own namespace (giantswarm/agent-platform#688): upgrade the platform to 4.85.0 or newer and re-run"},
+		{"prerelease below the floor", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.85.0-rc.1"}}, "", "runs agent-platform chart 4.85.0-rc.1, below 4.85.0"},
 		{"not deployed yet", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform"}}, "", "flux-giantswarm/agent-platform has not deployed a chart yet (no status.history)"},
 		{"not a semver", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "latest"}}, "", `runs agent-platform chart "latest", not a semantic version`},
 		{"override wins", SliceSpec{ChartVersion: "0.0.0-lab", Platform: PlatformInputs{ChartVersion: "4.25.0"}}, "0.0.0-lab", ""},

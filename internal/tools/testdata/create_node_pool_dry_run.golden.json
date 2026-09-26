@@ -227,7 +227,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.44.1"
+          "tag": "4.85.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
@@ -338,8 +338,10 @@
                 "secretRef": {
                   "name": "wc1-kubeconfig"
                 }
-              }
-            }
+              },
+              "name": "wc1"
+            },
+            "targetNamespace": "agent-platform"
           },
           "global": {
             "domain": "wc1.acme.example.io",
@@ -570,7 +572,7 @@
   "slice": {
     "name": "wc1-agent-platform",
     "namespace": "org-acme",
-    "chartVersion": "4.44.1",
+    "chartVersion": "4.85.0",
     "domain": "wc1.acme.example.io",
     "modelsHost": "models.wc1.acme.example.io",
     "jwks": "https://dex.gazelle.example.io/keys",

@@ -24,7 +24,7 @@ import (
 // components failed on an installation (giantswarm/cluster-manager#78). Move
 // it when a platform release adds a render guard the slice must satisfy;
 // SLICE_RENDER_CHART_VERSION overrides it for one run.
-const RenderOracleChartVersion = "4.44.1"
+const RenderOracleChartVersion = "4.85.0"
 
 // TestSliceRendersThroughChart is the render oracle
 // (giantswarm/cluster-manager#30): the composed slice values go through the
@@ -71,8 +71,8 @@ func TestSliceRendersThroughChart(t *testing.T) {
 			values, err := SliceValues(tc.cluster, tc.spec)
 			require.NoError(t, err)
 			rendered := objects(t, h.template(t, meta, values))
-			child := find(t, rendered, "HelmRelease", "agent-platform-connectivity")
-			source := find(t, rendered, "OCIRepository", "agent-platform-connectivity")
+			child := find(t, rendered, "HelmRelease", SliceChildName(tc.cluster.Name, "agent-platform-connectivity"))
+			source := find(t, rendered, "OCIRepository", SliceChildName(tc.cluster.Name, "agent-platform-connectivity"))
 			childURL, _, _ := unstructured.NestedString(source.Object, "spec", "url")
 			childVersion, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "semver")
 			require.NotEmpty(t, childURL, "the meta chart names the connectivity chart")

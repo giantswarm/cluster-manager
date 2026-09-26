@@ -41,11 +41,12 @@ type target struct {
 // target resolves a Cluster to its detection target and backend target.
 func (s *Service) target(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) target {
 	t := target{
-		Target:  detect.Target{Cluster: c.GetName(), Namespace: c.GetNamespace(), Installation: dyn},
+		Target:  detect.Target{Cluster: c.GetName(), Namespace: c.GetNamespace(), SliceNamespace: compose.SliceWorkloadNamespace, Installation: dyn},
 		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace, DiscoveryNamespace: c.GetNamespace()},
 	}
 	if s.ownCluster(c) {
 		t.Reader = dyn
+		t.SliceNamespace = c.GetNamespace()
 		t.backend.OwnCluster = true
 		return t
 	}

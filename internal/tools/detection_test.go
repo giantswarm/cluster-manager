@@ -158,8 +158,8 @@ func TestDetectServing(t *testing.T) {
 			_, err := l.installation.Resource(HelmReleaseGVR).Namespace(u.GetNamespace()).Create(context.Background(), u, metav1.CreateOptions{})
 			require.NoError(t, err)
 		}
-		failed := `HelmRelease org-acme/agent-platform-connectivity not Ready (Ready=False [InstallFailed] Helm install failed for release org-acme/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14): modelServing.modelsGateway.jwtAuthentication.enabled is true with an in-cluster jwks.host ("dex.giantswarm.svc.cluster.local") but gateway.jwksEgress.enabled is false.)`
-		pending := "HelmRelease org-acme/kserve-llmisvc-resources not Ready (no Ready condition yet)"
+		failed := `HelmRelease org-acme/wc1-agent-platform-connectivity not Ready (Ready=False [InstallFailed] Helm install failed for release agent-platform/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14): modelServing.modelsGateway.jwtAuthentication.enabled is true with an in-cluster jwks.host ("dex.giantswarm.svc.cluster.local") but gateway.jwksEgress.enabled is false.)`
+		pending := "HelmRelease org-acme/wc1-kserve-llmisvc-resources not Ready (no Ready condition yet)"
 		for name, target := range map[string]func(){
 			"cluster readable":   func() { l.target(t, wc1APIServer, "chart-kserve.yaml") },
 			"cluster unreadable": func() { l.unreachable(wc1APIServer) },
@@ -184,12 +184,12 @@ func TestDetectServing(t *testing.T) {
 					children[c.Name] = c
 				}
 				assert.NotContains(t, children, "wc2-agent-platform-connectivity")
-				require.Contains(t, children, "agent-platform-connectivity")
-				assert.False(t, *children["agent-platform-connectivity"].Ready)
-				assert.Equal(t, "InstallFailed", children["agent-platform-connectivity"].Reason)
-				assert.Contains(t, children["agent-platform-connectivity"].Message, "gateway.jwksEgress.enabled is false")
-				require.Contains(t, children, "kserve-llmisvc-resources")
-				assert.Nil(t, children["kserve-llmisvc-resources"].Ready, "no Ready condition yet")
+				require.Contains(t, children, "wc1-agent-platform-connectivity")
+				assert.False(t, *children["wc1-agent-platform-connectivity"].Ready)
+				assert.Equal(t, "InstallFailed", children["wc1-agent-platform-connectivity"].Reason)
+				assert.Contains(t, children["wc1-agent-platform-connectivity"].Message, "gateway.jwksEgress.enabled is false")
+				require.Contains(t, children, "wc1-kserve-llmisvc-resources")
+				assert.Nil(t, children["wc1-kserve-llmisvc-resources"].Ready, "no Ready condition yet")
 			})
 		}
 	})
@@ -221,7 +221,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	slice := out.Manifests[4]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
 	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
-	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.44.1", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys", Certificate: &detect.Issuance{Issuer: compose.DefaultCertificateIssuer, Solver: detect.SolverDNS01, Zone: "acme.example.io."}}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
+	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.85.0", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys", Certificate: &detect.Issuance{Issuer: compose.DefaultCertificateIssuer, Solver: detect.SolverDNS01, Zone: "acme.example.io."}}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
 	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
 

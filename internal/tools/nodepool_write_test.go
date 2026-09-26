@@ -490,8 +490,8 @@ func TestCreateNodePoolSizesAndPresetFit(t *testing.T) {
 // TestCreateNodePoolPresetFitFromChart (giantswarm/cluster-manager#44): wc1
 // publishes no preset and the call would compose the slice, so the presets
 // that slice would publish are judged — read from the connectivity chart the
-// slice's agent-platform release (4.44.1, the fixture's platform) resolves
-// for its range, 4.45.0 in the fake registry, not the meta chart's own
+// slice's agent-platform release (4.85.0, the fixture's platform) resolves
+// for its range, 4.86.0 in the fake registry, not the meta chart's own
 // version. The 8B preset fits an xlarge; the 14B none (no warning: no L4
 // serves it); the wide recipe only a 2xlarge — a warning on an xlarge-only
 // pool. wc2's published ConfigMaps keep precedence over the chart, and a
@@ -505,7 +505,7 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.PresetFit)
 	assert.Equal(t, PresetOriginChart, out.PresetFit.Origin)
-	assert.Equal(t, `3 preset(s) shipped by agent-platform-connectivity 4.45.0, the chart the slice's agent-platform 4.44.1 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, out.PresetFit.Source)
+	assert.Equal(t, `3 preset(s) shipped by agent-platform-connectivity 4.86.0, the chart the slice's agent-platform 4.85.0 release resolves for ">=4.0.0 <5.0.0" at gsoci.azurecr.io — the slice publishes them once it is ready`, out.PresetFit.Source)
 	assert.Empty(t, out.PresetFit.Note)
 	require.Len(t, out.PresetFit.Presets, 3)
 	assert.Equal(t, PresetSizeFit{Preset: "qwen3-14b", DisplayName: "Qwen3 14B", Model: "Qwen/Qwen3-14B", CPU: "4", Memory: "48Gi", GPUs: 1, GPUMemoryGiB: 58,
@@ -545,7 +545,7 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	unreadable := lab.service(Config{Installation: "gazelle"}, WithChartReader(&fakeCharts{}))
 	out, err = unreadable.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
-	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.44.1: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
+	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.85.0: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
 	assert.Empty(t, out.PresetFit.Presets)
 	assert.Empty(t, out.PresetFit.Origin)
 }

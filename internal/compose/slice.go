@@ -20,17 +20,21 @@ const (
 	// SliceChartURL is the catalog location of the agent-platform chart.
 	SliceChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
 	// MinSliceChartVersion is the floor of the slice release's pin: the
-	// first chart whose serving slice is the llm-d control plane alone — the
-	// classic KServe controller removed, its components kserve-crd and
-	// kserve-resources refused at the render, and the control plane's shared
-	// objects rendered by kserve-llmisvc-resources itself
-	// (giantswarm/agent-platform#574); a slice without the classic components
-	// on an older chart would leave the llm-d controller without its shared
-	// config. The pin itself is the version the installation's own platform
+	// first chart that names a targeted release's children per target
+	// (gitops.target.name) and installs them into gitops.targetNamespace
+	// (giantswarm/agent-platform#688), so two slices in one organization
+	// namespace do not collide; an older chart ignores both values and
+	// renders the bare component names teardown no longer looks for. The pin
+	// itself is the version the installation's own platform
 	// release runs (SliceChartVersion): released by construction and known to
 	// work on the installation. A release below the floor is refused, naming
 	// why.
-	MinSliceChartVersion = "4.44.0"
+	MinSliceChartVersion = "4.85.0"
+	// SliceWorkloadNamespace is where a workload cluster's slice components
+	// land on the cluster: a namespace of the platform's own, never the org
+	// namespace the release lives in on the installation
+	// (giantswarm/agent-platform#688).
+	SliceWorkloadNamespace = "agent-platform"
 	// SliceReleaseSuffix names the release after the cluster and the chart.
 	SliceReleaseSuffix = "-" + SliceChart
 	// LabelMachinePool is the node label the gpu-node-pool chart stamps on a
@@ -292,9 +296,28 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 	}
 	tag, _, _ := strings.Cut(s.Platform.ChartVersion, "+")
 	if running.LessThan(version.MustParseSemantic(MinSliceChartVersion)) {
-		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first whose serving slice is the llm-d control plane alone (the classic KServe controller and its components kserve-crd and kserve-resources removed, giantswarm/agent-platform#574): upgrade the platform to %s or newer and re-run", release, SliceChart, tag, MinSliceChartVersion, MinSliceChartVersion)
+		return "", fmt.Errorf("%s runs %s chart %s, below %s, the first that names a targeted release's children per target and installs them into their own namespace (giantswarm/agent-platform#688): upgrade the platform to %s or newer and re-run", release, SliceChart, tag, MinSliceChartVersion, MinSliceChartVersion)
 	}
 	return tag, nil
+}
+
+// SliceTargetNamespace is the namespace the slice's components install into
+// on the cluster: SliceWorkloadNamespace on a workload cluster; on the own
+// cluster the org namespace of the release, since the platform's own release
+// already runs its components — its connectivity release among them, under
+// the same release name — in SliceWorkloadNamespace there.
+func SliceTargetNamespace(c Cluster, own bool) string {
+	if own {
+		return c.Namespace
+	}
+	return SliceWorkloadNamespace
+}
+
+// SliceChildName is the name of the slice release's child HelmRelease of a
+// component on the installation: `<cluster>-<component>`, the meta chart's
+// gitops.target.name prefix (giantswarm/agent-platform#688).
+func SliceChildName(cluster, component string) string {
+	return cluster + "-" + component
 }
 
 // Slice renders the `<cluster>-agent-platform` release: an OCIRepository
@@ -382,6 +405,8 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(identity, "global", "identity"),
 		set(!s.OwnCluster, "components", "agentgateway", valueEnabled),
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
+		set(c.Name, "gitops", "target", "name"),
+		set(SliceTargetNamespace(c, s.OwnCluster), "gitops", "targetNamespace"),
 	}
 	if jwks.InCluster() {
 		steps = append(steps,

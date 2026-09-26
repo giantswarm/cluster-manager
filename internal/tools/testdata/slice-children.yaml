@@ -1,5 +1,6 @@
 # The children of wc1's slice release on the installation, as the meta chart
-# renders them into the slice's namespace and Flux labels them
+# renders them into the slice's namespace, named `<cluster>-<component>`,
+# and Flux labels them
 # (helm.toolkit.fluxcd.io/name and /namespace name the slice release): the
 # connectivity child failed its render, the kserve-runtime-configs child is Ready,
 # the llmisvc one has no Ready condition yet. The last release carries another
@@ -7,7 +8,7 @@
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: agent-platform-connectivity
+  name: wc1-agent-platform-connectivity
   namespace: org-acme
   labels:
     helm.toolkit.fluxcd.io/name: wc1-agent-platform
@@ -15,20 +16,20 @@ metadata:
 spec:
   chartRef:
     kind: OCIRepository
-    name: agent-platform-connectivity
+    name: wc1-agent-platform-connectivity
 status:
   conditions:
     - type: Ready
       status: "False"
       reason: InstallFailed
       message: |-
-        Helm install failed for release org-acme/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14):
+        Helm install failed for release agent-platform/agent-platform-connectivity with chart agent-platform-connectivity@4.28.10: execution error at (agent-platform-connectivity/templates/model-serving/validate.yaml:46:14):
         modelServing.modelsGateway.jwtAuthentication.enabled is true with an in-cluster jwks.host ("dex.giantswarm.svc.cluster.local") but gateway.jwksEgress.enabled is false.
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: kserve-runtime-configs
+  name: wc1-kserve-runtime-configs
   namespace: org-acme
   labels:
     helm.toolkit.fluxcd.io/name: wc1-agent-platform
@@ -36,7 +37,7 @@ metadata:
 spec:
   chartRef:
     kind: OCIRepository
-    name: kserve-runtime-configs
+    name: wc1-kserve-runtime-configs
 status:
   conditions:
     - type: Ready
@@ -46,7 +47,7 @@ status:
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: kserve-llmisvc-resources
+  name: wc1-kserve-llmisvc-resources
   namespace: org-acme
   labels:
     helm.toolkit.fluxcd.io/name: wc1-agent-platform
@@ -54,7 +55,7 @@ metadata:
 spec:
   chartRef:
     kind: OCIRepository
-    name: kserve-llmisvc-resources
+    name: wc1-kserve-llmisvc-resources
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
