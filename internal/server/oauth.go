@@ -79,9 +79,9 @@ type OAuthConfig struct {
 	// audience). The ServiceAccount holds no permissions then, so a request
 	// that yields no IdP token to present is refused (401).
 	DownstreamOAuth bool
-	// GitHub, when set, pins the registration to the App: the bearer is the
-	// person's App user token and the IdP ID token arrives in
-	// ForwardedIdentityHeader (GitHubPin).
+	// GitHub, when set, serves the commit MCP path for the registration
+	// pinned to the App: the bearer there is the person's App user token and
+	// the IdP ID token arrives in ForwardedIdentityHeader (GitHubPin).
 	GitHub *GitHubPin
 }
 
@@ -231,15 +231,17 @@ func (o *oauthRuntime) register(mux *http.ServeMux) {
 
 // protect requires a valid bearer token (mcp-oauth ValidateToken: this
 // server's own access tokens, or a forwarded IdP id_token whose audience is
-// trusted) and then attaches the caller to the request. Pinned to the App,
-// the GitHub bearer is verified first and the forwarded ID token is what
-// mcp-oauth validates.
+// trusted) and then attaches the caller to the request: the main MCP path,
+// the registration that forwards the IdP token, with or without the pin.
 func (o *oauthRuntime) protect(next http.Handler) http.Handler {
-	h := o.handler.ValidateToken(o.attachIdentity(next))
-	if o.github != nil {
-		return o.github.protect(h)
-	}
-	return h
+	return o.handler.ValidateToken(o.attachIdentity(next))
+}
+
+// protectCommit is protect behind the GitHub guard: the commit MCP path, the
+// App-pinned registration. The GitHub bearer is verified first and the
+// forwarded ID token is what mcp-oauth validates.
+func (o *oauthRuntime) protectCommit(next http.Handler) http.Handler {
+	return o.github.protect(o.protect(next))
 }
 
 // attachIdentity translates the validated mcp-oauth user into the request's

@@ -144,6 +144,9 @@ type Service struct {
 	// remote builds the caller's GitHub remote for commit mode (nil: commit
 	// mode is not offered — the server is not pinned to its GitHub App).
 	remote RemoteFor
+	// commitRegistration is the muster registration commit mode is called
+	// through: the App-pinned MCPServer whose calls carry the GitHub token.
+	commitRegistration string
 }
 
 // Option configures a Service beyond its Config.

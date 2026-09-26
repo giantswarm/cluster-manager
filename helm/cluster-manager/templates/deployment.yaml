@@ -78,6 +78,8 @@ spec:
             {{- if .Values.github.enabled }}
             - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}
             - --github-api-url={{ .Values.github.apiURL }}
+            - --commit-path={{ .Values.mcp.commitPath }}
+            - --commit-registration={{ include "cluster-manager.commitRegistration" . }}
             {{- end }}
             {{- if eq .Values.oauth.provider "dex" }}
             - --dex-issuer-url={{ include "cluster-manager.oauthDexIssuerURL" . }}

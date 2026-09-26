@@ -15,19 +15,23 @@ import (
 	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
-// GitHubPin makes the MCP endpoint the App-pinned registration muster
-// connects with (MCPServer auth.authorizationServer pinned to the App
-// giantswarm-cluster-manager, auth.forwardIdentity: true): the bearer is the
-// person's user token of the App, verified with GET /user and kept for commit
-// mode's pull request, and the person's IdP ID token arrives in
-// ForwardedIdentityHeader. That token then goes through the same validation
-// and the same Kubernetes-as-the-caller path a forwarded bearer takes without
-// the pin, so apply mode is unchanged.
+// GitHubPin makes the commit MCP path the endpoint of the App-pinned
+// registration muster connects with (MCPServer auth.authorizationServer
+// pinned to the App giantswarm-cluster-manager, auth.forwardIdentity: true):
+// the bearer is the person's user token of the App, verified with GET /user
+// and kept for commit mode's pull request, and the person's IdP ID token
+// arrives in ForwardedIdentityHeader. That token then goes through the same
+// validation and the same Kubernetes-as-the-caller path a forwarded bearer
+// takes on the main path. The main path stays the registration that forwards
+// the IdP token: nothing but commit mode waits for the App's consent.
 type GitHubPin struct {
 	// AuthorizationServer is the App's issuer identity muster pins,
 	// https://github.com/apps/giantswarm-cluster-manager: named in the
 	// refusals.
 	AuthorizationServer string
+	// Registration is the pinned muster MCPServer's name, the one
+	// core_auth_login connects: named in the refusals.
+	Registration string
 	// APIURL is the API base URL GET /user goes to (empty: api.github.com).
 	APIURL string
 	// CacheTTL bounds how long a verified bearer is trusted without asking
@@ -52,6 +56,9 @@ const gitHubCacheMax = 10_000
 
 // Validate checks required fields.
 func (p GitHubPin) Validate() error {
+	if p.Registration == "" {
+		return fmt.Errorf("github pin: the commit registration's name is required")
+	}
 	for what, raw := range map[string]string{"authorization server": p.AuthorizationServer, "API URL": p.apiURL()} {
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
@@ -91,13 +98,13 @@ func newGitHubGuard(pin GitHubPin, log *slog.Logger) (*gitHubGuard, error) {
 	if pin.CacheTTL <= 0 {
 		pin.CacheTTL = DefaultGitHubCacheTTL
 	}
-	log.Info("GitHub App pin enabled", "authorizationServer", pin.AuthorizationServer, "api", pin.apiURL(), "cacheTTL", pin.CacheTTL)
+	log.Info("GitHub App pin enabled", "registration", pin.Registration, "authorizationServer", pin.AuthorizationServer, "api", pin.apiURL(), "cacheTTL", pin.CacheTTL)
 	return &gitHubGuard{pin: pin, http: &http.Client{Timeout: 10 * time.Second}, log: log, cache: map[[sha256.Size]byte]gitHubEntry{}}, nil
 }
 
 // signIn is the one way to a bearer this registration accepts.
 func (g *gitHubGuard) signIn() string {
-	return "connect cluster-manager in muster (core_auth_login server=cluster-manager, the consent of " + g.pin.AuthorizationServer + "), then call again"
+	return "connect " + g.pin.Registration + " in muster (core_auth_login server=" + g.pin.Registration + ", the consent of " + g.pin.AuthorizationServer + "), then call again"
 }
 
 // protect admits a request whose bearer GitHub accepts and that carries the

@@ -71,7 +71,7 @@ type SliceRelease struct {
 // (giantswarm/cluster-manager#28).
 func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(in.Mode, false); err != nil {
+	if err := s.checkMode(ctx, in.Mode, false); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -159,7 +159,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 // continues where the teardown stands (giantswarm/cluster-manager#28, #37).
 func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(in.Mode, false); err != nil {
+	if err := s.checkMode(ctx, in.Mode, false); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)

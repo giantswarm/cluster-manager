@@ -52,7 +52,7 @@ func sopsAge(t *testing.T) []byte {
 }
 
 func withFake(fake *commit.Fake) Option {
-	return WithGitHub(func(string) (GitHubRemote, error) { return fake, nil })
+	return WithGitHub("cluster-manager-commit", func(string) (GitHubRemote, error) { return fake, nil })
 }
 
 func asPerson(ctx context.Context) context.Context {
@@ -175,9 +175,16 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 	_, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(ctx, commitMode(l4("wc1", "gpu-l4", false)))
 	assertRefused(t, err, "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply")
 
+	// The main registration forwards the IdP token alone: commit mode there
+	// names the commit registration, for either tool, dry run or not.
 	svc := l.service(Config{Installation: "gazelle"}, withFake(fake))
-	_, err = svc.CreateNodePool(context.Background(), commitMode(l4("wc1", "gpu-l4", false)))
-	assertRefused(t, err, "commit mode opens the pull request with your GitHub authorization, and this call carries none: connect cluster-manager in muster (core_auth_login server=cluster-manager), then call again")
+	const viaCommit = "mode commit opens the pull request with your GitHub authorization, which only the commit registration cluster-manager-commit carries, and this call came without it: connect cluster-manager-commit in muster (core_auth_login server=cluster-manager-commit, your consent to the server's GitHub App) and call the tool through it (x_cluster-manager-commit_<tool>)"
+	dry := commitMode(l4("wc1", "gpu-l4", false))
+	dry.DryRun = true
+	_, err = svc.CreateNodePool(context.Background(), dry)
+	assertRefused(t, err, viaCommit)
+	_, err = svc.DeleteNodePool(context.Background(), DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-l4", Mode: ModeCommit})
+	assertRefused(t, err, viaCommit)
 
 	_, err = svc.CreateNodePool(ctx, commitMode(l4("wc1", "gpu-l4", false)))
 	require.Error(t, err)

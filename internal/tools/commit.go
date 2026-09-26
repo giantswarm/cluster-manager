@@ -68,13 +68,25 @@ type GitHubRemote interface {
 type RemoteFor func(token string) (GitHubRemote, error)
 
 // WithGitHub offers commit mode: the pull request is opened as the person
-// with the GitHub token the App-pinned registration carries.
-func WithGitHub(remote RemoteFor) Option {
-	return func(s *Service) { s.remote = remote }
+// with the GitHub token the App-pinned registration carries — registration,
+// the muster MCPServer calls in commit mode go through; the server's main
+// registration forwards the IdP token alone and carries none.
+func WithGitHub(registration string, remote RemoteFor) Option {
+	return func(s *Service) { s.remote, s.commitRegistration = remote, registration }
 }
 
 // CommitAvailable reports whether this server offers commit mode.
 func (s *Service) CommitAvailable() bool { return s.remote != nil }
+
+// CommitRegistration is the muster registration commit mode is offered
+// through, empty when it is not offered.
+func (s *Service) CommitRegistration() string { return s.commitRegistration }
+
+// commitLogin is the way to a call that carries the person's GitHub
+// authorization: through the commit registration, after the App's consent.
+func (s *Service) commitLogin() string {
+	return fmt.Sprintf("connect %[1]s in muster (core_auth_login server=%[1]s, your consent to the server's GitHub App) and call the tool through it (x_%[1]s_<tool>)", s.commitRegistration)
+}
 
 // CommitResult is the pull request a write in commit mode opened — or, dry
 // run, would open — in the repository that owns the cluster.
@@ -196,20 +208,27 @@ func commitLocationFor(ctx context.Context, dyn dynamic.Interface, c *unstructur
 func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
 	gh, ok := identity.GitHubFromContext(ctx)
 	if !ok {
-		return nil, nil, &ErrRefused{Reason: "commit mode opens the pull request with your GitHub authorization, and this call carries none: connect cluster-manager in muster (core_auth_login server=cluster-manager), then call again"}
+		return nil, nil, s.refuseWithoutGitHub()
 	}
 	remote, err := s.remote(gh.Token)
 	if err != nil {
-		return nil, nil, commitError(err)
+		return nil, nil, err
 	}
 	return remote, gh, nil
 }
 
-// commitError answers a token GitHub refused with the consent to renew.
-func commitError(err error) error {
+// refuseWithoutGitHub is the refusal of commit mode on a call that carries
+// no GitHub authorization: one through the main registration.
+func (s *Service) refuseWithoutGitHub() error {
+	return &ErrRefused{Reason: "mode commit opens the pull request with your GitHub authorization, which only the commit registration " + s.commitRegistration + " carries, and this call came without it: " + s.commitLogin()}
+}
+
+// commitError answers a token GitHub refused, anywhere in a commit-mode
+// call, with the consent to renew.
+func (s *Service) commitError(err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
-		return &ErrRefused{Reason: fmt.Sprintf("GitHub refused your token on %s (status %d): reconnect cluster-manager in muster (core_auth_login server=cluster-manager) — the App must be installed on the repository and your account must be allowed to push to it", auth.Op, auth.Status)}
+		return &ErrRefused{Reason: fmt.Sprintf("GitHub refused your token on %s (status %d): reconnect %s in muster (core_auth_login server=%s) — the App must be installed on the repository and your account must be allowed to push to it", auth.Op, auth.Status, s.commitRegistration, s.commitRegistration)}
 	}
 	return err
 }
@@ -264,7 +283,7 @@ func readBase(ctx context.Context, remote GitHubRemote, loc commitLocation, p st
 		return nil, nil
 	}
 	if err != nil {
-		return nil, commitError(err)
+		return nil, err
 	}
 	return raw, nil
 }
@@ -458,7 +477,7 @@ func (p *commitPlan) open(ctx context.Context, gh *identity.GitHub, branch, titl
 	}
 	prs, err := commit.Open(ctx, p.remote, commit.Request{Branch: branch, Title: title, Body: body}, []commit.Change{{Location: p.loc.Location, Files: p.files}})
 	if err != nil {
-		return nil, commitError(err)
+		return nil, err
 	}
 	out.PullRequest, out.Number = prs[0].URL, prs[0].Number
 	return out, nil

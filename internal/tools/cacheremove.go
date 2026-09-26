@@ -54,7 +54,7 @@ type claimHold struct {
 // caller, within the call's budget (the pending rest on the re-run).
 func (s *Service) RemoveModelCache(ctx context.Context, in RemoveModelCacheInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(in.Mode, false); err != nil {
+	if err := s.checkMode(ctx, in.Mode, false); err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
