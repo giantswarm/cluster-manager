@@ -65,6 +65,15 @@ ServiceAccount name.
 {{- end }}
 
 {{/*
+The commit registration: the MCPServer pinned to the GitHub App, next to the
+main one (github.enabled). Named after the main registration, so its tools
+appear as x_<name>-commit_<tool>.
+*/}}
+{{- define "cluster-manager.commitRegistration" -}}
+{{- printf "%s-commit" .Values.muster.mcpServer.name }}
+{{- end }}
+
+{{/*
 The platform identity contract (global.identity), an empty dict when absent.
 */}}
 {{- define "cluster-manager.globalIdentity" -}}

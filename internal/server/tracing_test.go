@@ -63,7 +63,7 @@ func TestToolCallIsTracedAndJoinsTheCallersTrace(t *testing.T) {
 	mcpSrv.AddTool(mcp.NewTool("echo"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultText("ok"), nil
 	})
-	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, mcpSrv, nil)
+	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, mcpSrv, nil, nil)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

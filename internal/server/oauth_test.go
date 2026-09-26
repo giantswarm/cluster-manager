@@ -353,7 +353,7 @@ func TestRefusalHeaderIsQuoted(t *testing.T) {
 func TestServerGuardsMCPButNotProbes(t *testing.T) {
 	idp := newFakeIdP(t)
 	cfg := idp.config(false)
-	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true, OAuth: &cfg}, api.NewMCPServer(nil, "test"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true, OAuth: &cfg}, api.NewMCPServer(nil, "test"), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)
 	t.Cleanup(func() { srv.oauth.shutdown(context.Background()) })
 	ts := httptest.NewServer(srv.Handler())

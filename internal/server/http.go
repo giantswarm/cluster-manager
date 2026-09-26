@@ -20,6 +20,10 @@ type Config struct {
 	Addr       string
 	MCPEnabled bool
 	MCPPath    string
+	// CommitPath is where the commit MCP server is served with the GitHub
+	// pin (OAuth.GitHub): the endpoint of the App-pinned registration
+	// (empty: DefaultCommitPath).
+	CommitPath string
 	// OAuth, when set, makes the server an OAuth 2.1 resource server: the MCP
 	// endpoint requires a bearer token the platform IdP
 	// issued (forwarded by muster / sent by the portal) or this server's own,
@@ -29,6 +33,9 @@ type Config struct {
 	OAuth *OAuthConfig
 }
 
+// DefaultCommitPath is the commit MCP path.
+const DefaultCommitPath = "/commit/mcp"
+
 // Server is the assembled HTTP server.
 type Server struct {
 	http  *http.Server
@@ -36,13 +43,22 @@ type Server struct {
 	log   *slog.Logger
 }
 
-// New builds the server.
-func New(cfg Config, mcpSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, error) {
+// New builds the server: mcpSrv on the main path behind the IdP guard, and,
+// with the GitHub pin, commitSrv on the commit path behind the GitHub guard
+// and the IdP guard.
+func New(cfg Config, mcpSrv, commitSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	if cfg.MCPPath == "" {
 		cfg.MCPPath = "/mcp"
+	}
+	if cfg.CommitPath == "" {
+		cfg.CommitPath = DefaultCommitPath
+	}
+	pinned := cfg.OAuth != nil && cfg.OAuth.GitHub != nil
+	if pinned != (commitSrv != nil) {
+		return nil, fmt.Errorf("the commit MCP server and the GitHub pin go together: the commit path is served behind the pin only")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -66,6 +82,11 @@ func New(cfg Config, mcpSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, er
 	if cfg.MCPEnabled && mcpSrv != nil {
 		mux.Handle(cfg.MCPPath, s.guard(mcpserver.NewStreamableHTTPServer(mcpSrv,
 			mcpserver.WithEndpointPath(cfg.MCPPath),
+		)))
+	}
+	if cfg.MCPEnabled && pinned {
+		mux.Handle(cfg.CommitPath, s.oauth.protectCommit(mcpserver.NewStreamableHTTPServer(commitSrv,
+			mcpserver.WithEndpointPath(cfg.CommitPath),
 		)))
 	}
 

@@ -12,7 +12,7 @@ import (
 )
 
 func TestProbesAndMCPWithoutOAuth(t *testing.T) {
-	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, api.NewMCPServer(nil, "test"), nil)
+	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, api.NewMCPServer(nil, "test"), nil, nil)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

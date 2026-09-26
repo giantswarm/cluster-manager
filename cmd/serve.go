@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/mcp-toolkit/tracing"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/dynamic"
 
@@ -44,6 +45,7 @@ type serveOptions struct {
 
 	mcpEnabled bool
 	mcpPath    string
+	commitPath string
 
 	oauthEnabled                  bool
 	oauthBaseURL                  string
@@ -61,6 +63,7 @@ type serveOptions struct {
 	downstreamOAuth               bool
 	githubAuthorizationServer     string
 	githubAPIURL                  string
+	commitRegistration            string
 }
 
 func newServeCmd() *cobra.Command {
@@ -90,6 +93,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.DurationVar(&o.applyBudget, "apply-budget", envDuration("CLUSTER_MANAGER_APPLY_BUDGET", tools.DefaultApplyBudget), "How long a write call (create_node_pool, enable_model_serving, delete_node_pool, disable_model_serving) may take before it stops writing and answers with what it did, the rest pending for the re-run: the aggregator's deadline for an upstream tool call less the answer's way back; a deadline the request carries wins when earlier (CLUSTER_MANAGER_APPLY_BUDGET)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
+	f.StringVar(&o.commitPath, "commit-path", envOr("CLUSTER_MANAGER_COMMIT_PATH", server.DefaultCommitPath), "MCP endpoint path of the commit registration, served with --github-authorization-server: the tools with a commit mode behind the GitHub App's user token (CLUSTER_MANAGER_COMMIT_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("CLUSTER_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (CLUSTER_MANAGER_OAUTH_ENABLED)")
 	f.StringVar(&o.oauthBaseURL, "oauth-base-url", envOr("CLUSTER_MANAGER_OAUTH_BASE_URL", ""), "Public base URL of this server: the issuer of its OAuth metadata, https or loopback http (CLUSTER_MANAGER_OAUTH_BASE_URL)")
 	f.StringVar(&o.oauthProvider, "oauth-provider", envOr("CLUSTER_MANAGER_OAUTH_PROVIDER", server.ProviderDex), "Identity provider: dex or google (CLUSTER_MANAGER_OAUTH_PROVIDER)")
@@ -104,7 +108,8 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (SSO_ALLOW_PRIVATE_IPS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("CLUSTER_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none). Needs --enable-oauth and an apiserver that trusts the IdP (CLUSTER_MANAGER_DOWNSTREAM_OAUTH)")
-	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's registration to (https://github.com/apps/giantswarm-cluster-manager): the bearer of every call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: the bearer is the forwarded IdP ID token and commit mode is not offered. Needs --enable-oauth (CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
+	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins the commit registration to (https://github.com/apps/giantswarm-cluster-manager): offers commit mode on --commit-path, where the bearer of every call is the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). The main path stays the registration that forwards the IdP ID token as the bearer, and refuses commit mode naming --commit-registration. Empty: commit mode is not offered. Needs --enable-oauth (CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
+	f.StringVar(&o.commitRegistration, "commit-registration", envOr("CLUSTER_MANAGER_COMMIT_REGISTRATION", "cluster-manager-commit"), "Name of the muster MCPServer pinned to the GitHub App, pointing at --commit-path: named where commit mode is refused on the main path and in the commit path's sign-in refusals (CLUSTER_MANAGER_COMMIT_REGISTRATION)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("CLUSTER_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (CLUSTER_MANAGER_GITHUB_API_URL)")
 	return cmd
 }
@@ -164,9 +169,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	if o.githubAuthorizationServer != "" {
 		// Commit mode: the pull request is opened as the person, with the
-		// App user token the pinned registration carries.
+		// App user token the pinned commit registration carries.
 		apiURL := o.githubAPIURL
-		opts = append(opts, tools.WithGitHub(func(token string) (tools.GitHubRemote, error) {
+		opts = append(opts, tools.WithGitHub(o.commitRegistration, func(token string) (tools.GitHubRemote, error) {
 			if apiURL == server.DefaultGitHubAPIURL {
 				return commit.NewGitHub(token)
 			}
@@ -175,7 +180,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	svc := tools.New(clientsFor, targetsFor, toolsCfg, opts...)
 
-	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
+	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath, CommitPath: o.commitPath}
+	var commitSrv *mcpserver.MCPServer
 	if o.oauthEnabled {
 		cfg.OAuth = &server.OAuthConfig{
 			BaseURL:                       o.oauthBaseURL,
@@ -193,14 +199,15 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
 		if o.githubAuthorizationServer != "" {
-			cfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
+			cfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, Registration: o.commitRegistration, APIURL: o.githubAPIURL}
+			commitSrv = api.NewCommitMCPServer(svc, version)
 		}
 	}
-	srv, err := server.New(cfg, api.NewMCPServer(svc, version), log)
+	srv, err := server.New(cfg, api.NewMCPServer(svc, version), commitSrv, log)
 	if err != nil {
 		return err
 	}
-	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation, "commit", o.githubAuthorizationServer != "")
+	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation, "commit", o.githubAuthorizationServer != "", "commitPath", o.commitPath, "commitRegistration", o.commitRegistration)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

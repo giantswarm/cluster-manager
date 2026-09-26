@@ -97,8 +97,12 @@ flux:
 mcp:
   # -- Serve the MCP streamable-HTTP endpoint (the server's only surface).
   enabled: true
-  # -- MCP endpoint path.
+  # -- MCP endpoint path: every tool, the main MCPServer's.
   path: /mcp
+  # -- MCP endpoint path of the commit registration, served with
+  # `github.enabled`: the tools with a commit mode behind the GitHub App's user
+  # token, the `<name>-commit` MCPServer's.
+  commitPath: /commit/mcp
 
 oauth:
   # -- Make cluster-manager an OAuth 2.1 resource server (mcp-oauth): the MCP
@@ -172,19 +176,22 @@ oauth:
     enabled: true
 
 github:
-  # -- Register with muster pinned to the GitHub App
-  # `giantswarm-cluster-manager` and offer commit mode (`mode: commit` on
-  # `create_node_pool` and `delete_node_pool`: the pull request opened as the
-  # person in the repository that owns the cluster). The MCPServer's auth then
-  # pins the App as the authorization server — muster runs the App's consent
-  # once per person and puts their user token on every call, which this server
-  # verifies with `GET /user` and opens the pull request with — and sets
-  # `forwardIdentity: true`: muster forwards the person's IdP ID token in
-  # `X-Muster-Id-Token` next to it, validated as `oauth` validates a forwarded
-  # token, so apply mode keeps acting on Kubernetes as the person. One
-  # registration carries both tokens. Needs `oauth.enabled`. Off: muster
-  # forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`)
-  # and commit mode is refused.
+  # -- Offer commit mode (`mode: commit` on `create_node_pool` and
+  # `delete_node_pool`: the pull request opened as the person in the
+  # repository that owns the cluster) through a second muster registration,
+  # the MCPServer `<muster.mcpServer.name>-commit` on `mcp.commitPath`, which
+  # serves those two tools and `get_info`. Its auth pins the GitHub App
+  # `giantswarm-cluster-manager` as the authorization server — muster runs the
+  # App's consent once per person and puts their user token on every call,
+  # which this server verifies with `GET /user` and opens the pull request
+  # with — and sets `forwardIdentity: true`: muster forwards the person's IdP
+  # ID token in `X-Muster-Id-Token` next to it, validated as `oauth` validates
+  # a forwarded token, so Kubernetes is still acted on as the person. The main
+  # MCPServer stays the one that forwards the ID token as the bearer
+  # (`muster.mcpServer.auth.forwardToken`) and serves every tool without the
+  # App's consent; `mode: commit` there is refused, naming the commit
+  # registration and its login. Needs `oauth.enabled`. Off: commit mode is
+  # refused.
   enabled: false
   # -- GitHub's REST API, for `GET /user` and the pull request.
   apiURL: https://api.github.com

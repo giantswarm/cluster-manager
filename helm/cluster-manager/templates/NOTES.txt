@@ -3,12 +3,15 @@ cluster-manager is running.
 
   MCP : http://{{ include "cluster-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
 {{- end }}
-{{- if and .Values.oauth.enabled .Values.github.enabled }}
-
-muster connects through the GitHub App's per-person login: the bearer is the person's App user token (commit mode's pull request), and the platform identity provider's ID token rides next to it in X-Muster-Id-Token (forwardIdentity).
-{{- else if .Values.oauth.enabled }}
+{{- if and .Values.mcp.enabled .Values.github.enabled }}
+  Commit MCP : http://{{ include "cluster-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.commitPath }}
+{{- end }}
+{{- if .Values.oauth.enabled }}
 
 Every call must carry a bearer token of the platform identity provider; muster forwards the session's token (forwardToken).
+{{- if .Values.github.enabled }}
+Commit mode goes through the commit path, pinned to the GitHub App's per-person login: the bearer there is the person's App user token (commit mode's pull request), and the platform identity provider's ID token rides next to it in X-Muster-Id-Token (forwardIdentity).
+{{- end }}
 {{- else }}
 
 Try it:
@@ -20,4 +23,7 @@ Try it:
 {{- if .Values.muster.mcpServer.enabled }}
 
 muster registers the server as MCPServer "{{ .Values.muster.mcpServer.name }}"; tools appear as x_{{ .Values.muster.mcpServer.name }}_<tool>.
+{{- if .Values.github.enabled }}
+Commit mode is MCPServer "{{ include "cluster-manager.commitRegistration" . }}" (x_{{ include "cluster-manager.commitRegistration" . }}_create_node_pool, x_{{ include "cluster-manager.commitRegistration" . }}_delete_node_pool), connected once per person with core_auth_login server={{ include "cluster-manager.commitRegistration" . }} and the GitHub App's consent.
+{{- end }}
 {{- end }}

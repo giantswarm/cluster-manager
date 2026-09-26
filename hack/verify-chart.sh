@@ -52,4 +52,38 @@ for want in \
   grep -qF -- "$want" <<<"$otel" || fail "observability.otel.endpoint renders no '$want'"
 done
 
+# Two muster registrations with github.enabled: the main MCPServer forwards the
+# IdP token (forwardToken) on the main path whatever github.enabled says, so
+# nothing but commit mode waits for the GitHub App's consent; the
+# <name>-commit MCPServer on the commit path pins the App (authorizationServer,
+# forwardIdentity) and the server is told its name. Without github.enabled
+# only the main one renders.
+oauth=(--set muster.mcpServer.enabled=true --set oauth.enabled=true --set oauth.baseURL=https://cluster-manager.example.com
+  --set oauth.dex.issuerURL=https://dex.example.com --set oauth.dex.clientID=platform --set oauth.existingSecret=oauth)
+# mcpserver prints the MCPServer named $2 of the render $1.
+mcpserver() { awk -v want="$2" '/^---/{if(doc ~ "\nkind: MCPServer\n" && doc ~ "\n  name: " want "\n")print doc; doc=""; next}{doc=doc"\n"$0}END{if(doc ~ "\nkind: MCPServer\n" && doc ~ "\n  name: " want "\n")print doc}' <<<"$1"; }
+plain=$(helm template t "$CHART" "${oauth[@]}")
+[ "$(grep -c '^kind: MCPServer$' <<<"$plain")" = 1 ] || fail "without github.enabled the chart renders other than one MCPServer"
+pinned=$(helm template t "$CHART" "${oauth[@]}" --set github.enabled=true)
+[ "$(grep -c '^kind: MCPServer$' <<<"$pinned")" = 2 ] || fail "github.enabled renders other than two MCPServers"
+for render in "$plain" "$pinned"; do
+  main=$(mcpserver "$render" cluster-manager)
+  for want in 'url: http://t-cluster-manager.default.svc.cluster.local:8080/mcp' 'forwardToken: true'; do
+    grep -qF -- "$want" <<<"$main" || fail "the main MCPServer renders no '$want'"
+  done
+  for unwanted in authorizationServer forwardIdentity; do
+    if grep -qF -- "$unwanted" <<<"$main"; then fail "the main MCPServer renders '$unwanted'"; fi
+  done
+done
+commit=$(mcpserver "$pinned" cluster-manager-commit)
+for want in 'url: http://t-cluster-manager.default.svc.cluster.local:8080/commit/mcp' 'authorizationServer:' \
+  'issuer: "https://github.com/apps/giantswarm-cluster-manager"' 'forwardIdentity: true'; do
+  grep -qF -- "$want" <<<"$commit" || fail "the commit MCPServer renders no '$want'"
+done
+if grep -qF forwardToken <<<"$commit"; then fail "the commit MCPServer renders forwardToken"; fi
+for want in '--commit-path=/commit/mcp' '--commit-registration=cluster-manager-commit'; do
+  grep -qF -- "$want" <<<"$pinned" || fail "github.enabled passes no '$want'"
+done
+if grep -qF -- '--commit-' <<<"$plain"; then fail "without github.enabled the server is given a commit flag"; fi
+
 echo "verify-chart: ok"

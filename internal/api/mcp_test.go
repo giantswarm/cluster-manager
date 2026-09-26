@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -73,6 +74,12 @@ func newServer(t *testing.T) *handlersServer {
 // KaaS components does.
 func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
 	t.Helper()
+	return &handlersServer{NewMCPServer(newService(t, clusterAPI), "test")}
+}
+
+// newService is the tools over two clusters; opts as the server passes them.
+func newService(t *testing.T, clusterAPI bool, opts ...tools.Option) *tools.Service {
+	t.Helper()
 	disc := &discoveryfake.FakeDiscovery{Fake: &k8stesting.Fake{}}
 	if clusterAPI {
 		disc.Resources = []*metav1.APIResourceList{{GroupVersion: tools.ClusterGVR.GroupVersion().String(), APIResources: []metav1.APIResource{{Name: tools.ClusterGVR.Resource, Kind: "Cluster", Namespaced: true}}}}
@@ -82,8 +89,15 @@ func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
 		tools.AppGVR: "AppList", tools.ConfigMapGVR: "ConfigMapList", compose.SecretGVR: "SecretList", compose.OCIRepositoryGVR: "OCIRepositoryList",
 		detect.NodesGVR: "NodeList", detect.DeploymentGVR: "DeploymentList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.LLMISVCGVR: "LLMInferenceServiceList", detect.LLMISVCConfigResource.WithVersion("v1alpha2"): "LLMInferenceServiceConfigList", detect.DaemonSetGVR: "DaemonSetList", detect.NodeClaimGVR: "NodeClaimList", detect.GatewayGVR: "GatewayList", detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
-	svc := tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"})
-	return &handlersServer{NewMCPServer(svc, "test")}
+	return tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"}, opts...)
+}
+
+// withGitHub offers commit mode through the commit registration, as the
+// server does with the GitHub pin; the remote is never reached here.
+func withGitHub() tools.Option {
+	return tools.WithGitHub("cluster-manager-commit", func(string) (tools.GitHubRemote, error) {
+		return nil, errors.New("no GitHub in this test")
+	})
 }
 
 type handlersServer struct{ messageHandler }
@@ -134,6 +148,57 @@ func TestWriteToolsRefuseCommitMode(t *testing.T) {
 		assert.Contains(t, text, "mode commit", tool)
 		assert.Contains(t, text, "use mode apply", tool)
 	}
+}
+
+// TestMainRegistrationRefusesCommitMode (giantswarm/cluster-manager#120):
+// with the GitHub pin, the main registration forwards the IdP token alone —
+// reads, dry runs and apply mode need no App consent — and commit mode there
+// is refused naming the commit registration and its login; get_info names
+// the registration commit mode is offered through.
+func TestMainRegistrationRefusesCommitMode(t *testing.T) {
+	srv := &handlersServer{NewMCPServer(newService(t, true, withGitHub()), "test")}
+	for _, tool := range []string{ToolCreateNodePool, ToolDeleteNodePool} {
+		for _, dryRun := range []bool{false, true} {
+			text, isErr := callTool(t, srv, tool, map[string]any{"cluster": "wc1", "name": "gpu-l4", "mode": "commit", "dryRun": dryRun})
+			assert.True(t, isErr, "%s: %s", tool, text)
+			assert.Contains(t, text, "only the commit registration cluster-manager-commit carries", tool)
+			assert.Contains(t, text, "core_auth_login server=cluster-manager-commit", tool)
+		}
+	}
+	text, isErr := callTool(t, srv, ToolListClusters, nil)
+	assert.False(t, isErr, "reads need no GitHub authorization: %s", text)
+
+	text, isErr = callTool(t, srv, ToolGetInfo, nil)
+	require.False(t, isErr, text)
+	var info Info
+	require.NoError(t, json.Unmarshal([]byte(text), &info))
+	assert.Equal(t, Modes{Apply: true, Commit: true}, info.Modes)
+	assert.Equal(t, "cluster-manager-commit", info.CommitRegistration)
+	assert.Equal(t, ToolNames(), info.Tools)
+}
+
+// TestCommitServerTools: the commit path serves the tools with a commit mode
+// and get_info, on the same handlers.
+func TestCommitServerTools(t *testing.T) {
+	srv := &handlersServer{NewCommitMCPServer(newService(t, true, withGitHub()), "test")}
+	var listed struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(rpc(t, srv, "tools/list", nil), &listed))
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	assert.ElementsMatch(t, CommitToolNames(), names)
+
+	text, isErr := callTool(t, srv, ToolGetInfo, nil)
+	require.False(t, isErr, text)
+	var info Info
+	require.NoError(t, json.Unmarshal([]byte(text), &info))
+	assert.Equal(t, CommitToolNames(), info.Tools)
+	assert.Equal(t, "cluster-manager-commit", info.CommitRegistration)
 }
 
 func TestGetInfo(t *testing.T) {

@@ -76,7 +76,8 @@ cluster-manager serve --kubeconfig ~/.kube/config
 ```
 
 Every flag has an environment variable named next to it in `--help`; flags win. The chart in
-`helm/cluster-manager` renders the Deployment, the Service, the `MCPServer` CR for muster and,
+`helm/cluster-manager` renders the Deployment, the Service, the `MCPServer` CR for muster (and, with `github.enabled`, the
+commit registration's) and,
 with `oauth.enabled`, the mcp-oauth resource-server flags from the platform identity contract
 (`global.identity`).
 
@@ -111,12 +112,16 @@ as files into the repository that owns the cluster and open one pull request as 
   for it is refused), and a `kustomization.yaml` listing them. A parent directory with its own
   `kustomization.yaml` gets the `cluster-manager` entry; without one Flux generates it and includes the
   directory by itself.
-- **As whom.** The server is registered with muster pinned to the GitHub App
-  `giantswarm-cluster-manager` (chart `github.enabled`): muster runs the App's consent once per person and
-  puts their user token on every call, which the server verifies with `GET /user` and opens the pull
-  request with; `auth.forwardIdentity` puts the person's IdP ID token in `X-Muster-Id-Token` next to it,
-  validated as a forwarded bearer is otherwise and used for Kubernetes, so apply mode is unchanged. One
-  registration carries both. `get_info` answers `modes.commit: true` only then.
+- **As whom.** Through a second muster registration of the same server (chart `github.enabled`): the
+  MCPServer `cluster-manager-commit` on the commit path (`--commit-path`, default `/commit/mcp`) serves
+  `create_node_pool`, `delete_node_pool` and `get_info`, pinned to the GitHub App
+  `giantswarm-cluster-manager`: muster runs the App's consent once per person (`core_auth_login
+  server=cluster-manager-commit`) and puts their user token on every call, which the server verifies with
+  `GET /user` and opens the pull request with; `auth.forwardIdentity` puts the person's IdP ID token in
+  `X-Muster-Id-Token` next to it, validated as a forwarded bearer is and used for Kubernetes. The main
+  registration `cluster-manager` stays the one that forwards the ID token, serves every tool without the
+  App's consent and refuses `mode: commit`, naming the commit registration (`--commit-registration`).
+  `get_info` answers `modes.commit: true` and `commitRegistration` only then.
 - **What the answer says.** `commit{repository, base, directory, kustomization, prune, branch, files[],
   pullRequest, number, author, liveSteps[]}`; `dryRun` shows every file with its content (a secret file
   without) and opens nothing; a re-run whose files the base already carries opens nothing. The kserve
