@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A management cluster whose GitRepository uses GitHub's SSH endpoint on port 443 (`ssh://git@ssh.github.com:443/owner/name.git`) has a commit target: `list_clusters` named the own cluster's target `not a GitHub repository URL`, and commit mode could not open its pull request. gitops-commit v0.9.1 accepts the host `ssh.github.com`.
+
 ### Added
 
 - Commit mode (giantswarm/cluster-manager#105): `create_node_pool` and `delete_node_pool` with `mode: commit` open the pull request as the person in the repository that owns the cluster (Flux provenance of its HelmRelease or App), the releases as files under `<path>/cluster-manager/` with their kustomization entries, the pool's credentials SOPS-encrypted for the repository's age recipients; the removal names the live step a non-pruning Kustomization leaves. The chart's `github.enabled` pins the MCPServer to the GitHub App `giantswarm-cluster-manager` with `auth.forwardIdentity`: the App user token opens the pull request, the forwarded ID token keeps apply mode acting on Kubernetes as the person. `list_clusters` reports the `commitTarget`, `get_info` `modes.commit`. Apply mode refuses a release Flux still applies from git.
