@@ -1,0 +1,28 @@
+# The fleet's Flux objects commit mode follows from wc1's HelmRelease (the
+# labels are set by the tests) to the repository that owns it.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: acme-clusters-wc1
+  namespace: default
+spec:
+  interval: 1m
+  path: ./management-clusters/gazelle/organizations/acme/workload-clusters/wc1
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: workload-clusters-fleet
+status:
+  inventory:
+    entries: []
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: workload-clusters-fleet
+  namespace: default
+spec:
+  interval: 1m
+  url: https://github.com/acme/workload-clusters-fleet
+  ref:
+    branch: main
