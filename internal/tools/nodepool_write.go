@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +49,10 @@ const (
 
 	// labelKustomizeName marks an object Flux's kustomize-controller owns.
 	labelKustomizeName = "kustomize.toolkit.fluxcd.io/name"
+
+	// fluxFinalizer is helm-controller's finalizer on a HelmRelease: its
+	// uninstall runs before the object goes.
+	fluxFinalizer = "finalizers.fluxcd.io"
 )
 
 // ErrRefused is a refusal with the fix in the message: a mode not offered, a
@@ -695,6 +700,13 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	targets, slice, kept, last, err := s.removalTargets(ctx, dyn, c, in.Name)
 	if err != nil {
 		return nil, err
+	}
+	// Without helm-controller's finalizer the delete removes the HelmRelease
+	// at once and nothing uninstalls the chart: the MachinePool, the Karpenter
+	// NodePool and the release record stay, and the NodePool can still launch
+	// a GPU node (giantswarm/cluster-manager#107).
+	if hr.GetDeletionTimestamp() == nil && !slices.Contains(hr.GetFinalizers(), fluxFinalizer) {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s carries no %s: helm-controller has not reconciled it since its last write, and deleting it now removes it without uninstalling the pool — its MachinePool and Karpenter NodePool would stay and could still launch a GPU node; re-run once helm-controller has reconciled it (within its interval, or at once with `flux reconcile helmrelease -n %s %s`)", ns, release, fluxFinalizer, ns, release)}
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: ns, Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, LastPool: last, SliceKept: kept}
 	if in.Mode == ModeCommit {
@@ -1365,12 +1377,40 @@ func (p *applyPlan) write(ctx context.Context) error {
 			return fmt.Errorf("create %s %s/%s: %w", p.obj.GetKind(), p.obj.GetNamespace(), p.obj.GetName(), err)
 		}
 	case actionUpdate:
+		keepForeign(p.obj, p.existing)
 		p.obj.SetResourceVersion(p.existing.GetResourceVersion())
 		if _, err := p.res.Update(ctx, p.obj, metav1.UpdateOptions{FieldManager: compose.ManagedBy}); err != nil {
 			return fmt.Errorf("update %s %s/%s: %w", p.obj.GetKind(), p.obj.GetNamespace(), p.obj.GetName(), err)
 		}
 	}
 	return nil
+}
+
+// keepForeign carries onto the composed object what other writers own on the
+// live one, so an update replaces cluster-manager's fields only: the
+// finalizers — helm-controller's `finalizers.fluxcd.io`, without which a
+// delete removes the HelmRelease at once and no uninstall runs, orphaning
+// the pool (giantswarm/cluster-manager#107) — and every label and annotation
+// cluster-manager does not compose.
+func keepForeign(obj, existing *unstructured.Unstructured) {
+	obj.SetFinalizers(existing.GetFinalizers())
+	obj.SetLabels(mergedMeta(existing.GetLabels(), obj.GetLabels()))
+	obj.SetAnnotations(mergedMeta(existing.GetAnnotations(), obj.GetAnnotations()))
+}
+
+// mergedMeta is live's entries with composed's on top; nil for none.
+func mergedMeta(live, composed map[string]string) map[string]string {
+	if len(live) == 0 && len(composed) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(live)+len(composed))
+	for k, v := range live {
+		out[k] = v
+	}
+	for k, v := range composed {
+		out[k] = v
+	}
+	return out
 }
 
 // deleteIfOwned deletes one of cluster-manager's objects; nil when it does
@@ -1426,12 +1466,18 @@ func removalHint(obj *unstructured.Unstructured) string {
 // object carries, at its default value, is not drift. A live value other than
 // the default is — the update would reset it. Flux's OCIRepository v1 defaults
 // `spec.provider` and `spec.timeout` (source.toolkit.fluxcd.io/v1
-// OCIRepositorySpec); HelmRelease v2 defaults nothing at the paths
-// cluster-manager composes, nor do Secret and ConfigMap.
+// OCIRepositorySpec); HelmRelease v2 defaults
+// `spec.uninstall.deletionPropagation` under the `spec.uninstall` block the
+// composed releases carry (helm.toolkit.fluxcd.io/v2 Uninstall) — unknown
+// here, it made every re-run an update (giantswarm/cluster-manager#107).
+// Secret and ConfigMap default nothing.
 var serverDefaults = map[string]map[string]any{
 	compose.OCIRepositoryGVR.GroupVersion().String() + "/OCIRepository": {
 		"spec.provider": "generic",
 		"spec.timeout":  "60s",
+	},
+	compose.HelmReleaseGVR.GroupVersion().String() + "/HelmRelease": {
+		"spec.uninstall.deletionPropagation": "background",
 	},
 }
 
@@ -1443,7 +1489,14 @@ func changedPaths(have, want *unstructured.Unstructured) []string {
 	diff(have.Object["spec"], want.Object["spec"], "spec", &paths)
 	diff(have.Object["stringData"], want.Object["stringData"], "stringData", &paths)
 	diff(have.Object["data"], want.Object["data"], "data", &paths)
-	diff(map[string]any{"labels": have.GetLabels()}, map[string]any{"labels": want.GetLabels()}, "metadata", &paths)
+	// Only the labels cluster-manager composes: one another writer added is
+	// not drift, and the update keeps it (keepForeign).
+	haveLabels := have.GetLabels()
+	for k, v := range want.GetLabels() {
+		if got, ok := haveLabels[k]; !ok || got != v {
+			paths = append(paths, "metadata.labels."+k)
+		}
+	}
 	if !reflect.DeepEqual(have.GetOwnerReferences(), want.GetOwnerReferences()) {
 		paths = append(paths, "metadata.ownerReferences")
 	}
