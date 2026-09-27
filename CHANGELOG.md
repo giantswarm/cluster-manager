@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A workload cluster's slice serves again (giantswarm/cluster-manager#127): since the slice's components moved to `agent-platform` on a workload cluster (#122), the kserve backend document still named the org namespace as `discovery.namespace`, so model-manager found neither the discovery ConfigMap nor the serving presets there and refused every `load_model` (`preset … not found (available: )`). The document names the slice's namespace on the target: `agent-platform` on a workload cluster, the org namespace on the installation's own cluster. A `create_node_pool` re-run rewrites an existing registration.
 - A management cluster whose GitRepository uses GitHub's SSH endpoint on port 443 (`ssh://git@ssh.github.com:443/owner/name.git`) has a commit target: `list_clusters` named the own cluster's target `not a GitHub repository URL`, and commit mode could not open its pull request. gitops-commit v0.9.1 accepts the host `ssh.github.com`.
 
 ### Added

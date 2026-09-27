@@ -9,7 +9,7 @@ data:
       kind: kserve
       kserve:
         discovery:
-          namespace: org-acme
+          namespace: agent-platform
         gpuPool:
           instances:
           - gpuMemoryGiB: 24
