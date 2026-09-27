@@ -9,7 +9,7 @@ data:
       kind: kserve
       kserve:
         discovery:
-          namespace: org-acme
+          namespace: agent-platform
         gpuPools:
           wc1-gpu-a10g:
             instances:

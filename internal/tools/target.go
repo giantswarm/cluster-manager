@@ -42,11 +42,12 @@ type target struct {
 func (s *Service) target(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) target {
 	t := target{
 		Target:  detect.Target{Cluster: c.GetName(), Namespace: c.GetNamespace(), SliceNamespace: compose.SliceWorkloadNamespace, Installation: dyn},
-		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace, DiscoveryNamespace: c.GetNamespace()},
+		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace, DiscoveryNamespace: compose.SliceWorkloadNamespace},
 	}
 	if s.ownCluster(c) {
 		t.Reader = dyn
 		t.SliceNamespace = c.GetNamespace()
+		t.backend.DiscoveryNamespace = c.GetNamespace()
 		t.backend.OwnCluster = true
 		return t
 	}

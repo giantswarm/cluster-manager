@@ -154,7 +154,7 @@ func TestKServeBackendGoldens(t *testing.T) {
 	require.NoError(t, err)
 	remote := BackendTarget{
 		Cluster: "wc1", Organization: "acme", APIServer: "https://api.wc1.acme.example.io:6443",
-		CABundle: "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n", ServingNamespace: "model-serving", DiscoveryNamespace: "org-acme",
+		CABundle: "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n", ServingNamespace: "model-serving", DiscoveryNamespace: SliceWorkloadNamespace,
 	}
 	local := BackendTarget{Cluster: "gazelle", Organization: "giantswarm", OwnCluster: true, ServingNamespace: "model-serving", DiscoveryNamespace: "org-giantswarm"}
 	for _, tc := range []struct {
