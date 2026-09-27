@@ -19,13 +19,13 @@ const (
 	SliceChart = "agent-platform"
 	// SliceChartURL is the catalog location of the agent-platform chart.
 	SliceChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
-	// MinSliceChartVersion is the floor of the slice release's pin: the
+	// MinSliceChartVersion is the lowest chart the slice release runs: the
 	// first chart that names a targeted release's children per target
 	// (gitops.target.name) and installs them into gitops.targetNamespace
 	// (giantswarm/agent-platform#688), so two slices in one organization
 	// namespace do not collide; an older chart ignores both values and
-	// renders the bare component names teardown no longer looks for. The pin
-	// itself is the version the installation's own platform
+	// renders the bare component names teardown no longer looks for. The range
+	// the slice follows starts at the version the installation's own platform
 	// release runs (SliceChartVersion): released by construction and known to
 	// work on the installation. A release below the floor is refused, naming
 	// why.
@@ -90,8 +90,8 @@ type PlatformInputs struct {
 	// (`<namespace>/<name>` of its HelmRelease), for the messages.
 	Release string
 	// ChartVersion is the chart version the platform's release runs
-	// (its HelmRelease's status.history[0].chartVersion): the slice
-	// release's pin.
+	// (its HelmRelease's status.history[0].chartVersion): the floor of the
+	// range the slice release follows.
 	ChartVersion string
 	// Domain is the platform's global.domain.
 	Domain string
@@ -148,8 +148,9 @@ func (j JWKSSource) URL() string {
 // SliceSpec is the slice release's shape for one cluster.
 type SliceSpec struct {
 	// ChartVersion is an explicit chart pin, honoured as given (a lab's
-	// unreleased chart, a test); empty pins the version the platform's
-	// release runs, at least MinSliceChartVersion.
+	// unreleased chart, a test); empty follows the chart from the version
+	// the platform's release runs, at least MinSliceChartVersion, to the next
+	// major.
 	ChartVersion string
 	// OwnCluster marks the installation's own cluster: the release runs
 	// beside the platform's, which owns the Gateway API data plane, so
@@ -272,12 +273,12 @@ func SliceIngressNamespaces(s SliceSpec) ([]string, error) {
 	return []string{s.Platform.Namespace, substrate}, nil
 }
 
-// SliceChartVersion resolves the slice release's chart pin: the spec's
-// explicit version when set, else the version the installation's platform
-// release runs — refused below MinSliceChartVersion, the first chart whose
+// SliceChartVersion resolves the slice release's chart version: the spec's
+// explicit version when set (pinned), else the version the installation's
+// platform release runs (the floor of the range the slice follows) — refused below MinSliceChartVersion, the first chart whose
 // serving slice is the llm-d control plane alone, and when the release has not
 // deployed a chart yet. Flux records the chart's digest as the version's
-// build metadata (`4.27.2+b9d9972a5aca`); the pin is the chart's tag, so
+// build metadata (`4.27.2+b9d9972a5aca`); the version is the chart's tag, so
 // the metadata is dropped.
 func SliceChartVersion(s SliceSpec) (string, error) {
 	if s.ChartVersion != "" {
@@ -288,11 +289,11 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 		release = "the platform's release"
 	}
 	if s.Platform.ChartVersion == "" {
-		return "", fmt.Errorf("%s has not deployed a chart yet (no status.history): the slice release pins the %s chart version the platform runs — wait for the platform's release to be ready and re-run", release, SliceChart)
+		return "", fmt.Errorf("%s has not deployed a chart yet (no status.history): the slice release follows the %s chart from the version the platform runs — wait for the platform's release to be ready and re-run", release, SliceChart)
 	}
 	running, err := version.ParseSemantic(s.Platform.ChartVersion)
 	if err != nil {
-		return "", fmt.Errorf("%s runs %s chart %q, not a semantic version: the slice release pins the chart version the platform runs", release, SliceChart, s.Platform.ChartVersion)
+		return "", fmt.Errorf("%s runs %s chart %q, not a semantic version: the slice release follows the chart from the version the platform runs", release, SliceChart, s.Platform.ChartVersion)
 	}
 	tag, _, _ := strings.Cut(s.Platform.ChartVersion, "+")
 	if running.LessThan(version.MustParseSemantic(MinSliceChartVersion)) {
@@ -321,7 +322,8 @@ func SliceChildName(cluster, component string) string {
 }
 
 // Slice renders the `<cluster>-agent-platform` release: an OCIRepository
-// pinning the chart exactly (SliceChartVersion) and a HelmRelease in the
+// following the chart from the version the platform runs to the next major
+// (SliceChartVersion; an explicit version is pinned) and a HelmRelease in the
 // cluster's namespace on the installation whose values are the serving-slice
 // profile filled from the platform's inputs. The HelmRelease runs under the
 // org's tenant ServiceAccount (see Delivery in compose.go): the meta chart
@@ -345,7 +347,11 @@ func Slice(c Cluster, s SliceSpec) ([]*unstructured.Unstructured, error) {
 		LabelManagedBy: ManagedBy,
 		LabelCluster:   c.Name,
 	})
-	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(SliceChartURL, "tag", version)})
+	sourceSpec, err := chartSourceSpec(SliceChartURL, version, s.ChartVersion != "")
+	if err != nil {
+		return nil, err
+	}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": sourceSpec})
 	spec := helmReleaseSpec(name, true, values)
 	deliverAsTenant(spec, c.TenantServiceAccount)
 	return []*unstructured.Unstructured{source, object(HelmReleaseGVR, "HelmRelease", meta(name), map[string]any{"spec": spec})}, nil

@@ -59,8 +59,9 @@ func TestSliceGoldens(t *testing.T) {
 			assert.Equal(t, SliceReleaseName(tc.cluster.Name), release.GetName())
 			assert.Equal(t, SliceChart, release.GetLabels()[LabelChartName])
 			assert.Equal(t, tc.cluster.Name, release.GetOwnerReferences()[0].Name, "owned by the Cluster in apply mode")
-			tag, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "tag")
-			assert.Equal(t, platform().ChartVersion, tag, "the slice pins the version the platform's release runs")
+			ref, _, _ := unstructured.NestedStringMap(source.Object, "spec", "ref")
+			assert.Equal(t, map[string]string{"semver": ">=4.85.0 <5.0.0"}, ref, "the slice follows the chart from the version the platform's release runs to the next major")
+			assert.Equal(t, platform().ChartVersion, ChartVersion(source), "the reported version is the range's floor")
 			_, hasKubeconfig, _ := unstructured.NestedString(release.Object, "spec", "kubeConfig", "secretRef", "name")
 			assert.False(t, hasKubeconfig, "the meta chart's own HelmRelease stays on the installation; the target knob is in its values")
 			sa, _, _ := unstructured.NestedString(release.Object, "spec", "serviceAccountName")
@@ -274,7 +275,7 @@ func TestOtherSliceOn(t *testing.T) {
 	assert.True(t, OtherSliceOn(values), "the runtime slice shares the release")
 }
 
-// TestSliceChartVersion: the pin is the version the platform's release runs
+// TestSliceChartVersion: the version is the one the platform's release runs
 // without the digest Flux records as build metadata, refused below the floor (naming the release, the version, the floor and
 // why), before the first deployment and for a non-semver revision; an
 // explicit version is honoured as given, floor or not.
@@ -309,4 +310,15 @@ func TestSliceChartVersion(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestSliceExplicitChartVersion: a version the caller names is pinned exactly,
+// and ChartVersion reads it back.
+func TestSliceExplicitChartVersion(t *testing.T) {
+	c := Cluster{Name: "operations", Namespace: "org-giantswarm-production", Organization: "giantswarm-production", UID: "uid"}
+	objs, err := Slice(c, SliceSpec{ChartVersion: "4.90.0-dev.1", Platform: platform()})
+	require.NoError(t, err)
+	ref, _, _ := unstructured.NestedStringMap(objs[0].Object, "spec", "ref")
+	assert.Equal(t, map[string]string{"tag": "4.90.0-dev.1"}, ref)
+	assert.Equal(t, "4.90.0-dev.1", ChartVersion(objs[0]))
 }

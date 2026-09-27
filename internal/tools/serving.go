@@ -302,7 +302,7 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 	}
 	var err error
 	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim}
-	if spec.ChartVersion, err = compose.SliceChartVersion(spec); err != nil {
+	if _, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
 	jwks, err := compose.SliceJWKS(spec)
@@ -315,7 +315,7 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 	}
 	domain := compose.SliceDomain(facts, spec)
 	slice := &SliceRelease{
-		Name: objs[1].GetName(), Namespace: objs[1].GetNamespace(), ChartVersion: nestedString(objs[0], "spec", "ref", "tag"),
+		Name: objs[1].GetName(), Namespace: objs[1].GetNamespace(), ChartVersion: compose.ChartVersion(objs[0]),
 		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool, JWKS: jwks.URL(),
 	}
 	if issuer := compose.SliceIssuer(spec); issuer != "" {
