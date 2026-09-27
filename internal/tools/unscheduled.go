@@ -89,7 +89,7 @@ func waitingModels(ctx context.Context, reader dynamic.Interface, namespace, poo
 			continue
 		}
 		switch nestedString(pod, "status", "phase") {
-		case "Succeeded", "Failed":
+		case podSucceeded, podFailed:
 			continue
 		}
 		key := kind + "/" + name

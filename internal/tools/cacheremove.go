@@ -169,7 +169,7 @@ func heldClaims(ctx context.Context, reader dynamic.Interface, namespace string,
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		switch nestedString(pod, "status", "phase") {
-		case "Succeeded", "Failed":
+		case podSucceeded, podFailed:
 			continue
 		}
 		for _, name := range claimsMounted(pod) {

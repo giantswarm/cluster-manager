@@ -85,6 +85,31 @@ func (n *poolNode) idleSince() string {
 	return ""
 }
 
+// gpus is the GPUs the node advertises: its status.allocatable
+// nvidia.com/gpu, 0 while the device plugin has not registered them — a
+// node joins minutes before its GPU can be scheduled (the GPU operator
+// installs the driver and the toolkit, then the device plugin advertises the
+// resource) — and for a node not registered yet.
+func (n *poolNode) gpus() int64 {
+	if n.node == nil {
+		return 0
+	}
+	v, found, _ := unstructured.NestedFieldNoCopy(n.node.Object, "status", "allocatable", detect.GPUResource)
+	if !found {
+		return 0
+	}
+	return quantity(v)
+}
+
+// joinedAt is when the node registered (RFC3339): its Node's creation; ""
+// while the claim is launching.
+func (n *poolNode) joinedAt() string {
+	if n.node == nil {
+		return ""
+	}
+	return detect.Timestamp(n.node.GetCreationTimestamp().Time)
+}
+
 // poolLive is what the cluster shows of a pool's nodes, by name.
 type poolLive struct {
 	nodes []*poolNode
@@ -305,7 +330,7 @@ func holder(pod *unstructured.Unstructured, node string) (string, bool) {
 		return "", false
 	}
 	switch nestedString(pod, "status", "phase") {
-	case "Succeeded", "Failed":
+	case podSucceeded, podFailed:
 		return "", false
 	}
 	for _, owner := range pod.GetOwnerReferences() {
@@ -355,19 +380,25 @@ func gpuRequest(pod *unstructured.Unstructured) int64 {
 // containerGPUs is one container's GPU limit, else request.
 func containerGPUs(c map[string]any) int64 {
 	for _, kind := range []string{"limits", "requests"} {
-		v, found, _ := unstructured.NestedFieldNoCopy(c, "resources", kind, detect.GPUResource)
-		if !found {
-			continue
+		if v, found, _ := unstructured.NestedFieldNoCopy(c, "resources", kind, detect.GPUResource); found {
+			return quantity(v)
 		}
-		switch q := v.(type) {
-		case int64:
-			return q
-		case float64:
-			return int64(q)
-		case string:
-			if parsed, err := resource.ParseQuantity(q); err == nil {
-				return parsed.Value()
-			}
+	}
+	return 0
+}
+
+// quantity is a resource quantity as unstructured carries it — a string
+// ("1"), or a number where a fixture or client wrote one — as a count; 0
+// for anything else.
+func quantity(v any) int64 {
+	switch q := v.(type) {
+	case int64:
+		return q
+	case float64:
+		return int64(q)
+	case string:
+		if parsed, err := resource.ParseQuantity(q); err == nil {
+			return parsed.Value()
 		}
 	}
 	return 0
