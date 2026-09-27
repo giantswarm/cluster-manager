@@ -34,8 +34,10 @@ const (
 	// replaced under it (giantswarm/gpu-node-pool#32); 0.7.8's prewarm Job
 	// retries a placeholder the kubelet rejected before the GPU was
 	// advertised and still never replaces a preempted one
-	// (giantswarm/cluster-manager#85).
-	DefaultPoolChartVersion = "0.7.8"
+	// (giantswarm/cluster-manager#85); 0.7.9's placeholder has the memory the
+	// NVIDIA runtime's container start needs and retries a container that
+	// could not start.
+	DefaultPoolChartVersion = "0.7.9"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot
