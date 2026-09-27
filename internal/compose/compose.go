@@ -8,6 +8,10 @@
 package compose
 
 import (
+	"fmt"
+	"strings"
+
+	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -148,6 +152,33 @@ func ociRepositorySpec(url, refKey, ref string) map[string]any {
 		"url":      url,
 		"ref":      map[string]any{refKey: ref},
 	}
+}
+
+// chartSourceSpec is the OCIRepository spec of a chart release: a version the
+// caller named is pinned exactly (a lab's unreleased chart, a test); else the
+// release follows the range from floor to the next major, so a released patch
+// or minor reaches it without a re-run.
+func chartSourceSpec(url, floor string, pinned bool) (map[string]any, error) {
+	if pinned {
+		return ociRepositorySpec(url, "tag", floor), nil
+	}
+	v, err := semver.NewVersion(floor)
+	if err != nil {
+		return nil, fmt.Errorf("chart version %q is not a semantic version: %w", floor, err)
+	}
+	return ociRepositorySpec(url, "semver", fmt.Sprintf(">=%s <%d.0.0", v.String(), v.Major()+1)), nil
+}
+
+// ChartVersion is the chart version an OCIRepository of a composed release
+// names: its pinned tag, else the floor of the range it follows (the version
+// the release resolved to when it was composed).
+func ChartVersion(source *unstructured.Unstructured) string {
+	if tag, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "tag"); tag != "" {
+		return tag
+	}
+	rng, _, _ := unstructured.NestedString(source.Object, "spec", "ref", "semver")
+	floor, _, _ := strings.Cut(strings.TrimPrefix(rng, ">="), " ")
+	return floor
 }
 
 // object builds one composed object of the given resource and kind from its

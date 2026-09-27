@@ -177,11 +177,12 @@ func (pc *poolCommit) body(what, tool string, plan *commitPlan, releases []*unst
 	return b.String()
 }
 
-// chartVersionOf is the tag of the OCIRepository of the release's name.
+// chartVersionOf is the chart version the OCIRepository of the release's
+// name names (compose.ChartVersion).
 func chartVersionOf(objs []*unstructured.Unstructured, name string) string {
 	for _, obj := range objs {
 		if obj.GetKind() == "OCIRepository" && obj.GetName() == name {
-			return nestedString(obj, "spec", "ref", "tag")
+			return compose.ChartVersion(obj)
 		}
 	}
 	return ""

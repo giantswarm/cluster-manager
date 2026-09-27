@@ -56,10 +56,10 @@ serving:
   # with its zone under serving readiness.
   cacheClaim: hf-cache
   # -- Exact `agent-platform` chart version the `<cluster>-agent-platform`
-  # slice release pins. Empty pins the version the installation's own
-  # platform release runs (at least 4.85.0, the first chart that names a
-  # targeted release's children per target); set it only for a lab running an
-  # unreleased chart.
+  # slice release pins. Empty follows the chart from the version the
+  # installation's own platform release runs (at least 4.85.0, the first chart
+  # that names a targeted release's children per target) to the next major;
+  # set it only for a lab running an unreleased chart.
   sliceChartVersion: ""
   # -- cert-manager `ClusterIssuer` the `<cluster>-agent-platform` slice release
   # asks for the certificate of `models.<domain>` when the platform's wildcard

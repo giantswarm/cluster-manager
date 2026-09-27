@@ -227,7 +227,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "4.85.0"
+          "semver": "\u003e=4.85.0 \u003c5.0.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
       }
