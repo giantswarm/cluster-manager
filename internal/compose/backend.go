@@ -49,10 +49,13 @@ type BackendTarget struct {
 	// ServingNamespace is where the InferenceServices go on the target.
 	ServingNamespace string
 	// DiscoveryNamespace is where the slice release renders the
-	// model-serving discovery ConfigMap (agent-platform-model-serving) on
-	// the target: the slice's release namespace, the cluster's org
-	// namespace — not the serving namespace model-manager would assume.
-	// Empty leaves the document without a discovery block.
+	// model-serving discovery ConfigMap (agent-platform-model-serving) and
+	// the serving presets on the target, which model-manager reads them
+	// from: the slice's namespace there (SliceTargetNamespace) —
+	// SliceWorkloadNamespace on a workload cluster, the org namespace on
+	// the installation's own cluster —, not the serving namespace
+	// model-manager would assume. Empty leaves the document without a
+	// discovery block.
 	DiscoveryNamespace string
 }
 
