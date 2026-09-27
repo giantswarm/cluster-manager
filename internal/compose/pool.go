@@ -30,7 +30,12 @@ const (
 	// weights died at engine start under the unit's 8 MB default
 	// (giantswarm/agent-platform#564). 0.7.4's helm.sh/chart label is a
 	// valid label value for any chart version (giantswarm/gpu-node-pool#27).
-	DefaultPoolChartVersion = "0.7.4"
+	// 0.7.7 consolidates only empty nodes, so a node serving a model is never
+	// replaced under it (giantswarm/gpu-node-pool#32); 0.7.8's prewarm Job
+	// retries a placeholder the kubelet rejected before the GPU was
+	// advertised and still never replaces a preempted one
+	// (giantswarm/cluster-manager#85).
+	DefaultPoolChartVersion = "0.7.8"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot

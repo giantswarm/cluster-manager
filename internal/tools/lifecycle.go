@@ -68,6 +68,15 @@ const (
 	// jobReasonDeadline is the Job controller's reason when
 	// activeDeadlineSeconds passed with the Job still active: no node came.
 	jobReasonDeadline = "DeadlineExceeded"
+	// jobFailed is the Job's terminal condition for a Job that did not
+	// complete.
+	jobFailed = "Failed"
+)
+
+// The pod phases of a pod that has ended.
+const (
+	podSucceeded = "Succeeded"
+	podFailed    = "Failed"
 )
 
 // Step is one step of a pool's life: the pool release Ready, the MachinePool
@@ -264,7 +273,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release), r.launch))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
-		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal(r.launch)))
+		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal(r.launch), r.live))
 	}
 	if removing {
 		return PhaseRemoving, steps, true, r.pending
@@ -309,7 +318,24 @@ func poolPhase(steps []Step) Phase {
 // terminating while the first workload takes it. A Job that is gone after
 // the release installed — its TTL removed it ten minutes after it ended, or
 // prewarm was set on an existing pool — is done, saying so.
-func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
+//
+// The pool's nodes (live) speak beside the Job and its pod
+// (giantswarm/cluster-manager#85): the Job and its pod alone mis-described a
+// healthy pool twice. A node joins minutes before it advertises its GPU (the
+// GPU operator installs the driver and the toolkit, then the device plugin
+// registers nvidia.com/gpu), so a pod Pending on a pool whose node has joined
+// waits for the GPU, not for the node, and a pod the node's kubelet rejected
+// in that window (a Failed pod with the kubelet's reason, not a preemption —
+// a preempted pod is deleted) left the Job Failed under backoffLimit 0 while
+// the node came up: the step waits for the GPU while the node advertises
+// none, and is done once it does. A workload holding a node of the pool (a
+// GPU pod or a KServe predictor — what makes a node busy, see holders) is the
+// placeholder's purpose reached, whatever the Job or its pod say: the first
+// model took the pool's GPU, possibly before the placeholder was placed,
+// which then waits behind it at negative priority until its deadline; done,
+// naming the workload. A failure stays one where it is one: the placeholder's
+// container failed, or its pod was rejected and the pool has no node left.
+func prewarmStep(p *prewarmState, releaseDone bool, refusal string, live *poolLive) Step {
 	st := Step{Name: StepPrewarm, State: StepDone}
 	job := p.namespace + "/" + p.name
 	if p.job == nil {
@@ -327,9 +353,18 @@ func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
 		st.Message = "finished: the hold ended without a workload; Karpenter consolidates the empty node"
 		return st
 	}
-	if cond, found := detect.ConditionOf(p.job, "Failed"); found && cond.Status == "True" {
+	served, joined := placeholderNodes(live)
+	pod := newestPod(p.pods)
+	if cond, found := detect.ConditionOf(p.job, jobFailed); found && cond.Status == "True" {
 		st.FinishedAt = cond.LastTransitionTime
 		detail := strings.TrimSpace(cond.Reason + " " + strings.Join(strings.Fields(cond.Message), " "))
+		if served != nil {
+			st.Message = servedMessage(served) + "; the placeholder Job has ended (" + detail + ")"
+			return st
+		}
+		if why, rejected, failed := podFailure(pod); failed {
+			return failedPodStep(st, pod, why, rejected, joined)
+		}
 		if cond.Reason == jobReasonDeadline {
 			st.State = StepFailed
 			st.Message = fmt.Sprintf("no node came within the placeholder's deadline of %d s (%s): ", nestedInt(p.job, "spec", "activeDeadlineSeconds"), detail)
@@ -344,7 +379,6 @@ func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
 		return st
 	}
 	st.State = StepInProgress
-	pod := newestPod(p.pods)
 	if pod == nil {
 		st.Message = "placeholder Job " + job + " created, its pod not yet"
 		return st
@@ -357,6 +391,26 @@ func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
 	case phase == "Running":
 		st.Since = latest(st.Since, nestedString(pod, "status", "startTime"))
 		st.Message = "holding node " + node + " until the first workload preempts the placeholder or its hold ends"
+	case served != nil:
+		st.State, st.FinishedAt = StepDone, latest(st.Since, served.joinedAt())
+		st.Message = servedMessage(served) + "; the placeholder's pod " + pod.GetName() + " (" + phase + ") waits behind it at negative priority until the Job's deadline"
+	case phase == podFailed:
+		// The Job has not concluded on it yet: the controller marks the Job
+		// Failed within seconds of its pod's failure.
+		why, rejected, _ := podFailure(pod)
+		return failedPodStep(st, pod, why, rejected, joined)
+	case phase == "Pending" && node != "" && !unscheduled(pod):
+		st.Since = latest(st.Since, detect.Timestamp(pod.GetCreationTimestamp().Time))
+		st.Message = "starting on node " + node + ": the scheduler placed the placeholder, its container is being created"
+	case phase == "Pending" && joined != nil:
+		st.Since = latest(st.Since, latest(detect.Timestamp(pod.GetCreationTimestamp().Time), joined.joinedAt()))
+		st.Message = waitingMessage(joined)
+		if gpus := joined.gpus(); gpus > 0 {
+			st.Message = fmt.Sprintf("pending: the pool's node %s advertises %d %s, the scheduler has not placed the placeholder yet", joined.name(), gpus, detect.GPUResource)
+		}
+		if cond, found := detect.ConditionOf(pod, "PodScheduled"); found && cond.Status != "True" && cond.Message != "" {
+			st.Message += " (" + strings.Join(strings.Fields(cond.Message), " ") + ")"
+		}
 	case phase == "Pending" && refusal != "":
 		st.Since = latest(st.Since, detect.Timestamp(pod.GetCreationTimestamp().Time))
 		st.Message = "pending: the placeholder waits for the pool's first node, which Karpenter could not launch — " + refusal + " (the nodes step carries Karpenter's message)"
@@ -370,6 +424,106 @@ func prewarmStep(p *prewarmState, releaseDone bool, refusal string) Step {
 		st.Message = "placeholder pod " + pod.GetName() + " " + phase + "; the Job has not concluded yet"
 	}
 	return st
+}
+
+// placeholderNodes reads the pool's registered nodes for the prewarm step:
+// served is the first a workload holds (holders: a GPU pod or a KServe
+// predictor; the placeholder itself, at negative priority, never counts),
+// joined the first registered one; either nil where the pool has none, both
+// nil where the cluster cannot be read. A terminating node is Karpenter's and
+// speaks for neither.
+func placeholderNodes(live *poolLive) (served, joined *poolNode) {
+	if live == nil {
+		return nil, nil
+	}
+	for _, n := range live.nodes {
+		if n.node == nil || n.terminating() {
+			continue
+		}
+		if served == nil && len(n.holders) > 0 {
+			served = n
+		}
+		if joined == nil {
+			joined = n
+		}
+	}
+	return served, joined
+}
+
+// servedMessage names the workload on the pool's node: the placeholder's
+// purpose, reached.
+func servedMessage(n *poolNode) string {
+	return "the first workload runs on the pool's node " + n.name() + ": " + strings.Join(n.holders, ", ")
+}
+
+// waitingMessage says the placeholder waits for the node's GPU: the node has
+// joined, its device plugin has not advertised nvidia.com/gpu yet.
+func waitingMessage(n *poolNode) string {
+	return fmt.Sprintf("waiting for the pool's node %s to advertise its GPU: it joined at %s, its device plugin has not registered %s yet (the GPU operator installs the driver and the container toolkit first)", n.name(), n.joinedAt(), detect.GPUResource)
+}
+
+// podFailure reads why the placeholder's pod failed: rejected when the
+// node's kubelet refused it at admission (the pod's status.reason — for a GPU
+// pod UnexpectedAdmissionError while the device plugin is not serving the
+// resource), else the hold container's termination. failed is false for no
+// pod, one still running or being deleted, and one the scheduler or the node
+// disrupted (a DisruptionTarget condition: preemption, eviction) — those are
+// the preemption the step already words.
+func podFailure(pod *unstructured.Unstructured) (why string, rejected, failed bool) {
+	if pod == nil || pod.GetDeletionTimestamp() != nil || nestedString(pod, "status", "phase") != podFailed {
+		return "", false, false
+	}
+	if cond, found := detect.ConditionOf(pod, "DisruptionTarget"); found && cond.Status == "True" {
+		return "", false, false
+	}
+	if reason := nestedString(pod, "status", "reason"); reason != "" {
+		return strings.TrimSpace(reason + ": " + strings.Join(strings.Fields(nestedString(pod, "status", "message")), " ")), true, true
+	}
+	statuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
+	for _, s := range statuses {
+		if m, ok := s.(map[string]any); ok {
+			if term, found, _ := unstructured.NestedMap(m, "state", "terminated"); found {
+				reason, _ := term["reason"].(string)
+				code, _ := number(term["exitCode"])
+				return fmt.Sprintf("container %v terminated: %s, exit code %d", m["name"], reason, int64(code)), false, true
+			}
+		}
+	}
+	return "the pod failed without a reason recorded", false, true
+}
+
+// failedPodStep words a placeholder whose pod failed. Rejected by the node's
+// kubelet — the window between the node joining and its GPU being advertised
+// —, the node decides: still advertising no GPU, the step waits for it; the
+// GPU advertised, the node is up and the step done (the Job does not replace
+// the pod, backoffLimit 0, so nothing holds the node until the first
+// workload); no node left, failed. The hold container failing is a failure
+// whatever the node.
+func failedPodStep(st Step, pod *unstructured.Unstructured, why string, rejected bool, joined *poolNode) Step {
+	node := nestedString(pod, "spec", "nodeName")
+	switch {
+	case !rejected:
+		st.State = StepFailed
+		st.Message = "the placeholder's pod " + pod.GetName() + " failed on node " + node + " (" + why + "): check the placeholder image and the node's kubelet log"
+	case joined != nil && joined.gpus() == 0:
+		st.State, st.FinishedAt = StepInProgress, ""
+		st.Since = latest(st.Since, joined.joinedAt())
+		st.Message = waitingMessage(joined) + "; the node rejected the placeholder's pod " + pod.GetName() + " meanwhile (" + why + "), which the Job does not replace (backoffLimit 0): the node stays, and the first workload is placed on it once the GPU is advertised"
+	case joined != nil:
+		st.State, st.FinishedAt = StepDone, latest(st.FinishedAt, latest(st.Since, joined.joinedAt()))
+		st.Message = fmt.Sprintf("the pool's node %s is up and advertises %d %s; it rejected the placeholder's pod %s before (%s), which the Job does not replace (backoffLimit 0): nothing holds the node until the first workload, and Karpenter consolidates it if it stays empty", joined.name(), joined.gpus(), detect.GPUResource, pod.GetName(), why)
+	default:
+		st.State = StepFailed
+		st.Message = "the placeholder's pod " + pod.GetName() + " was rejected by node " + node + " (" + why + ") and the pool has no node now: the first predictor launches one"
+	}
+	return st
+}
+
+// unscheduled: the pod's PodScheduled condition is False — the scheduler
+// has not placed it, whatever spec.nodeName says.
+func unscheduled(pod *unstructured.Unstructured) bool {
+	cond, found := detect.ConditionOf(pod, "PodScheduled")
+	return found && cond.Status == "False"
 }
 
 // newestPod is the latest-created of the placeholder's pods (one, with

@@ -284,7 +284,211 @@ func TestPrewarmStep(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.state.namespace, tc.state.name = "org-acme", "mc-gpu-l4-prewarm"
-			st := prewarmStep(&tc.state, tc.releaseDone, tc.refusal)
+			st := prewarmStep(&tc.state, tc.releaseDone, tc.refusal, nil)
+			assert.Equal(t, StepPrewarm, st.Name)
+			assert.Equal(t, tc.want, st.State)
+			assert.Equal(t, tc.message, st.Message)
+			assert.Equal(t, tc.since, st.Since)
+			assert.Equal(t, tc.finished, st.FinishedAt)
+		})
+	}
+}
+
+// TestPrewarmStepReadsTheNodes (giantswarm/cluster-manager#85): the pool's
+// nodes speak beside the placeholder's Job and pod. A node that joined but
+// advertises no GPU yet is waited for — the pod Pending, or rejected by the
+// node's kubelet in that window and the Job Failed under backoffLimit 0 —,
+// never read as a preemption or a failure; the GPU advertised, the step is
+// done; a workload on the pool's node (the first model served) is done
+// whatever the Job and its pod say — the placeholder Pending behind it for
+// the pool's whole life, or ended at its deadline; a hold container that
+// failed, or a rejected pod with no node left, is failed with the reason.
+func TestPrewarmStepReadsTheNodes(t *testing.T) {
+	const nodeName = "ip-10-0-1-23.eu-central-1.compute.internal"
+	job := func(status map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "batch/v1", "kind": "Job",
+			"metadata": map[string]any{"name": "mc-gpu-l4-prewarm", "namespace": "org-acme", "creationTimestamp": "2026-09-18T06:00:08Z"},
+			"spec":     map[string]any{"activeDeadlineSeconds": int64(1500)},
+			"status":   status,
+		}}
+	}
+	active := func() *unstructured.Unstructured { return job(map[string]any{"active": int64(1)}) }
+	failedJob := func(reason, message, at string) *unstructured.Unstructured {
+		return job(map[string]any{"conditions": []any{map[string]any{"type": "Failed", "status": "True", "reason": reason, "message": message, "lastTransitionTime": at}}})
+	}
+	pod := func(phase, bound string, status map[string]any) []unstructured.Unstructured {
+		status["phase"] = phase
+		spec := map[string]any{}
+		if bound != "" {
+			spec["nodeName"] = bound
+		}
+		return []unstructured.Unstructured{{Object: map[string]any{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": map[string]any{"name": "mc-gpu-l4-prewarm-abc12", "namespace": "org-acme", "creationTimestamp": "2026-09-18T06:00:09Z"},
+			"spec":     spec, "status": status,
+		}}}
+	}
+	unschedulable := func() map[string]any {
+		return map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/6 nodes are available: 6 Insufficient nvidia.com/gpu."}}}
+	}
+	rejected := func() []unstructured.Unstructured {
+		return pod("Failed", nodeName, map[string]any{"reason": "UnexpectedAdmissionError", "message": "Allocate failed due to no healthy devices present; cannot allocate unhealthy devices nvidia.com/gpu, which is unexpected"})
+	}
+	// node is the pool's node as the cluster shows it: joined at 06:04:07,
+	// advertising gpus (none: the device plugin has not registered them),
+	// held by the given workloads.
+	node := func(gpus string, holders ...string) *poolLive {
+		status := map[string]any{"allocatable": map[string]any{"cpu": "7910m"}}
+		if gpus != "" {
+			status["allocatable"].(map[string]any)[detect.GPUResource] = gpus
+		}
+		n := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1", "kind": "Node",
+			"metadata": map[string]any{"name": nodeName, "creationTimestamp": "2026-09-18T06:04:07Z"},
+			"status":   status,
+		}}
+		return &poolLive{nodes: []*poolNode{{node: n, holders: holders}}}
+	}
+	const predictor = "model-serving/qwen3-8b-fp8-kserve-6649fb66c8-dllt7 (1 GPU)"
+	cases := []struct {
+		name     string
+		state    prewarmState
+		live     *poolLive
+		want     string
+		message  string
+		since    string
+		finished string
+	}{
+		{
+			name:  "fresh node without its GPU: waiting for the GPU",
+			state: prewarmState{job: active(), pods: pod("Pending", "", unschedulable())},
+			live:  node(""),
+			want:  StepInProgress,
+			message: "waiting for the pool's node " + nodeName + " to advertise its GPU: it joined at 2026-09-18T06:04:07Z, its device plugin has not registered nvidia.com/gpu yet (the GPU operator installs the driver and the container toolkit first) " +
+				"(0/6 nodes are available: 6 Insufficient nvidia.com/gpu.)",
+			since: "2026-09-18T06:04:07Z",
+		},
+		{
+			name:    "fresh node advertising zero GPUs: waiting for the GPU",
+			state:   prewarmState{job: active(), pods: pod("Pending", "", map[string]any{})},
+			live:    node("0"),
+			want:    StepInProgress,
+			message: "waiting for the pool's node " + nodeName + " to advertise its GPU: it joined at 2026-09-18T06:04:07Z, its device plugin has not registered nvidia.com/gpu yet (the GPU operator installs the driver and the container toolkit first)",
+			since:   "2026-09-18T06:04:07Z",
+		},
+		{
+			name:  "rejected by the node before its GPU, Job failed: waiting for the GPU, never BackoffLimitExceeded",
+			state: prewarmState{job: failedJob("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:04:41Z"), pods: rejected()},
+			live:  node(""),
+			want:  StepInProgress,
+			message: "waiting for the pool's node " + nodeName + " to advertise its GPU: it joined at 2026-09-18T06:04:07Z, its device plugin has not registered nvidia.com/gpu yet (the GPU operator installs the driver and the container toolkit first); " +
+				"the node rejected the placeholder's pod mc-gpu-l4-prewarm-abc12 meanwhile (UnexpectedAdmissionError: Allocate failed due to no healthy devices present; cannot allocate unhealthy devices nvidia.com/gpu, which is unexpected), which the Job does not replace (backoffLimit 0): the node stays, and the first workload is placed on it once the GPU is advertised",
+			since: "2026-09-18T06:04:07Z",
+		},
+		{
+			name:  "rejected, the Job not concluded yet: waiting for the GPU",
+			state: prewarmState{job: active(), pods: rejected()},
+			live:  node(""),
+			want:  StepInProgress,
+			message: "waiting for the pool's node " + nodeName + " to advertise its GPU: it joined at 2026-09-18T06:04:07Z, its device plugin has not registered nvidia.com/gpu yet (the GPU operator installs the driver and the container toolkit first); " +
+				"the node rejected the placeholder's pod mc-gpu-l4-prewarm-abc12 meanwhile (UnexpectedAdmissionError: Allocate failed due to no healthy devices present; cannot allocate unhealthy devices nvidia.com/gpu, which is unexpected), which the Job does not replace (backoffLimit 0): the node stays, and the first workload is placed on it once the GPU is advertised",
+			since: "2026-09-18T06:04:07Z",
+		},
+		{
+			name:     "rejected before its GPU, the GPU advertised since: done",
+			state:    prewarmState{job: failedJob("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:04:41Z"), pods: rejected()},
+			live:     node("1"),
+			want:     StepDone,
+			message:  "the pool's node " + nodeName + " is up and advertises 1 nvidia.com/gpu; it rejected the placeholder's pod mc-gpu-l4-prewarm-abc12 before (UnexpectedAdmissionError: Allocate failed due to no healthy devices present; cannot allocate unhealthy devices nvidia.com/gpu, which is unexpected), which the Job does not replace (backoffLimit 0): nothing holds the node until the first workload, and Karpenter consolidates it if it stays empty",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:04:41Z",
+		},
+		{
+			name:    "GPU advertised, the placeholder not placed yet: pending on the scheduler",
+			state:   prewarmState{job: active(), pods: pod("Pending", "", unschedulable())},
+			live:    node("1"),
+			want:    StepInProgress,
+			message: "pending: the pool's node " + nodeName + " advertises 1 nvidia.com/gpu, the scheduler has not placed the placeholder yet (0/6 nodes are available: 6 Insufficient nvidia.com/gpu.)",
+			since:   "2026-09-18T06:04:07Z",
+		},
+		{
+			name:    "GPU advertised, the placeholder bound: starting",
+			state:   prewarmState{job: active(), pods: pod("Pending", nodeName, map[string]any{})},
+			live:    node("1"),
+			want:    StepInProgress,
+			message: "starting on node " + nodeName + ": the scheduler placed the placeholder, its container is being created",
+			since:   "2026-09-18T06:00:09Z",
+		},
+		{
+			name:    "GPU advertised, the placeholder running: holding the node",
+			state:   prewarmState{job: active(), pods: pod("Running", nodeName, map[string]any{"startTime": "2026-09-18T06:04:41Z"})},
+			live:    node("1"),
+			want:    StepInProgress,
+			message: "holding node " + nodeName + " until the first workload preempts the placeholder or its hold ends",
+			since:   "2026-09-18T06:04:41Z",
+		},
+		{
+			name:     "GPU advertised, the hold ended: done",
+			state:    prewarmState{job: job(map[string]any{"completionTime": "2026-09-18T06:19:45Z", "conditions": []any{map[string]any{"type": "Complete", "status": "True", "lastTransitionTime": "2026-09-18T06:19:45Z"}}})},
+			live:     node("1"),
+			want:     StepDone,
+			message:  "finished: the hold ended without a workload; Karpenter consolidates the empty node",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:19:45Z",
+		},
+		{
+			name:     "node Ready serving a model, the placeholder Pending behind it: done",
+			state:    prewarmState{job: active(), pods: pod("Pending", "", unschedulable())},
+			live:     node("1", predictor),
+			want:     StepDone,
+			message:  "the first workload runs on the pool's node " + nodeName + ": " + predictor + "; the placeholder's pod mc-gpu-l4-prewarm-abc12 (Pending) waits behind it at negative priority until the Job's deadline",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:04:07Z",
+		},
+		{
+			name:     "node serving a model, the placeholder ended at its deadline: done, not failed",
+			state:    prewarmState{job: failedJob("DeadlineExceeded", "Job was active longer than specified deadline", "2026-09-18T06:25:08Z")},
+			live:     node("1", predictor),
+			want:     StepDone,
+			message:  "the first workload runs on the pool's node " + nodeName + ": " + predictor + "; the placeholder Job has ended (DeadlineExceeded Job was active longer than specified deadline)",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:25:08Z",
+		},
+		{
+			name:     "preempted, its pod kept with the disruption: preempted",
+			state:    prewarmState{job: failedJob("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:09:02Z"), pods: pod("Failed", nodeName, map[string]any{"conditions": []any{map[string]any{"type": "DisruptionTarget", "status": "True", "reason": "PreemptionByScheduler"}}})},
+			live:     node("1"),
+			want:     StepDone,
+			message:  "preempted: the first workload took the placeholder's node before its hold ended (BackoffLimitExceeded Job has reached the specified backoff limit)",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:09:02Z",
+		},
+		{
+			name:     "rejected and the pool has no node left: failed",
+			state:    prewarmState{job: failedJob("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:04:41Z"), pods: rejected()},
+			live:     &poolLive{},
+			want:     StepFailed,
+			message:  "the placeholder's pod mc-gpu-l4-prewarm-abc12 was rejected by node " + nodeName + " (UnexpectedAdmissionError: Allocate failed due to no healthy devices present; cannot allocate unhealthy devices nvidia.com/gpu, which is unexpected) and the pool has no node now: the first predictor launches one",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:04:41Z",
+		},
+		{
+			name: "the hold container failed: failed with its reason",
+			state: prewarmState{job: failedJob("BackoffLimitExceeded", "Job has reached the specified backoff limit", "2026-09-18T06:05:02Z"), pods: pod("Failed", nodeName, map[string]any{"containerStatuses": []any{
+				map[string]any{"name": "hold", "state": map[string]any{"terminated": map[string]any{"reason": "Error", "exitCode": int64(127)}}},
+			}})},
+			live:     node("1"),
+			want:     StepFailed,
+			message:  "the placeholder's pod mc-gpu-l4-prewarm-abc12 failed on node " + nodeName + " (container hold terminated: Error, exit code 127): check the placeholder image and the node's kubelet log",
+			since:    "2026-09-18T06:00:08Z",
+			finished: "2026-09-18T06:05:02Z",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.state.namespace, tc.state.name = "org-acme", "mc-gpu-l4-prewarm"
+			st := prewarmStep(&tc.state, true, "", tc.live)
 			assert.Equal(t, StepPrewarm, st.Name)
 			assert.Equal(t, tc.want, st.State)
 			assert.Equal(t, tc.message, st.Message)
