@@ -5,15 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"path"
-	"slices"
 	"strings"
 
 	"github.com/giantswarm/gitops-commit/commit"
+	"github.com/giantswarm/gitops-commit/layout"
 	"github.com/giantswarm/gitops-commit/provenance"
-	"github.com/giantswarm/gitops-commit/sopsenc"
-	yaml "go.yaml.in/yaml/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -43,17 +39,14 @@ const (
 	// entry is added there) or not (Flux generates one that includes every
 	// directory with a kustomization.yaml).
 	CommitDirectory = "cluster-manager"
-
-	kustomizationFile = "kustomization.yaml"
-	sopsConfigFile    = ".sops.yaml"
 )
 
 // File actions of a commit.
 const (
-	fileAdd       = "add"
-	fileUpdate    = "update"
-	fileRemove    = "remove"
-	fileUnchanged = "unchanged"
+	fileAdd       = string(layout.Add)
+	fileUpdate    = string(layout.Update)
+	fileRemove    = string(layout.Remove)
+	fileUnchanged = string(layout.Unchanged)
 )
 
 // GitHubRemote is what commit mode needs of GitHub: the pull request seams
@@ -119,10 +112,13 @@ type commitLocation struct {
 	prune         bool
 }
 
-// dir is the repository-relative directory cluster-manager writes to.
-func (l commitLocation) dir() string {
-	return path.Join(l.Directory, CommitDirectory)
+// directory is cluster-manager's directory in the repository.
+func (l commitLocation) directory() layout.Directory {
+	return layout.Directory{Location: l.Location, Name: CommitDirectory}
 }
+
+// dir is the repository-relative directory cluster-manager writes to.
+func (l commitLocation) dir() string { return l.directory().Path() }
 
 // target is the answer's view of the location.
 func (l commitLocation) target() *CommitTarget {
@@ -221,17 +217,13 @@ func commitError(err error) error {
 // that object's UID, which a file in git must not carry — the cluster
 // recreated from the same repository would have its pools collected — and
 // the Kustomization that owns the cluster's files removes them with it.
-func releaseFiles(dir string, objs []*unstructured.Unstructured) (map[string][]byte, error) {
+func releaseFiles(dir layout.Directory, objs []*unstructured.Unstructured) (map[string][]byte, error) {
 	docs := map[string][][]byte{}
 	var order []string
 	for _, obj := range objs {
 		obj = obj.DeepCopy()
 		obj.SetOwnerReferences(nil)
-		name := obj.GetName() + ".yaml"
-		if obj.GetKind() == "Secret" {
-			name = obj.GetName() + "-secret.enc.yaml"
-		}
-		p := path.Join(dir, name)
+		p := dir.ObjectFile(obj.GetKind(), obj.GetName())
 		raw, err := sigsyaml.Marshal(obj.Object)
 		if err != nil {
 			return nil, fmt.Errorf("render %s %s: %w", obj.GetKind(), obj.GetName(), err)
@@ -248,13 +240,12 @@ func releaseFiles(dir string, objs []*unstructured.Unstructured) (map[string][]b
 	return files, nil
 }
 
-// commitPlan is the change set of one write: the files by path (nil
-// content: removed), their actions, and the rendered secret paths.
+// commitPlan is the change set of one write in cluster-manager's directory
+// (gitops-commit's layout) with the remote that lands it.
 type commitPlan struct {
-	loc     commitLocation
-	remote  GitHubRemote
-	files   map[string][]byte
-	actions []CommitFile
+	*layout.Plan
+	loc    commitLocation
+	remote GitHubRemote
 }
 
 // readBase reads a file at the base branch; nil without error when absent.
@@ -269,268 +260,50 @@ func readBase(ctx context.Context, remote GitHubRemote, loc commitLocation, p st
 	return raw, nil
 }
 
-// planCommit decides every file of the change against the base: written
-// files (add, update or unchanged — a secret file that exists is left as it
-// is, never re-encrypted), removed files that exist, and the kustomization
-// entries: the directory's kustomization.yaml lists every file in it, and
-// the parent's kustomization.yaml, where there is one, lists the directory.
-// Secret files are encrypted for the recipients of the repository's
-// .sops.yaml.
+// planCommit decides every file of the change against the base
+// (layout.Build): written files, removed files that exist, a secret file
+// encrypted for the repository's .sops.yaml or left as it is when it exists,
+// and the kustomization entries of the directory and its parent.
 func planCommit(ctx context.Context, remote GitHubRemote, loc commitLocation, write map[string][]byte, remove []string) (*commitPlan, error) {
-	dir := loc.dir()
-	plan := &commitPlan{loc: loc, remote: remote, files: map[string][]byte{}}
-	base := map[string][]byte{}
-	read := func(p string) ([]byte, error) {
-		if raw, ok := base[p]; ok {
-			return raw, nil
-		}
-		raw, err := readBase(ctx, remote, loc, p)
-		base[p] = raw
-		return raw, err
+	plan, err := layout.Build(ctx, remote, loc.directory(), write, remove)
+	var secret *layout.SecretError
+	if errors.As(err, &secret) {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("%s holds the pool's registry credentials, and %s: cluster-manager commits a secret only encrypted for the repository's age recipients — use mode apply, or give the path an age creation rule", strings.Join(secret.Paths, ", "), secret.Reason)}
 	}
-	var secrets []sopsenc.File
-	for _, p := range slices.Sorted(maps.Keys(write)) {
-		old, err := read(p)
-		if err != nil {
-			return nil, err
-		}
-		if sopsenc.IsSecretFile(p) {
-			if old != nil {
-				plan.actions = append(plan.actions, CommitFile{Path: p, Action: fileUnchanged})
-				continue
-			}
-			secrets = append(secrets, sopsenc.File{Path: p, Content: write[p]})
-			continue
-		}
-		plan.put(p, old, write[p])
-	}
-	if len(secrets) > 0 {
-		if err := plan.encrypt(read, secrets); err != nil {
-			return nil, err
-		}
-	}
-	for _, p := range remove {
-		old, err := read(p)
-		if err != nil {
-			return nil, err
-		}
-		if old != nil {
-			plan.files[p] = nil
-			plan.actions = append(plan.actions, CommitFile{Path: p, Action: fileRemove})
-		}
-	}
-	// The directory's own kustomization.yaml: every file it keeps.
-	kpath := path.Join(dir, kustomizationFile)
-	old, err := read(kpath)
 	if err != nil {
-		return nil, err
+		return nil, commitError(err)
 	}
-	resources, err := kustomizationResources(old)
-	if err != nil {
-		return nil, fmt.Errorf("%s in %s: %w", kpath, loc.Repository, err)
-	}
-	for p, content := range plan.files {
-		name := strings.TrimPrefix(p, dir+"/")
-		if content == nil {
-			resources = slices.DeleteFunc(resources, func(r string) bool { return r == name })
-		} else if !slices.Contains(resources, name) {
-			resources = append(resources, name)
-		}
-	}
-	for _, f := range plan.actions {
-		if name := strings.TrimPrefix(f.Path, dir+"/"); f.Action == fileUnchanged && !slices.Contains(resources, name) {
-			resources = append(resources, name)
-		}
-	}
-	slices.Sort(resources)
-	emptied := len(resources) == 0
-	if emptied {
-		if old != nil {
-			plan.files[kpath] = nil
-			plan.actions = append(plan.actions, CommitFile{Path: kpath, Action: fileRemove})
-		}
-	} else {
-		updated, err := withResources(old, resources)
-		if err != nil {
-			return nil, fmt.Errorf("%s in %s: %w", kpath, loc.Repository, err)
-		}
-		plan.put(kpath, old, updated)
-	}
-	// The parent's kustomization.yaml, when there is one, lists the
-	// directory while it has files.
-	ppath := path.Join(loc.Directory, kustomizationFile)
-	parent, err := read(ppath)
-	if err != nil {
-		return nil, err
-	}
-	if parent != nil {
-		entries, err := kustomizationResources(parent)
-		if err != nil {
-			return nil, fmt.Errorf("%s in %s: %w", ppath, loc.Repository, err)
-		}
-		has := slices.ContainsFunc(entries, isCommitDirectory)
-		switch {
-		case !emptied && !has:
-			updated, err := withResources(parent, append(entries, CommitDirectory))
-			if err != nil {
-				return nil, fmt.Errorf("%s in %s: %w", ppath, loc.Repository, err)
-			}
-			plan.put(ppath, parent, updated)
-		case emptied && has:
-			updated, err := withResources(parent, slices.DeleteFunc(entries, isCommitDirectory))
-			if err != nil {
-				return nil, fmt.Errorf("%s in %s: %w", ppath, loc.Repository, err)
-			}
-			plan.put(ppath, parent, updated)
-		}
-	}
-	slices.SortFunc(plan.actions, func(a, b CommitFile) int { return strings.Compare(a.Path, b.Path) })
-	return plan, nil
+	return &commitPlan{Plan: plan, loc: loc, remote: remote}, nil
 }
 
-func isCommitDirectory(r string) bool {
-	return strings.TrimSuffix(strings.TrimPrefix(r, "./"), "/") == CommitDirectory
+// actions are the plan's files as the answer reports them.
+func (p *commitPlan) actions() []CommitFile {
+	out := make([]CommitFile, len(p.Files))
+	for i, f := range p.Files {
+		out[i] = CommitFile{Path: f.Path, Action: string(f.Action), Content: string(f.Content)}
+	}
+	return out
 }
-
-// put records a written file against its base content.
-func (p *commitPlan) put(path string, old, content []byte) {
-	switch {
-	case old == nil:
-		p.files[path] = content
-		p.actions = append(p.actions, CommitFile{Path: path, Action: fileAdd, Content: string(content)})
-	case bytes.Equal(old, content):
-		p.actions = append(p.actions, CommitFile{Path: path, Action: fileUnchanged})
-	default:
-		p.files[path] = content
-		p.actions = append(p.actions, CommitFile{Path: path, Action: fileUpdate, Content: string(content)})
-	}
-}
-
-// encrypt adds the new secret files, encrypted for the recipients the
-// repository's .sops.yaml names for their paths.
-func (p *commitPlan) encrypt(read func(string) ([]byte, error), secrets []sopsenc.File) error {
-	cfg, err := read(sopsConfigFile)
-	if err != nil {
-		return err
-	}
-	paths := make([]string, len(secrets))
-	for i, f := range secrets {
-		paths[i] = f.Path
-	}
-	refuse := func(why string) error {
-		return &ErrRefused{Reason: fmt.Sprintf("%s holds the pool's registry credentials, and %s: cluster-manager commits a secret only encrypted for the repository's age recipients — use mode apply, or give the path an age creation rule", strings.Join(paths, ", "), why)}
-	}
-	if cfg == nil {
-		return refuse(p.loc.Repository.String() + " has no " + sopsConfigFile)
-	}
-	enc, err := sopsenc.New(cfg)
-	if err != nil {
-		return refuse(fmt.Sprintf("its %s cannot be used (%v)", sopsConfigFile, err))
-	}
-	out, err := enc.Encrypt(secrets, func(string) bool { return false })
-	if err != nil {
-		return refuse(fmt.Sprintf("its %s does not cover them (%v)", sopsConfigFile, err))
-	}
-	for _, f := range secrets {
-		p.files[f.Path] = out[f.Path]
-		p.actions = append(p.actions, CommitFile{Path: f.Path, Action: fileAdd})
-	}
-	return nil
-}
-
-// changed reports whether the plan writes or removes anything.
-func (p *commitPlan) changed() bool { return len(p.files) > 0 }
 
 // open lands the plan as one pull request as the caller, or reports it on a
 // dry run. Nothing to change opens none.
 func (p *commitPlan) open(ctx context.Context, gh *identity.GitHub, branch, title, body string, dryRun bool) (*CommitResult, error) {
 	out := &CommitResult{
 		Repository: p.loc.Repository.String(), Base: p.loc.Branch, Directory: p.loc.dir(),
-		Kustomization: p.loc.kustomization, Prune: p.loc.prune, Branch: branch, Files: p.actions, Author: gh.Login,
+		Kustomization: p.loc.kustomization, Prune: p.loc.prune, Branch: branch, Files: p.actions(), Author: gh.Login,
 	}
 	if !dryRun {
 		for i := range out.Files {
 			out.Files[i].Content = ""
 		}
 	}
-	if dryRun || !p.changed() {
+	if dryRun || !p.Changed() {
 		return out, nil
 	}
-	prs, err := commit.Open(ctx, p.remote, commit.Request{Branch: branch, Title: title, Body: body}, []commit.Change{{Location: p.loc.Location, Files: p.files}})
+	prs, err := commit.Open(ctx, p.remote, commit.Request{Branch: branch, Title: title, Body: body}, []commit.Change{p.Change()})
 	if err != nil {
 		return nil, commitError(err)
 	}
 	out.PullRequest, out.Number = prs[0].URL, prs[0].Number
 	return out, nil
-}
-
-// kustomizationResources is the resources list of a kustomization.yaml
-// (nil content: none).
-func kustomizationResources(raw []byte) ([]string, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	var k struct {
-		Resources []string `json:"resources"`
-	}
-	if err := sigsyaml.Unmarshal(raw, &k); err != nil {
-		return nil, err
-	}
-	return k.Resources, nil
-}
-
-// withResources is the kustomization.yaml with its resources list replaced,
-// every other key and comment kept; a new file for nil content.
-func withResources(raw []byte, resources []string) ([]byte, error) {
-	var doc yaml.Node
-	if raw == nil {
-		raw = []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n")
-	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("not a YAML mapping")
-	}
-	root := doc.Content[0]
-	// An entry that stays keeps its node, and so its comments.
-	kept := map[string]*yaml.Node{}
-	var old *yaml.Node
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "resources" {
-			old = root.Content[i+1]
-			for _, n := range old.Content {
-				kept[n.Value] = n
-			}
-		}
-	}
-	list := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, r := range resources {
-		n, ok := kept[r]
-		if !ok {
-			n = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: r}
-		}
-		list.Content = append(list.Content, n)
-	}
-	replaced := false
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "resources" {
-			list.Style, list.HeadComment, list.LineComment, list.FootComment = old.Style, old.HeadComment, old.LineComment, old.FootComment
-			root.Content[i+1] = list
-			replaced = true
-		}
-	}
-	if !replaced {
-		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "resources"}, list)
-	}
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
