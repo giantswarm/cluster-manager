@@ -131,7 +131,7 @@ func TestPoolRefusesAFlatcarWithoutTheDriverExtension(t *testing.T) {
 
 	_, err := Pool(old, spec)
 	require.Error(t, err)
-	for _, want := range []string{"pins Flatcar 4081.2.1", "gpu-node-pool " + DefaultPoolChartVersion, "first shipped with Flatcar 4344.0.0", "needs a cluster release with Flatcar 4344.0.0 or newer"} {
+	for _, want := range []string{"pins Flatcar 4081.2.1", "gpu-node-pool " + MinPoolChartVersion, "first shipped with Flatcar 4344.0.0", "needs a cluster release with Flatcar 4344.0.0 or newer"} {
 		assert.Contains(t, err.Error(), want)
 	}
 

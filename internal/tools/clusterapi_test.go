@@ -41,7 +41,7 @@ func TestWithoutClusterAPI(t *testing.T) {
 			return err
 		},
 		"create_node_pool dry run": func() error {
-			_, err := svc.CreateNodePool(ctx, CreateNodePoolInput{Cluster: "nosuchcluster", Pool: compose.PoolSpec{Name: "gpu00", Accelerator: compose.Accelerators[0], MaxGPUs: 4, ChartVersion: compose.DefaultPoolChartVersion}, Mode: ModeApply, DryRun: true})
+			_, err := svc.CreateNodePool(ctx, CreateNodePoolInput{Cluster: "nosuchcluster", Pool: compose.PoolSpec{Name: "gpu00", Accelerator: compose.Accelerators[0], MaxGPUs: 4}, Mode: ModeApply, DryRun: true})
 			return err
 		},
 		"delete_node_pool dry run": func() error {
