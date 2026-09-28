@@ -23,7 +23,7 @@ import (
 func l4(cluster, name string, dryRun bool) CreateNodePoolInput {
 	return CreateNodePoolInput{
 		Cluster: cluster, Mode: ModeApply, DryRun: dryRun, Cache: cacheOn(),
-		Pool: compose.PoolSpec{Name: name, Accelerator: "nvidia-l4", MaxGPUs: 4, ChartVersion: compose.DefaultPoolChartVersion},
+		Pool: compose.PoolSpec{Name: name, Accelerator: "nvidia-l4", MaxGPUs: 4},
 	}
 }
 
@@ -37,7 +37,7 @@ func TestCreateNodePoolDryRun(t *testing.T) {
 	assert.Equal(t, "1.31.4", out.KubernetesVersion, "from the Release CR")
 	assert.Equal(t, "v1.31.4", out.ControlPlaneVersion)
 	assert.Equal(t, "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs", out.MachineImage, "cluster-aws's image name from the release's components")
-	assert.Equal(t, compose.DefaultPoolChartVersion, out.ChartVersion)
+	assert.Equal(t, compose.MinPoolChartVersion, out.ChartVersion)
 	require.Len(t, out.Objects, 8, "OCIRepository, credentials Secret, HelmRelease; the operator's OCIRepository and HelmRelease; the slice's OCIRepository and HelmRelease; the backend ConfigMap")
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow, "Flatcar nodes, no operator: row 1")
 	for _, o := range out.Objects {
@@ -92,7 +92,7 @@ func TestCreateNodePoolPrewarm(t *testing.T) {
 	in.Pool.Accelerator, in.Pool.Prewarm = "nvidia-l40s", true
 	out, err := svc.CreateNodePool(context.Background(), in)
 	require.NoError(t, err)
-	assert.Equal(t, compose.DefaultPoolChartVersion, out.ChartVersion, "the pin carries the option")
+	assert.Equal(t, compose.MinPoolChartVersion, out.ChartVersion, "the floor of the range the pool follows")
 	var release map[string]any
 	for _, m := range out.Manifests {
 		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "gazelle-gpu-l40s" {

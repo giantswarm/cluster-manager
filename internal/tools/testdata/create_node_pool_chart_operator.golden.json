@@ -63,7 +63,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "tag": "0.7.9"
+          "semver": "\u003e=0.7.9 \u003c1.0.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }

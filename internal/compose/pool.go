@@ -17,10 +17,14 @@ import (
 const (
 	// PoolChartURL is the catalog location of the gpu-node-pool chart.
 	PoolChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
-	// DefaultPoolChartVersion is the pin used when the caller names none:
-	// the newest released chart. The pool release pins the chart exactly — a
-	// bootstrap change rolls GPU nodes under a served model, so bumps are
-	// explicit (bumblebee-plans#46 D3). 0.7.0 keeps a pool node's /var/lib
+	// MinPoolChartVersion is the lowest chart a pool release runs: when the
+	// caller names no version, the release follows the chart from here to
+	// the next major (`>=0.7.9 <1.0.0`), so a released gpu-node-pool fix
+	// reaches every existing pool without a re-run; the floor is raised here
+	// when a pool needs a newer chart. A chart patch or minor that changes the
+	// bootstrap rolls a pool's nodes — the chart consolidates only empty nodes
+	// (0.7.7), so a node serving a model is not replaced under it
+	// (bumblebee-plans#46 D3). 0.7.0 keeps a pool node's /var/lib
 	// on its NVMe instance store (the chart's default `pool.volumes.libSource:
 	// instance-store`; cluster-manager writes no volumes block): every size
 	// of the curated families has one (the shape table's stores), so no
@@ -37,7 +41,7 @@ const (
 	// (giantswarm/cluster-manager#85); 0.7.9's placeholder has the memory the
 	// NVIDIA runtime's container start needs and retries a container that
 	// could not start.
-	DefaultPoolChartVersion = "0.7.9"
+	MinPoolChartVersion = "0.7.9"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot
@@ -70,7 +74,7 @@ var (
 // picks the EC2 instance family from it (InstanceFamily).
 var Accelerators = []string{"nvidia-l4", "nvidia-a10g", "nvidia-t4", "nvidia-l40s"}
 
-// DefaultPoolSizes are the chart's `pool.sizes` at DefaultPoolChartVersion,
+// DefaultPoolSizes are the chart's `pool.sizes` at MinPoolChartVersion,
 // what Karpenter may pick when the caller names no sizes.
 var DefaultPoolSizes = []string{"xlarge", "2xlarge", "4xlarge"}
 
@@ -143,7 +147,9 @@ type PoolSpec struct {
 	Sizes []string
 	// MaxGPUs bounds the pool (Karpenter's `nvidia.com/gpu` limit).
 	MaxGPUs int
-	// ChartVersion is the exact chart pin; empty means DefaultPoolChartVersion.
+	// ChartVersion is an explicit chart pin, honoured as given (a lab's
+	// unreleased chart, a test); empty follows the chart from
+	// MinPoolChartVersion to the next major.
 	ChartVersion string
 	// Prewarm launches the pool's first node with the release instead of
 	// with the first predictor: the chart's `pool.prewarm.enabled`, a
@@ -249,7 +255,7 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 	}
 	version := p.ChartVersion
 	if version == "" {
-		version = DefaultPoolChartVersion
+		version = MinPoolChartVersion
 	}
 	if err := validateFlatcar(c, version); err != nil {
 		return nil, err
@@ -262,7 +268,11 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 		LabelPool:      p.Name,
 	})
 
-	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": ociRepositorySpec(PoolChartURL, "tag", version)})
+	sourceSpec, err := chartSourceSpec(PoolChartURL, version, p.ChartVersion != "")
+	if err != nil {
+		return nil, err
+	}
+	source := object(OCIRepositoryGVR, "OCIRepository", meta(name), map[string]any{"spec": sourceSpec})
 	spec := helmReleaseSpec(name, false, values(c, p))
 	withoutJobWait(spec)
 	withoutUninstallWait(spec)
