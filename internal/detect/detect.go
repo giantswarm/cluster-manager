@@ -265,7 +265,7 @@ func operatorReleases(ctx context.Context, t Target) []release {
 	seen := map[string]bool{}
 	add := func(hr *unstructured.Unstructured) {
 		key := hr.GetNamespace() + "/" + hr.GetName()
-		if seen[key] || !isOperatorRelease(hr) {
+		if seen[key] || !isOperatorRelease(hr) || deliversElsewhere(hr, t.Cluster) {
 			return
 		}
 		seen[key] = true
@@ -286,6 +286,17 @@ func operatorReleases(ctx context.Context, t Target) []release {
 		}
 	}
 	return found
+}
+
+// deliversElsewhere says whether a HelmRelease installs into another
+// cluster than the one named: Flux delivers a release with a kubeConfig to
+// the cluster of that Cluster API kubeconfig Secret. On a management cluster
+// a release of a workload cluster's GPU operator is that cluster's, never
+// the installation's own (a leftover of a deleted cluster stood in for the
+// installation's operator, so its first pool composed none).
+func deliversElsewhere(hr *unstructured.Unstructured, cluster string) bool {
+	secret, _, _ := unstructured.NestedString(hr.Object, "spec", "kubeConfig", "secretRef", "name")
+	return secret != "" && secret != compose.KubeconfigSecretName(cluster)
 }
 
 // isOperatorRelease recognises a HelmRelease of the gpu-operator chart by
@@ -371,7 +382,7 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 		sort.Strings(c.Evidence)
 		return c, r
 	}
-	controllers, states := servingControllers(ctx, t.Reader, provider)
+	controllers, states := servingControllers(ctx, t.Reader, t.Cluster, provider)
 	found = append(found, controllers...)
 	r.Controllers = states
 	if cms, err := list(ctx, t.Reader, compose.ConfigMapGVR, metav1.NamespaceAll, LabelServingConfig+"=true"); err == nil {
@@ -627,14 +638,14 @@ func servedAPIs(ctx context.Context, reader dynamic.Interface) []string {
 // children; otherwise a release rendered by the platform's chart is the
 // chart's, a Deployment is its release's (Flux labels every object it
 // installs with the release), and anything else is a hand install.
-func servingControllers(ctx context.Context, reader dynamic.Interface, owner Provider) ([]finding, []ControllerState) {
+func servingControllers(ctx context.Context, reader dynamic.Interface, cluster string, owner Provider) ([]finding, []ControllerState) {
 	var found []finding
 	states := []ControllerState{}
 	releases := map[string]Provider{}
 	if hrs, err := list(ctx, reader, compose.HelmReleaseGVR, metav1.NamespaceAll, ""); err == nil {
 		for i := range hrs.Items {
 			hr := &hrs.Items[i]
-			if !isLLMISVCRelease(hr) {
+			if !isLLMISVCRelease(hr) || deliversElsewhere(hr, cluster) {
 				continue
 			}
 			p := owner

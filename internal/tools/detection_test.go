@@ -78,6 +78,13 @@ func TestDetectGPUOperator(t *testing.T) {
 		assert.Contains(t, got.Reason, "not readable as you through "+wc1APIServer)
 	})
 
+	t.Run("a release delivered into another cluster", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		l.add(t, l.installation, "operator-of-another-cluster.yaml")
+		got := clusterNamed(t, l, "gazelle").GPUOperator.Component
+		assert.Equal(t, detect.StatusAbsent, got.Status, "the release installs into the cluster of gone-kubeconfig, not the installation's own: %v", got.Evidence)
+	})
+
 	t.Run("cluster-manager's own release", func(t *testing.T) {
 		l := newLab(t, "installation.yaml")
 		_, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(context.Background(), l4("wc1", "gpu-l4", false))

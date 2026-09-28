@@ -1,0 +1,17 @@
+# A GPU operator release on the installation that Flux delivers into
+# another cluster through its kubeconfig, left behind after that cluster was
+# deleted: the installation's own cluster has no operator from it.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gone-gpu-operator
+  namespace: org-other
+spec:
+  chart:
+    spec:
+      chart: gpu-operator
+      version: 1.4.1
+  kubeConfig:
+    secretRef:
+      name: gone-kubeconfig
+  targetNamespace: kube-system

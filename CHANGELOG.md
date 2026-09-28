@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The GPU operator and serving detection skips a HelmRelease that Flux delivers into another cluster through its `spec.kubeConfig` (a Secret other than `<cluster>-kubeconfig`). A workload cluster's operator release on the management cluster, or one left behind by a deleted cluster, no longer reads as the installation's own operator (`provider: manual`), so `create_node_pool` on the installation's own cluster composes the `<cluster>-gpu-operator` release its pool needs.
+
 ### Added
 
 - Prometheus metrics on `GET /metrics` of a separate `metrics` port (`9464`): `mcp_server_operation_duration_seconds` for every `tools/call`, by `gen_ai_tool_name` and, on failure, `error_type` (`tool_error` for an `isError` result, `_OTHER` for a handler error), and `http_server_request_duration_seconds` for the REST API and the MCP endpoint. Chart: `observability.metrics.enabled` (default `true`) and `.port`; off renders `OTEL_METRICS_EXPORTER=none`, so an OTLP endpoint set for traces pushes no metrics. A ServiceMonitor gated on `serviceMonitor.enabled`, with `serviceMonitor.labels` and `.interval`.
