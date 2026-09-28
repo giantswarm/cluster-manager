@@ -28,6 +28,7 @@ const AttrGenAIToolName = "gen_ai.tool.name"
 func tracingOptions() []mcpserver.ServerOption {
 	return []mcpserver.ServerOption{
 		mcpserver.WithToolHandlerMiddleware(toolNameSpan),
+		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(TracerName))),
 		mcpotel.WithServerTracingPropagator(otel.Tracer(TracerName), propagation.NewCompositeTextMapPropagator()),
 	}
 }

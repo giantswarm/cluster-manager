@@ -35,11 +35,11 @@ done <<'VERSIONS'
 0.1.1-dev.renovate-helm-un.2026-09-22.14-54---.h1a2b3c4 cluster-manager-0.1.1-dev.renovate-helm-un.2026-09-22.14-54
 VERSIONS
 
-# OTLP export is opt-in: no OTEL_ variable without observability.otel.endpoint,
-# and with it the exporter, the parent-based sampler and the pod's k8s
-# resource attributes.
-if helm template t "$CHART" | grep -q 'OTEL_'; then
-  fail "the default render sets an OTEL_ variable"
+# OTLP trace export is opt-in: no OTEL_ variable but the metrics exporter's
+# without observability.otel.endpoint, and with it the exporter, the
+# parent-based sampler and the pod's k8s resource attributes.
+if helm template t "$CHART" | grep -v -- 'OTEL_METRICS_EXPORTER\|OTEL_EXPORTER_PROMETHEUS_' | grep -q 'OTEL_'; then
+  fail "the default render sets an OTEL_ variable other than the metrics exporter"
 fi
 otel=$(helm template t "$CHART" --set observability.otel.endpoint=http://otlp-gateway.kube-system.svc:4317 --set observability.otel.headers=X-Scope-OrgID=giantswarm)
 for want in \
@@ -51,5 +51,23 @@ for want in \
   'value: "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.node.name=$(NODE_NAME)"'; do
   grep -qF -- "$want" <<<"$otel" || fail "observability.otel.endpoint renders no '$want'"
 done
+
+# Metrics: the Prometheus exporter on the metrics port by default; off, the
+# exporter is none, so an OTLP endpoint set for traces does not push metrics.
+got=$(helm template t "$CHART")
+echo "$got" | grep -A1 -- 'name: OTEL_METRICS_EXPORTER$' | grep -q -- 'value: prometheus' \
+  || fail "default render: metrics on by default, want OTEL_METRICS_EXPORTER=prometheus"
+echo "$got" | grep -q -- 'name: metrics$' || fail "default render: no metrics container port"
+got=$(helm template t "$CHART" --set observability.metrics.enabled=false --set observability.otel.endpoint=http://otlp-gateway.kube-system.svc:4317)
+echo "$got" | grep -A1 -- 'name: OTEL_METRICS_EXPORTER$' | grep -q -- 'value: none' \
+  || fail "metrics off: want OTEL_METRICS_EXPORTER=none"
+if echo "$got" | grep -q -- 'name: metrics$'; then fail "metrics port rendered with metrics off"; fi
+got=$(helm template t "$CHART" --set serviceMonitor.enabled=true --set observability.metrics.enabled=false)
+if echo "$got" | grep -q -- 'kind: ServiceMonitor'; then fail "ServiceMonitor rendered with metrics off"; fi
+got=$(helm template t "$CHART" --show-only templates/servicemonitor.yaml --set serviceMonitor.enabled=true \
+  --set-json 'serviceMonitor.labels={"observability.giantswarm.io/tenant":"giantswarm"}')
+echo "$got" | grep -q -- '^    observability.giantswarm.io/tenant: giantswarm$' \
+  || fail "ServiceMonitor lacks serviceMonitor.labels"
+echo "$got" | grep -q -- '- port: metrics$' || fail "ServiceMonitor does not scrape the metrics port"
 
 echo "verify-chart: ok"

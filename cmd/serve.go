@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/gitops-commit/commit"
+	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/dynamic"
@@ -129,6 +130,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		defer cancel()
 		if err := shutdownTracing(flushCtx); err != nil {
 			log.Warn("tracing shutdown", "error", err)
+		}
+	}()
+	shutdownMetrics, err := metrics.Init(ctx, metrics.WithServiceName("cluster-manager"), metrics.WithServiceVersion(version))
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := shutdownMetrics(flushCtx); err != nil {
+			log.Warn("flushing metrics", "error", err)
 		}
 	}()
 
