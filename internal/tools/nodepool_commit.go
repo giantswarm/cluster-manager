@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"path"
 	"strings"
 	"time"
 
@@ -43,10 +42,7 @@ func (s *Service) newPoolCommit(ctx context.Context, dyn dynamic.Interface, c *u
 
 // fileOf is the file a release object lives in (releaseFiles' naming).
 func (pc *poolCommit) fileOf(kind, name string) string {
-	if kind == "Secret" {
-		return path.Join(pc.loc.dir(), name+"-secret.enc.yaml")
-	}
-	return path.Join(pc.loc.dir(), name+".yaml")
+	return pc.loc.directory().ObjectFile(kind, name)
 }
 
 // commitCreate lands create_node_pool's releases as the pull request: the
@@ -58,7 +54,7 @@ func (s *Service) commitCreate(ctx context.Context, dyn dynamic.Interface, c *un
 	if err != nil {
 		return err
 	}
-	files, err := releaseFiles(pc.loc.dir(), releases)
+	files, err := releaseFiles(pc.loc.directory(), releases)
 	if err != nil {
 		return err
 	}
@@ -168,7 +164,7 @@ func (pc *poolCommit) body(what, tool string, plan *commitPlan, releases []*unst
 		b.WriteString("\n")
 	}
 	b.WriteString("Files:\n\n")
-	for _, f := range plan.actions {
+	for _, f := range plan.actions() {
 		if f.Action != fileUnchanged {
 			fmt.Fprintf(&b, "- %s `%s`\n", f.Action, f.Path)
 		}
@@ -191,7 +187,7 @@ func chartVersionOf(objs []*unstructured.Unstructured, name string) string {
 // nextStep says what follows the commit.
 func (pc *poolCommit) nextStep(plan *commitPlan, res *CommitResult, dryRun bool, what string) string {
 	switch {
-	case !plan.changed():
+	case !plan.Changed():
 		return fmt.Sprintf("%s already carries %s: nothing to commit", res.Repository, what)
 	case dryRun:
 		return fmt.Sprintf("re-run without dryRun to open the pull request as %s in %s", pc.gh.Login, res.Repository)

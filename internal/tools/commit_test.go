@@ -7,6 +7,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/giantswarm/gitops-commit/commit"
+	"github.com/giantswarm/gitops-commit/layout"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -98,7 +99,7 @@ func TestCreateNodePoolCommit(t *testing.T) {
 	assert.Contains(t, pool, "kind: OCIRepository")
 	assert.Contains(t, pool, "kind: HelmRelease")
 	assert.NotContains(t, pool, "ownerReferences", "no live UID in git")
-	resources, err := kustomizationResources(files[commitDir+"/kustomization.yaml"])
+	resources, err := layout.Resources(files[commitDir+"/kustomization.yaml"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"wc1-agent-platform.yaml", "wc1-gpu-l4-values-secret.enc.yaml", "wc1-gpu-l4.yaml", "wc1-gpu-operator.yaml"}, resources)
 	secret := string(files[commitDir+"/wc1-gpu-l4-values-secret.enc.yaml"])
@@ -220,7 +221,7 @@ func TestDeleteNodePoolCommit(t *testing.T) {
 	assert.Equal(t, "feat(wc1): remove GPU node pool gpu-a10g", prs[0].Title)
 	files := fake.Files(fleet, prs[0].Head)
 	assert.NotContains(t, files, commitDir+"/wc1-gpu-a10g.yaml")
-	resources, err := kustomizationResources(files[commitDir+"/kustomization.yaml"])
+	resources, err := layout.Resources(files[commitDir+"/kustomization.yaml"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"wc1-other.yaml"}, resources)
 	require.Len(t, out.Commit.LiveSteps, 1)
@@ -285,15 +286,4 @@ func TestCommitTargetInListClusters(t *testing.T) {
 	}
 	assert.Equal(t, &CommitTarget{Repository: "acme/workload-clusters-fleet", Branch: "main", Path: commitDir, Kustomization: "default/acme-clusters-wc1"}, byName["wc1"].CommitTarget)
 	assert.Nil(t, byName["wc2"].CommitTarget)
-}
-
-// TestWithResourcesKeepsTheRest: the resources list is replaced, every
-// other key and comment kept; nil content is a new kustomization.
-func TestWithResourcesKeepsTheRest(t *testing.T) {
-	out, err := withResources([]byte("# head\nkind: Kustomization\nnamespace: org-acme # ns\nresources: [a.yaml]\n"), []string{"a.yaml", "b.yaml"})
-	require.NoError(t, err)
-	assert.Equal(t, "# head\nkind: Kustomization\nnamespace: org-acme # ns\nresources: [a.yaml, b.yaml]\n", string(out))
-	fresh, err := withResources(nil, []string{"x.yaml"})
-	require.NoError(t, err)
-	assert.Equal(t, "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - x.yaml\n", string(fresh))
 }
