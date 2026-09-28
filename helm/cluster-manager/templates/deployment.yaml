@@ -96,10 +96,20 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.oauth.enabled .Values.observability.otel.endpoint .Values.extraEnv }}
           env:
             {{- with include "cluster-manager.otelEnv" . | trim }}
             {{- . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.observability.metrics.enabled }}
+            - name: OTEL_METRICS_EXPORTER
+              value: prometheus
+            - name: OTEL_EXPORTER_PROMETHEUS_HOST
+              value: "0.0.0.0"
+            - name: OTEL_EXPORTER_PROMETHEUS_PORT
+              value: {{ .Values.observability.metrics.port | quote }}
+            {{- else }}
+            - name: OTEL_METRICS_EXPORTER
+              value: none
             {{- end }}
             {{- if .Values.oauth.enabled }}
             {{- if eq .Values.oauth.provider "google" }}
@@ -129,11 +139,15 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.observability.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.observability.metrics.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

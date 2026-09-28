@@ -91,6 +91,11 @@ from the platform identity contract (`global.identity`, `global.domain`).
 | observability.otel.resourceAttributes | string | `""` | Extra resource attributes as `key=value,...`, appended to the pod's `k8s.pod.name`, `k8s.namespace.name` and `k8s.node.name` (`OTEL_RESOURCE_ATTRIBUTES`). |
 | observability.otel.sampler | string | `"parentbased_traceidratio"` | Trace sampler (`OTEL_TRACES_SAMPLER`). Parent-based: a call arriving with a sampled `traceparent` (muster's) is always kept, a root span is sampled at `samplerArg`. |
 | observability.otel.samplerArg | string | `"0.1"` | Sampler argument (`OTEL_TRACES_SAMPLER_ARG`): the ratio of root spans kept. |
+| observability.metrics.enabled | bool | `true` | Serve Prometheus metrics on `GET /metrics` of the `metrics` port: `mcp_server_operation_duration_seconds` per tool, and `http_server_request_duration_seconds` for the REST API and the MCP endpoint. Off, `OTEL_METRICS_EXPORTER=none`: nothing is served, and nothing is pushed to `observability.otel.endpoint` either. |
+| observability.metrics.port | int | `9464` | Port of the metrics listener, apart from the API port so an HTTPRoute or the OAuth guard never covers it. |
+| serviceMonitor.enabled | bool | `false` | Render a ServiceMonitor for the `metrics` port. Also needs `observability.metrics.enabled`; the meta chart turns this on with the tenant label. |
+| serviceMonitor.interval | string | `""` | Scrape interval; empty uses the Prometheus Operator default. |
+| serviceMonitor.labels | object | `{}` | Labels on the ServiceMonitor, beside the chart's own. The Giant Swarm observability platform routes a scrape to a Mimir tenant by `observability.giantswarm.io/tenant`; a monitor without it writes to no tenant. |
 | extraArgs | list | `[]` | Extra container arguments. |
 | extraEnv | list | `[]` | Extra environment variables. |
 | nodeSelector | object | `{}` | Node selector. |
