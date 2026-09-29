@@ -89,8 +89,10 @@ func (s *Service) RemoveModelCache(ctx context.Context, in RemoveModelCacheInput
 		return nil, err
 	}
 	// The slice serves without the cache from now on when it mounts a claim
-	// that goes — every claim, or the named one being the mounted one.
-	sliceOff := reads.cache != nil && reads.cache.Enabled && (in.Claim == "" || in.Claim == reads.cache.Claim)
+	// that goes — every claim, or the named one being the mounted one. A
+	// slice being torn down is left to its teardown: upgrading it would
+	// re-create the source the teardown removed (giantswarm/cluster-manager#143).
+	sliceOff := reads.removing == "" && reads.cache != nil && reads.cache.Enabled && (in.Claim == "" || in.Claim == reads.cache.Claim)
 	if len(selected) == 0 && !sliceOff {
 		return nil, &ErrNotFound{What: fmt.Sprintf("model cache on %s (no %s* claim in %s, and no slice release of cluster-manager's runs with the cache on there)", cluster, read.base, read.namespace)}
 	}
@@ -281,6 +283,9 @@ func removalNote(cluster string, reads sliceReads, sliceOff bool, removed []*det
 			names = append(names, name)
 		}
 		parts = append(parts, fmt.Sprintf("%d claim(s) deleted — %s — with their volumes under the class's Delete reclaim policy, and with them the cached weights and compiled graphs of every model served from them; the bill stops with the volume", len(removed), strings.Join(names, ", ")))
+	}
+	if reads.removing != "" {
+		parts = append(parts, reads.removing+": it is left to its teardown, no slice object is written")
 	}
 	if sliceOff {
 		parts = append(parts, fmt.Sprintf("the slice release %s is upgraded to modelServing.cache.enabled false, so the connectivity chart applies no claim again and every predictor of %s downloads its weights into its pod's ephemeral storage (the node's local disk) at each start — about 90 s more per cold start", reads.release, cluster))

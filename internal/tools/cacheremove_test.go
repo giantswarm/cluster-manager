@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
@@ -139,6 +142,61 @@ func TestRemoveModelCacheRefusedWhileMounted(t *testing.T) {
 	after := gazelleCluster(t, svc)
 	require.Len(t, after.Serving.Readiness.CacheClaims, 1, "nothing was written")
 	assert.True(t, after.Serving.Readiness.Cache.Enabled)
+}
+
+// TestRemoveModelCacheDuringSliceTeardown (giantswarm/cluster-manager#143):
+// right after delete_node_pool removed the last pool, the slice release is
+// deleted and waiting on its uninstall, or stands without the OCIRepository
+// its teardown removed first. The claims go and no slice object is written:
+// the source is not re-created, the release's values stay as they were.
+func TestRemoveModelCacheDuringSliceTeardown(t *testing.T) {
+	ctx := context.Background()
+	slice := compose.SliceReleaseName("gazelle")
+	cases := map[string]struct {
+		teardown func(t *testing.T, l *lab)
+		note     string
+	}{
+		"release deleted": {
+			teardown: func(t *testing.T, l *lab) {
+				res := l.installation.Resource(HelmReleaseGVR).Namespace("org-giantswarm")
+				hr, err := res.Get(ctx, slice, metav1.GetOptions{})
+				require.NoError(t, err)
+				deleted := metav1.NewTime(time.Date(2026, 9, 28, 21, 4, 0, 0, time.UTC))
+				hr.SetDeletionTimestamp(&deleted)
+				hr.SetFinalizers([]string{"finalizers.fluxcd.io"})
+				_, err = res.Update(ctx, hr, metav1.UpdateOptions{})
+				require.NoError(t, err)
+			},
+			note: "the slice release org-giantswarm/gazelle-agent-platform has been deleted since 2026-09-28T21:04:00Z and is being uninstalled: it is left to its teardown, no slice object is written",
+		},
+		"source gone": {
+			teardown: func(t *testing.T, l *lab) {
+				require.NoError(t, l.installation.Resource(compose.OCIRepositoryGVR).Namespace("org-giantswarm").Delete(ctx, slice, metav1.DeleteOptions{}))
+			},
+			note: "the slice release org-giantswarm/gazelle-agent-platform stands without its OCIRepository, which its teardown removes first: it is left to its teardown, no slice object is written",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			l, svc := gazelleWithSlice(t)
+			tc.teardown(t, l)
+
+			out, err := svc.RemoveModelCache(ctx, removeCache("gazelle", "", false))
+			require.NoError(t, err)
+			assert.Equal(t, []ObjectAction{{APIVersion: "v1", Kind: "PersistentVolumeClaim", Name: "hf-cache", Namespace: "model-serving", Action: "delete"}}, out.Objects, "the claim goes, no slice object is written")
+			require.NotNil(t, out.Cache)
+			assert.Contains(t, out.Cache.Note, tc.note)
+			assert.NotContains(t, out.Cache.Note, "is upgraded")
+
+			hr, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-giantswarm").Get(ctx, slice, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.True(t, detect.SliceCacheOf(hr).Enabled, "the release being torn down is not patched")
+			if name == "source gone" {
+				_, err = l.installation.Resource(compose.OCIRepositoryGVR).Namespace("org-giantswarm").Get(ctx, slice, metav1.GetOptions{})
+				assert.True(t, apierrors.IsNotFound(err), "the slice's source is not re-created: %v", err)
+			}
+		})
+	}
 }
 
 // TestRemoveModelCacheOneClaim: the claim named goes alone — the slice keeps

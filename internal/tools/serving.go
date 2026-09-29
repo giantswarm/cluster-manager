@@ -220,6 +220,12 @@ type sliceReads struct {
 	// state it; nil while there is no release (giantswarm/cluster-manager#83).
 	release string
 	cache   *detect.SliceCache
+	// removing says why the slice release is being torn down — it carries a
+	// deletion timestamp, or its OCIRepository is gone while it stands (the
+	// teardown deletes the source first); empty otherwise. A write then
+	// composes no slice object: it would re-create what the teardown removes
+	// (giantswarm/cluster-manager#143).
+	removing string
 }
 
 // readSlice detects serving on the target and, where the slice would be
@@ -239,6 +245,7 @@ func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target
 			r.cacheClaim, _, _ = unstructured.NestedString(hr.Object, "spec", "values", "modelServing", "cache", "pvc", "name")
 			r.release = hr.GetNamespace() + "/" + hr.GetName()
 			r.cache = detect.SliceCacheOf(hr)
+			r.removing = sliceRemoving(gctx, dyn, hr)
 		}
 		return err
 	})
@@ -247,6 +254,22 @@ func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target
 		return err
 	})
 	return r, g.Wait()
+}
+
+// sliceRemoving says why the slice release hr is being torn down: deleted
+// and waiting on helm-controller's uninstall, or standing without its
+// OCIRepository, which the teardown deletes before the release. Empty while
+// the slice stands; a source that cannot be read is not taken for gone.
+func sliceRemoving(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) string {
+	ref := hr.GetNamespace() + "/" + hr.GetName()
+	if ts := hr.GetDeletionTimestamp(); ts != nil {
+		return fmt.Sprintf("the slice release %s has been deleted since %s and is being uninstalled", ref, ts.UTC().Format(time.RFC3339))
+	}
+	_, err := dyn.Resource(compose.OCIRepositoryGVR).Namespace(hr.GetNamespace()).Get(ctx, hr.GetName(), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Sprintf("the slice release %s stands without its OCIRepository, which its teardown removes first", ref)
+	}
+	return ""
 }
 
 // cacheFacts gathers what the cache block is worded from: the cluster's
