@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `remove_model_cache` right after `delete_node_pool` removed a cluster's last pool no longer re-creates the slice's `<cluster>-agent-platform` OCIRepository or patches its release: a slice release that carries a deletion timestamp, or stands without its OCIRepository, is left to its teardown. The claims are deleted, and the answer names the teardown under way.
 - The GPU operator and serving detection skips a HelmRelease that Flux delivers into another cluster through its `spec.kubeConfig` (a Secret other than `<cluster>-kubeconfig`). A workload cluster's operator release on the management cluster, or one left behind by a deleted cluster, no longer reads as the installation's own operator (`provider: manual`), so `create_node_pool` on the installation's own cluster composes the `<cluster>-gpu-operator` release its pool needs.
 
 ### Added
