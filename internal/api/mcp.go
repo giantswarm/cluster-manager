@@ -87,7 +87,7 @@ type Modes struct {
 
 // commitTools are the tools that take mode commit; every other write lands
 // in mode apply only.
-var commitTools = []string{ToolCreateCluster, ToolCreateNodePool, ToolDeleteNodePool}
+var commitTools = []string{ToolCreateCluster, ToolDeleteCluster, ToolCreateNodePool, ToolDeleteNodePool}
 
 // NewMCPServer builds the MCP server exposing the tools. Results are JSON
 // text.
@@ -134,8 +134,8 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithDescription("Delete a workload cluster create_cluster created, as you, in two calls with the same arguments. The first removes the kserve backend cluster-manager registered for the cluster with model-manager, then the cluster's HelmRelease in org-<organization> — helm-controller uninstalls the cluster and its default apps, and the GPU pool, GPU operator and serving-slice releases cluster-manager created go with the Cluster through their ownerReference to it —, its OCIRepository and its <name>-values ConfigMap, without waiting for the uninstall (a small cluster is gone in about five minutes); the answer lists those releases (withCluster), the models served on the cluster (models, or modelsNote saying why they cannot be told) and nextStep. The second, once list_clusters no longer lists the cluster, removes what the uninstall left in the namespace: the cluster's HelmReleases and OCIRepositories rendered by Helm or cluster-manager (a default app whose install was still running) and cluster-manager's own source and values; another owner's object is named in warnings and left; while the Cluster is still being removed it writes nothing and says so. Refused before anything is deleted, each with its reason and the way out: a HelmRelease cluster-manager did not create (delete the cluster the way it was made), the installation's own cluster, a release in a Flux Kustomization's inventory (remove it from git; a live delete would be undone), and a release helm-controller has not reconciled since its last write (no finalizers.fluxcd.io: the delete would not uninstall the cluster). dryRun lists what would be removed, or the refusal; nothing is written. Answers within the caller's deadline: what did not fit is pending (partial: true, nextStep) and the re-run continues."),
 		mcp.WithString(argOrganization, mcp.Required(), mcp.Description("The organization the cluster belongs to; it lives in the namespace org-<organization>")),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("The cluster's name as given to create_cluster")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
-		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you — a cluster Flux applies from git is refused, except its own Kustomization <installation>-clusters-<name> after a merged removal on an organization Kustomization that does not prune: apply deletes that Kustomization and Flux removes the cluster; commit: open the removal pull request as you in the repository that owns the organization (organizations/<organization>/workload-clusters/<name>/, <name>.yaml and its entry), the backend registration removed on the installation; commit.liveSteps names what the merge leaves, delete_cluster in mode apply; a cluster that is not in the repository is refused")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written; in mode commit also the files, the repository, the branch and the directory")),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 	), t.deleteCluster)
@@ -182,7 +182,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name; the installation's own cluster included")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithBoolean(argCache, mcp.DefaultBool(false), mcp.Description("Whether the slice's predictors mount a model cache claim — without the argument the release keeps its setting, and a first slice serves without a cache (default false): a claim is a volume billed every month it exists, never created unasked; true mounts the claim the release mounts already (the zone's claim the last create_node_pool named), else hf-cache; the answer's cache block names its size, tier and monthly list price. false composes modelServing.cache.enabled false on the release — no claim applied or mounted, the weights downloaded into each predictor pod's ephemeral storage, the existing claims left as they are and billed until removed; refused (refused{cacheOn}) while the release runs with the cache on — the way to serve without the cache is remove_model_cache")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you; commit is create_cluster's, delete_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -195,7 +195,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Remove the serving slice even while models are served: they go with it, and the well-known LLMInferenceServiceConfigs are removed with their finalizer instead of waiting for the llm-d controller to clear them")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_cluster's, delete_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -208,7 +208,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithString(argClaim, mcp.Description("One model cache claim to remove, by name (hf-cache, hf-cache-eu-central-1a); default every hf-cache* claim of the serving namespace. The slice serves without the cache from then on when the claim removed is the one it mounts.")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation and the cluster as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation and the cluster as you; commit is create_cluster's, delete_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),

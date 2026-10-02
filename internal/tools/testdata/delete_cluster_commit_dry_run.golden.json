@@ -1,0 +1,71 @@
+{
+  "cluster": "dev01",
+  "namespace": "org-acme",
+  "mode": "commit",
+  "dryRun": true,
+  "objects": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
+      "action": "would-delete"
+    }
+  ],
+  "gpuOperator": {
+    "status": ""
+  },
+  "serving": {
+    "status": ""
+  },
+  "withCluster": [
+    "org-acme/dev01-agent-platform",
+    "org-acme/dev01-cert-exporter",
+    "org-acme/dev01-gpu",
+    "org-acme/dev01-gpu-operator"
+  ],
+  "commit": {
+    "repository": "acme/workload-clusters-fleet",
+    "base": "main",
+    "directory": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01",
+    "kustomization": "default/gazelle-gitops",
+    "prune": false,
+    "branch": "cluster-manager/remove-cluster-dev01",
+    "files": [
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/cluster-manager/dev01-gpu.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/cluster-manager/kustomization.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01-values.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/kustomization.yaml",
+        "action": "remove"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/kustomization.yaml",
+        "action": "update",
+        "content": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - wc1.yaml\n"
+      }
+    ],
+    "author": "jane",
+    "liveSteps": [
+      "Flux does not prune Kustomization default/gazelle-gitops (spec.prune false): after the merge the cluster's Kustomization default/gazelle-clusters-dev01 stays on the installation — delete_cluster {organization: acme, name: dev01, mode: apply} deletes it, Flux then removes the cluster's release and its uninstall the cluster; the same call once more removes what the uninstall left"
+    ]
+  },
+  "nextStep": "re-run without dryRun to open the pull request as jane in acme/workload-clusters-fleet"
+}

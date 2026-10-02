@@ -148,14 +148,14 @@ func TestDeleteClusterRefusals(t *testing.T) {
 		edit func(*DeleteClusterInput)
 		want string
 	}{
-		"not cluster-manager's": {func(in *DeleteClusterInput) { in.Name = "legacy" }, "HelmRelease org-acme/legacy is managed by Helm: delete_cluster removes only a cluster create_cluster created — delete it the way it was made"},
-		"own cluster":           {func(in *DeleteClusterInput) { in.Organization, in.Name = "giantswarm", "gazelle" }, "cluster gazelle is the installation's own cluster"},
-		"in the inventory":      {func(in *DeleteClusterInput) { in.Name = "gitops" }, "HelmRelease org-acme/gitops is in git: Flux Kustomization default/acme-clusters applies it"},
-		"not reconciled":        {func(in *DeleteClusterInput) { in.Name = "fresh" }, "HelmRelease org-acme/fresh carries no finalizers.fluxcd.io"},
-		"no release":            {func(in *DeleteClusterInput) { in.Name = "byhand" }, "cluster org-acme/byhand has no HelmRelease org-acme/byhand: it was not created by create_cluster"},
-		"commit mode":           {func(in *DeleteClusterInput) { in.Mode = ModeCommit }, "this tool lands its objects in mode apply only"},
-		"bad name":              {func(in *DeleteClusterInput) { in.Name = "a,b" }, `cluster name "a,b"`},
-		"no organization":       {func(in *DeleteClusterInput) { in.Organization = "" }, "organization: required"},
+		"not cluster-manager's":              {func(in *DeleteClusterInput) { in.Name = "legacy" }, "HelmRelease org-acme/legacy is managed by Helm: delete_cluster removes only a cluster create_cluster created — delete it the way it was made"},
+		"own cluster":                        {func(in *DeleteClusterInput) { in.Organization, in.Name = "giantswarm", "gazelle" }, "cluster gazelle is the installation's own cluster"},
+		"in the inventory":                   {func(in *DeleteClusterInput) { in.Name = "gitops" }, "HelmRelease org-acme/gitops is in git: Flux Kustomization default/acme-clusters applies it"},
+		"not reconciled":                     {func(in *DeleteClusterInput) { in.Name = "fresh" }, "HelmRelease org-acme/fresh carries no finalizers.fluxcd.io"},
+		"no release":                         {func(in *DeleteClusterInput) { in.Name = "byhand" }, "cluster org-acme/byhand has no HelmRelease org-acme/byhand: it was not created by create_cluster"},
+		"commit mode without the GitHub App": {func(in *DeleteClusterInput) { in.Mode = ModeCommit }, "mode commit (a pull request opened as you) is not offered by this server"},
+		"bad name":                           {func(in *DeleteClusterInput) { in.Name = "a,b" }, `cluster name "a,b"`},
+		"no organization":                    {func(in *DeleteClusterInput) { in.Organization = "" }, "organization: required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l, svc := deleteLab(t)

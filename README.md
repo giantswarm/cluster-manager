@@ -36,7 +36,7 @@ The model cache is the cluster's setting with a standing cost (giantswarm/cluste
 
 Every write tool takes `dryRun` (the rendered manifests, or on a re-run the difference) and
 `mode: apply | commit`. `apply` lands the objects on the installation as the caller. `commit`
-(`create_cluster`, `create_node_pool` and `delete_node_pool`) opens the pull request as the caller in the git repository
+(`create_cluster`, `delete_cluster`, `create_node_pool` and `delete_node_pool`) opens the pull request as the caller in the git repository
 that owns the cluster, or for a new cluster its organization, instead — see *Commit mode* below.
 An apply answers within the aggregator's deadline for a tool call: everything it reads is read
 once and concurrently before anything is composed, the objects are planned together (every
@@ -136,6 +136,13 @@ as files into the repository that owns the cluster and open one pull request as 
   absent. An Organization that no Kustomization reconciles is refused, and so is a root without
   `organizations/<org>/`. The cluster's node pools then go in mode commit to
   `<name>/cluster-manager/`, as for any cluster.
+- **A cluster's removal.** `delete_cluster` with `mode: commit` removes `<name>/`, `<name>.yaml` and
+  its entry in one pull request, and removes the kserve backend registration live. A cluster the
+  repository does not carry is refused: remove it in mode `apply`. When the organization's
+  Kustomization prunes, the merge removes the cluster's Kustomization, and with it the cluster. When it
+  does not, `liveSteps` names `delete_cluster` in mode `apply` after the merge. That call deletes the
+  cluster's Kustomization, which has left the organization's inventory, and its prune removes the
+  release and so the cluster. The same call once more removes what the uninstall left.
 - **Removal.** The removal pull request deletes the pool's files (with the last pool the operator's and
   the slice's too) and the kustomization entries; the nodes guard runs first as in apply. On a
   Kustomization that does not prune, `liveSteps` names `delete_node_pool` in mode apply after the merge,
