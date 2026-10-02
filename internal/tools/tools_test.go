@@ -88,6 +88,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	compose.OCIRepositoryGVR:        "OCIRepositoryList",
 	compose.SecretGVR:               "SecretList",
 	ConfigMapGVR:                    "ConfigMapList",
+	RoleBindingGVR:                  "RoleBindingList",
 	AppGVR:                          "AppList",
 	detect.NodesGVR:                 "NodeList",
 	detect.PodsGVR:                  "PodList",

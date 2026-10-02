@@ -26,8 +26,9 @@ import (
 
 // Resources the write tools read besides the read tools'.
 var (
-	ConfigMapGVR = compose.ConfigMapGVR
-	AppGVR       = detect.AppGVR
+	ConfigMapGVR   = compose.ConfigMapGVR
+	AppGVR         = detect.AppGVR
+	RoleBindingGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}
 )
 
 // Write modes: apply lands the objects on the installation as the person,
