@@ -181,13 +181,16 @@ func ChartVersion(source *unstructured.Unstructured) string {
 	return floor
 }
 
+// fieldMetadata is an object's metadata field.
+const fieldMetadata = "metadata"
+
 // object builds one composed object of the given resource and kind from its
 // metadata and its remaining top-level fields (spec, data, ...).
 func object(gvr schema.GroupVersionResource, kind string, metadata map[string]any, fields map[string]any) *unstructured.Unstructured {
 	obj := map[string]any{
-		"apiVersion": gvr.GroupVersion().String(),
-		"kind":       kind,
-		"metadata":   metadata,
+		"apiVersion":  gvr.GroupVersion().String(),
+		"kind":        kind,
+		fieldMetadata: metadata,
 	}
 	for k, v := range fields {
 		obj[k] = v

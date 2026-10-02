@@ -47,6 +47,9 @@ const (
 
 	valuesSchemaFile = "values.schema.json"
 	valuesFile       = "values.yaml"
+
+	// valuesGlobal is the cluster charts' top-level values key.
+	valuesGlobal = "global"
 )
 
 // ClusterNamePattern is a cluster name's shape: a DNS label starting with a
@@ -59,9 +62,9 @@ var ClusterNamePattern = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,18}[a-z0-9])?$`)
 // the installation, no credential passes through cluster-manager. The lines
 // listed are the ones create_cluster offers.
 var identityPaths = map[string][]string{
-	"aws":   {"global", "providerSpecific", "awsClusterRoleIdentityName"},
-	"eks":   {"global", "providerSpecific", "awsClusterRoleIdentityName"},
-	"azure": {"global", "providerSpecific", "azureClusterIdentity", "name"},
+	"aws":   {valuesGlobal, "providerSpecific", "awsClusterRoleIdentityName"},
+	"eks":   {valuesGlobal, "providerSpecific", "awsClusterRoleIdentityName"},
+	"azure": {valuesGlobal, "providerSpecific", "azureClusterIdentity", "name"},
 }
 
 // Providers are the provider lines create_cluster offers, sorted.
@@ -133,12 +136,12 @@ func ClusterValues(s ClusterSpec) (map[string]any, error) {
 		arg   string
 	}
 	set := []composed{
-		{[]string{"global", "metadata", "name"}, s.Name, "name"},
-		{[]string{"global", "metadata", "organization"}, s.Organization, "organization"},
-		{[]string{"global", "release", "version"}, s.Release, "release"},
+		{[]string{valuesGlobal, fieldMetadata, "name"}, s.Name, "name"},
+		{[]string{valuesGlobal, fieldMetadata, "organization"}, s.Organization, "organization"},
+		{[]string{valuesGlobal, "release", "version"}, s.Release, "release"},
 	}
 	if s.Description != "" {
-		set = append(set, composed{[]string{"global", "metadata", "description"}, s.Description, "description"})
+		set = append(set, composed{[]string{valuesGlobal, fieldMetadata, "description"}, s.Description, "description"})
 	}
 	if s.Identity != "" {
 		set = append(set, composed{identityPaths[s.Provider], s.Identity, "identity"})
