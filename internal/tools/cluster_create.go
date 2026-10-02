@@ -249,7 +249,8 @@ type CreateClusterInput struct {
 // label of at most 20 characters no Cluster on the installation uses (a
 // re-run on a cluster create_cluster created passes, and changes nothing),
 // the release is active and its chart tag published, the organization's
-// namespace carries the installation's values, and the values the release
+// namespace carries the installation's values (and, applied, its tenant
+// ServiceAccount is bound), and the values the release
 // would install — the chart's defaults, the installation's, the cluster's —
 // match the chart's own values.schema.json. Mode commit opens the pull
 // request that adds the cluster to the repository owning its Organization
@@ -288,6 +289,11 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	})
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+	if in.Mode != ModeCommit {
+		if err := tenantBound(ctx, dyn, spec.Namespace(), spec.TenantServiceAccount); err != nil {
+			return nil, err
+		}
 	}
 	spec.Release = release.Version
 	chart, err := s.releaseChart(ctx, *release)
@@ -359,6 +365,27 @@ func installationValues(ctx context.Context, dyn dynamic.Interface, ns string) (
 	}
 	raw, _, _ := unstructured.NestedString(cm.Object, "data", compose.ValuesSecretKey)
 	return parseValues(ns, compose.InstallationValuesConfigMap, compose.ValuesSecretKey, raw)
+}
+
+// tenantBound refuses an organization whose tenant ServiceAccount, the one
+// the release installs under, is not bound yet: rbac-operator binds it
+// minutes after the namespace and its installation values appear, and a
+// release installed before then fails its first reconcile and waits out its
+// interval. Checked after installationValues, so a missing namespace is
+// refused as such; skipped in mode commit, whose cluster lands when its pull
+// request merges, and on an installation without the tenancy policy.
+func tenantBound(ctx context.Context, dyn dynamic.Interface, ns, serviceAccount string) error {
+	if serviceAccount == "" {
+		return nil
+	}
+	_, err := dyn.Resource(RoleBindingGVR).Namespace(ns).Get(ctx, compose.TenantRoleBinding, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return &ErrRefused{Reason: fmt.Sprintf("RoleBinding %s/%s does not exist yet: the organization's ServiceAccount %s, which installs the cluster, has no rights until rbac-operator binds it, within minutes of creating the organization — re-run create_cluster then", ns, compose.TenantRoleBinding, serviceAccount)}
+	}
+	if err != nil {
+		return fmt.Errorf("get RoleBinding %s/%s: %w", ns, compose.TenantRoleBinding, err)
+	}
+	return nil
 }
 
 // resolveRelease is the release a new cluster runs: the version named, or the
