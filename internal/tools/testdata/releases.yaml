@@ -1,0 +1,110 @@
+# An installation's releases for list_releases and create_cluster: the AWS
+# line with a deprecated, two active and a preview release, an EKS and an
+# Azure release, and a vSphere release of a line create_cluster does not
+# offer. wc1 in org-acme takes its name; org-acme carries the installation's
+# cluster values, org-empty does not.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: wc1
+  namespace: org-acme
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-34.0.0
+spec:
+  state: deprecated
+  date: "2026-03-02T10:00:00Z"
+  components:
+    - name: cluster-aws
+      version: 6.4.0
+    - name: kubernetes
+      version: 1.34.4
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-35.1.1
+spec:
+  state: active
+  date: "2026-09-24T12:07:55Z"
+  components:
+    - name: cluster-aws
+      version: 10.3.1
+    - name: kubernetes
+      version: 1.35.8
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-36.0.0
+spec:
+  state: active
+  date: "2026-09-24T20:18:07Z"
+  components:
+    - name: cluster-aws
+      version: v10.3.1
+    - name: kubernetes
+      version: 1.36.5
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: aws-37.0.0
+spec:
+  state: preview
+  date: "2026-09-30T08:00:00Z"
+  components:
+    - name: cluster-aws
+      version: 11.0.0
+    - name: kubernetes
+      version: 1.37.1
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: eks-34.0.1
+spec:
+  state: active
+  components:
+    - name: cluster-eks
+      version: 2.1.0
+    - name: kubernetes
+      version: 1.34.4
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: azure-36.0.0
+spec:
+  state: active
+  components:
+    - name: cluster-azure
+      version: 5.0.0
+    - name: kubernetes
+      version: 1.36.5
+---
+apiVersion: release.giantswarm.io/v1alpha1
+kind: Release
+metadata:
+  name: vsphere-30.0.0
+spec:
+  state: active
+  components:
+    - name: cluster-vsphere
+      version: 1.0.0
+    - name: kubernetes
+      version: 1.30.8
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-app-installation-values
+  namespace: org-acme
+data:
+  values.yaml: |
+    global:
+      connectivity:
+        baseDomain: gazelle.example.io
+      managementCluster: gazelle

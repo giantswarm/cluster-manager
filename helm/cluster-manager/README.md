@@ -4,8 +4,9 @@ The Agent Platform's MCP-only cluster write surface — the installation's clust
 
 The chart deploys one Deployment that serves the MCP streamable-HTTP endpoint
 under `/mcp` — cluster-manager's only surface. Its tools (`get_info`,
-`list_clusters`, `list_node_pools`, `create_node_pool`, `delete_node_pool`,
-`enable_model_serving`, `disable_model_serving`) read the
+`list_clusters`, `list_releases`, `create_cluster`, `list_node_pools`,
+`create_node_pool`, `delete_node_pool`, `enable_model_serving`,
+`disable_model_serving`, `remove_model_cache`) read the
 installation's Cluster API objects, Flux HelmReleases and Giant Swarm Releases.
 
 With `oauth.enabled` the server is an mcp-oauth resource server: muster

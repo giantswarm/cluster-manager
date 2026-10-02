@@ -1,0 +1,123 @@
+{
+  "cluster": "dev01",
+  "namespace": "org-acme",
+  "mode": "apply",
+  "dryRun": true,
+  "release": "aws-36.0.0",
+  "chartVersion": "36.0.0",
+  "kubernetesVersion": "1.36.5",
+  "objects": [
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "dev01",
+      "namespace": "org-acme",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "dev01-values",
+      "namespace": "org-acme",
+      "action": "would-create"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "dev01",
+      "namespace": "org-acme",
+      "action": "would-create"
+    }
+  ],
+  "manifests": [
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "tag": "36.0.0"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/release-aws"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "values.yaml": "global:\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01-values",
+        "namespace": "org-acme"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "dev01"
+        },
+        "install": {
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "releaseName": "dev01",
+        "serviceAccountName": "automation",
+        "upgrade": {
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "valuesFrom": [
+          {
+            "kind": "ConfigMap",
+            "name": "cluster-app-installation-values",
+            "valuesKey": "values.yaml"
+          },
+          {
+            "kind": "ConfigMap",
+            "name": "dev01-values",
+            "valuesKey": "values.yaml"
+          }
+        ]
+      }
+    }
+  ],
+  "gpuOperator": {
+    "status": ""
+  },
+  "serving": {
+    "status": ""
+  }
+}
