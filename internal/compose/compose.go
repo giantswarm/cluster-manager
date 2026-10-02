@@ -64,6 +64,10 @@ const (
 	// DefaultTenantServiceAccount is the org namespace's tenant
 	// ServiceAccount on Giant Swarm installations.
 	DefaultTenantServiceAccount = "automation"
+	// TenantRoleBinding is the RoleBinding rbac-operator grants the org
+	// namespace's tenant ServiceAccount its rights with, minutes after the
+	// namespace appears.
+	TenantRoleBinding = "write-all-customer-sa"
 	// DefaultCertificateIssuer is the cert-manager ClusterIssuer every Giant
 	// Swarm cluster runs (cert-manager is a default app): the slice asks it
 	// for the models host's certificate when the platform's wildcard is not

@@ -26,8 +26,9 @@ import (
 
 // Resources the write tools read besides the read tools'.
 var (
-	ConfigMapGVR = compose.ConfigMapGVR
-	AppGVR       = detect.AppGVR
+	ConfigMapGVR   = compose.ConfigMapGVR
+	AppGVR         = detect.AppGVR
+	RoleBindingGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}
 )
 
 // Write modes: apply lands the objects on the installation as the person,
@@ -912,7 +913,7 @@ func (s *Service) checkMode(mode string, commits bool) error {
 	case mode == ModeApply:
 		return nil
 	case mode == ModeCommit && !commits:
-		return &ErrRefused{Reason: "mode commit covers create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
+		return &ErrRefused{Reason: "mode commit covers create_cluster, create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
 	case mode == ModeCommit && !s.CommitAvailable():
 		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply"}
 	case mode == ModeCommit:

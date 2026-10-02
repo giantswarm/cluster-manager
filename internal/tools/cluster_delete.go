@@ -54,8 +54,7 @@ type DeleteClusterInput struct {
 // OCIRepositories of the cluster rendered by Helm or by cluster-manager — a
 // default app whose install was still running when the cluster went — and
 // cluster-manager's own source and values. While the Cluster is still being
-// removed it writes nothing and says so. Mode commit arrives with
-// giantswarm/cluster-manager#134.
+// removed it writes nothing and says so. Mode apply only, so far.
 func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*WriteResult, error) {
 	start := time.Now()
 	if err := s.checkMode(in.Mode, false); err != nil {

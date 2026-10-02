@@ -11,7 +11,8 @@ namespace, the control plane and infrastructure objects they reference, the
 cluster-scoped Giant Swarm Releases (the pool's pins; the control plane's
 Kubernetes version when the control plane object is not readable), the
 cluster's own values (the HelmRelease or App named like the cluster and its
-ConfigMap), the kubeconfig
+ConfigMap), the org namespace's tenant RoleBinding (create_cluster checks
+rbac-operator's binding), the kubeconfig
 Secret's cluster section (apiserver and CA), a pool release's prewarm
 placeholder (its Job and pod in the release's org- namespace), the events
 on Karpenter's NodeClaims (a refusal to launch a node outlives the claim as a
@@ -47,6 +48,9 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["nodes", "pods", "events", "persistentvolumes"]
     verbs: ["get", "list", "watch"]

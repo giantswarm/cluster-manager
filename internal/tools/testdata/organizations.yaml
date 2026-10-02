@@ -1,0 +1,61 @@
+# The Organizations a new cluster's commit mode follows: acme reconciled
+# from the fleet repository by the installation's Kustomization (a
+# gitops-template root that does not prune), plain applied by hand.
+apiVersion: security.giantswarm.io/v1alpha1
+kind: Organization
+metadata:
+  name: acme
+  labels:
+    kustomize.toolkit.fluxcd.io/name: gazelle-gitops
+    kustomize.toolkit.fluxcd.io/namespace: default
+status:
+  namespace: org-acme
+---
+apiVersion: security.giantswarm.io/v1alpha1
+kind: Organization
+metadata:
+  name: plain
+status:
+  namespace: org-plain
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: gazelle-gitops
+  namespace: default
+spec:
+  interval: 1m
+  timeout: 2m
+  path: ./management-clusters/gazelle
+  prune: false
+  serviceAccountName: automation
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-keys
+  sourceRef:
+    kind: GitRepository
+    name: workload-clusters-fleet
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: workload-clusters-fleet
+  namespace: default
+spec:
+  interval: 1m
+  url: https://github.com/acme/workload-clusters-fleet
+  ref:
+    branch: main
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-app-installation-values
+  namespace: org-plain
+data:
+  values.yaml: |
+    global:
+      connectivity:
+        baseDomain: gazelle.example.io
+      managementCluster: gazelle

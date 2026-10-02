@@ -139,7 +139,7 @@ func TestCreateClusterRefusals(t *testing.T) {
 		"contradiction": {func(in *CreateClusterInput) {
 			in.Values = map[string]any{"global": map[string]any{"metadata": map[string]any{"organization": "other"}}}
 		}, "global.metadata.organization is other, but the organization argument sets it"},
-		"commit mode": {func(in *CreateClusterInput) { in.Mode = ModeCommit }, "this tool lands its objects in mode apply only"},
+		"commit mode without the GitHub App": {func(in *CreateClusterInput) { in.Mode = ModeCommit }, "mode commit (a pull request opened as you) is not offered by this server"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l, svc := releasesService(t)
@@ -151,6 +151,30 @@ func TestCreateClusterRefusals(t *testing.T) {
 			assert.Empty(t, log.seen(), "every refusal comes before any write")
 		})
 	}
+}
+
+// TestCreateClusterRefusesAnUnboundOrganization: in an organization whose
+// tenant ServiceAccount rbac-operator has not bound yet, the call refuses
+// before any write, dry run included, naming the binding and the re-run; an
+// organization with the binding passes.
+func TestCreateClusterRefusesAnUnboundOrganization(t *testing.T) {
+	l := newLab(t, "releases.yaml")
+	svc := l.service(Config{Installation: "gazelle", TenantServiceAccount: compose.DefaultTenantServiceAccount}, WithChartReader(releaseCharts(t)))
+	log := recordWrites(t, l)
+	ctx := context.Background()
+	for _, dryRun := range []bool{true, false} {
+		in := dev01()
+		in.Organization, in.DryRun = "fresh", dryRun
+		_, err := svc.CreateCluster(ctx, in)
+		assertRefused(t, err, "RoleBinding org-fresh/write-all-customer-sa does not exist yet: the organization's ServiceAccount automation")
+		assertRefused(t, err, "re-run create_cluster then")
+	}
+	assert.Empty(t, log.seen(), "the refusal comes before any write")
+
+	in := dev01()
+	in.DryRun = true
+	_, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
 }
 
 // TestCreateClusterRefusesAGitOpsObject: an object of the cluster's names
