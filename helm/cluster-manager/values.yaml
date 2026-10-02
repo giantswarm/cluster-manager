@@ -174,8 +174,9 @@ oauth:
 github:
   # -- Register with muster pinned to the GitHub App
   # `giantswarm-cluster-manager` and offer commit mode (`mode: commit` on
-  # `create_cluster`, `create_node_pool` and `delete_node_pool`: the pull
-  # request opened as the person in the repository that owns the cluster). The MCPServer's auth then
+  # `create_cluster`, `delete_cluster`, `create_node_pool` and
+  # `delete_node_pool`: the pull request opened as the person in the
+  # repository that owns the cluster). The MCPServer's auth then
   # pins the App as the authorization server — muster runs the App's consent
   # once per person and puts their user token on every call, which this server
   # verifies with `GET /user` and opens the pull request with — and sets

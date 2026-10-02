@@ -54,11 +54,16 @@ type DeleteClusterInput struct {
 // OCIRepositories of the cluster rendered by Helm or by cluster-manager — a
 // default app whose install was still running when the cluster went — and
 // cluster-manager's own source and values. While the Cluster is still being
-// removed it writes nothing and says so. Mode commit arrives with
-// giantswarm/cluster-manager#134.
+// removed it writes nothing and says so.
+//
+// Mode commit opens the removal pull request in the repository that owns the
+// organization instead (commitDeleteCluster). Where that repository's
+// Kustomization does not prune, the merge leaves the cluster's own
+// Kustomization on the installation, out of the inventory: the first pass in
+// mode apply then deletes that Kustomization, and Flux removes what it applied.
 func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(in.Mode, false); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	if in.Organization == "" {
@@ -86,6 +91,13 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 		return nil, err
 	}
 	out := &WriteResult{Cluster: in.Name, Namespace: ns, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
+	if in.Mode == ModeCommit {
+		if err := s.commitDeleteCluster(ctx, dyn, hr, in, out, start); err != nil {
+			return nil, err
+		}
+		logApplied(ctx, "delete_cluster", out, start)
+		return out, nil
+	}
 	if hr == nil {
 		if err := s.deleteLeftovers(ctx, dyn, cluster, in, out, start); err != nil {
 			return nil, err
@@ -96,10 +108,18 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if !compose.OwnedBy(hr) {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s %s: delete_cluster removes only a cluster create_cluster created — delete it the way it was made", ns, in.Name, ownerDescription(hr))}
 	}
-	if ks, err := inGit(ctx, dyn, hr); err != nil {
+	ks, err := inGit(ctx, dyn, hr)
+	if err != nil {
 		return nil, err
-	} else if ks != "" {
-		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s is in git: Flux Kustomization %s applies it, so a live delete would be undone — remove the cluster from that repository (mode commit), and after the merge, where the Kustomization does not prune, with mode apply", ns, in.Name, ks)}
+	}
+	var merged *unstructured.Unstructured
+	if ks != "" {
+		if merged, err = s.mergedRemoval(ctx, dyn, ks, in.Name); err != nil {
+			return nil, err
+		}
+		if merged == nil {
+			return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s is in git: Flux Kustomization %s applies it, so a live delete would be undone — remove the cluster from that repository (mode commit), and after the merge, where the Kustomization does not prune, with mode apply", ns, in.Name, ks)}
+		}
 	}
 	// Without helm-controller's finalizer the delete removes the HelmRelease
 	// at once and nothing uninstalls the cluster: its Cluster API objects and
@@ -115,14 +135,22 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if registered {
 		targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
 	}
-	targets = append(targets,
-		objectRef{HelmReleaseGVR, ns, in.Name},
-		objectRef{compose.OCIRepositoryGVR, ns, in.Name},
-		objectRef{ConfigMapGVR, ns, compose.ClusterValuesName(in.Name)},
-	)
+	if merged == nil {
+		targets = append(targets,
+			objectRef{HelmReleaseGVR, ns, in.Name},
+			objectRef{compose.OCIRepositoryGVR, ns, in.Name},
+			objectRef{ConfigMapGVR, ns, compose.ClusterValuesName(in.Name)},
+		)
+	}
 	plans, err := planDeletes(ctx, dyn, targets)
 	if err != nil {
 		return nil, err
+	}
+	// The cluster's own Kustomization, out of the inventory once its removal
+	// was merged: deleting it, Flux prunes the release, its source and its
+	// values, and the release's uninstall removes the cluster.
+	if merged != nil {
+		plans = append(plans, deletePlan{res: dyn.Resource(KustomizationGVR).Namespace(merged.GetNamespace()), act: actionOf(merged)})
 	}
 	if out.WithCluster, err = clusterReleases(ctx, dyn, ns, in.Name); err != nil {
 		return nil, err
@@ -267,4 +295,28 @@ func getOptional(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVer
 // actionOf is the delete of one live object.
 func actionOf(obj *unstructured.Unstructured) ObjectAction {
 	return ObjectAction{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace()}
+}
+
+// mergedRemoval is the cluster's own Flux Kustomization ks (namespace/name)
+// after its removal was merged into a repository whose Kustomization does not
+// prune: named <installation>-clusters-<cluster> as create_cluster's commit
+// writes it, pruning, applied by a Kustomization whose inventory no longer
+// lists it. Nil for any other Kustomization: the release is still in git.
+func (s *Service) mergedRemoval(ctx context.Context, dyn dynamic.Interface, ks, cluster string) (*unstructured.Unstructured, error) {
+	namespace, name, _ := strings.Cut(ks, "/")
+	if s.cfg.Installation == "" || name != s.cfg.Installation+"-clusters-"+cluster {
+		return nil, nil
+	}
+	k, err := getOptional(ctx, dyn, KustomizationGVR, namespace, name)
+	if err != nil || k == nil {
+		return nil, err
+	}
+	if prune, _, _ := unstructured.NestedBool(k.Object, "spec", "prune"); !prune || k.GetLabels()[labelKustomizeName] == "" {
+		return nil, nil
+	}
+	owner, err := inGit(ctx, dyn, k)
+	if err != nil || owner != "" {
+		return nil, err
+	}
+	return k, nil
 }

@@ -151,7 +151,7 @@ func TestGetInfo(t *testing.T) {
 	assert.Equal(t, "test", info.Version)
 	assert.True(t, info.Modes.Apply)
 	assert.False(t, info.Modes.Commit, "commit mode follows the epic's first proof")
-	assert.Equal(t, []string{ToolCreateCluster, ToolCreateNodePool, ToolDeleteNodePool}, info.Modes.CommitTools)
+	assert.Equal(t, []string{ToolCreateCluster, ToolDeleteCluster, ToolCreateNodePool, ToolDeleteNodePool}, info.Modes.CommitTools)
 	assert.Equal(t, ToolNames(), info.Tools)
 }
 
