@@ -99,7 +99,7 @@ func TestToolsListAndSchemas(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rpc(t, srv, "tools/list", nil), &listed))
 	names := map[string]bool{}
-	writes := map[string]bool{ToolCreateNodePool: false, ToolDeleteNodePool: true, ToolEnableModelServing: false, ToolDisableModelServing: true, ToolRemoveModelCache: true}
+	writes := map[string]bool{ToolCreateCluster: false, ToolCreateNodePool: false, ToolDeleteNodePool: true, ToolEnableModelServing: false, ToolDisableModelServing: true, ToolRemoveModelCache: true}
 	for _, tool := range listed.Tools {
 		names[tool.Name] = true
 		destructive, isWrite := writes[tool.Name]
@@ -115,6 +115,10 @@ func TestToolsListAndSchemas(t *testing.T) {
 		assert.Equal(t, "apply", props["mode"].(map[string]any)["default"])
 		if tool.Name == ToolCreateNodePool {
 			assert.Equal(t, "array", props[argZones].(map[string]any)["type"], "zones is a list of the cluster's node-subnet zones")
+		}
+		if tool.Name == ToolCreateCluster {
+			assert.Equal(t, "object", props[argValues].(map[string]any)["type"], "values are checked against the release chart's schema, not parsed from a string")
+			assert.ElementsMatch(t, []any{argOrganization, argName, argProvider}, tool.InputSchema["required"])
 		}
 		if tool.Name == ToolCreateNodePool || tool.Name == ToolEnableModelServing {
 			assert.Equal(t, false, props[argCache].(map[string]any)["default"], "%s: the model cache is off until asked for (giantswarm/cluster-manager#86)", tool.Name)

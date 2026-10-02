@@ -164,7 +164,9 @@ type WriteResult struct {
 	Pool   string `json:"pool,omitempty"`
 	Mode   string `json:"mode"`
 	DryRun bool   `json:"dryRun"`
-	// Pins of a created pool; empty on delete.
+	// Release is the Release CR a created cluster runs (create_cluster).
+	Release string `json:"release,omitempty"`
+	// Pins of a created pool or cluster; empty on delete.
 	ChartVersion        string         `json:"chartVersion,omitempty"`
 	KubernetesVersion   string         `json:"kubernetesVersion,omitempty"`
 	ControlPlaneVersion string         `json:"controlPlaneVersion,omitempty"`

@@ -127,9 +127,9 @@ func KServeBackend(namespace string, t BackendTarget, pools map[string][]Instanc
 		kserve["gpuPools"] = keyed
 	}
 	doc := map[string]any{
-		"apiVersion": BackendAPIVersion,
-		"kind":       BackendKind,
-		"metadata":   map[string]any{"name": BackendKindKServe},
+		"apiVersion":  BackendAPIVersion,
+		"kind":        BackendKind,
+		fieldMetadata: map[string]any{"name": BackendKindKServe},
 		"spec": map[string]any{
 			"kind":   BackendKindKServe,
 			"source": ManagedBy,

@@ -24,6 +24,8 @@ const (
 	ToolListNodePools  = "list_node_pools"
 	ToolCreateNodePool = "create_node_pool"
 	ToolDeleteNodePool = "delete_node_pool"
+	ToolListReleases   = "list_releases"
+	ToolCreateCluster  = "create_cluster"
 
 	ToolEnableModelServing  = "enable_model_serving"
 	ToolDisableModelServing = "disable_model_serving"
@@ -32,7 +34,7 @@ const (
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
-	return []string{ToolGetInfo, ToolListClusters, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing, ToolRemoveModelCache}
+	return []string{ToolGetInfo, ToolListClusters, ToolListReleases, ToolCreateCluster, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing, ToolRemoveModelCache}
 }
 
 const (
@@ -50,6 +52,12 @@ const (
 	argZones        = "zones"
 	argCache        = "cache"
 	argClaim        = "claim"
+	argOrganization = "organization"
+	argProvider     = "provider"
+	argRelease      = "release"
+	argIdentity     = "identity"
+	argDescription  = "description"
+	argValues       = "values"
 
 	defaultMaxGPUs = 4
 )
@@ -79,7 +87,7 @@ type Modes struct {
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	opts := append(tracingOptions(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	s := mcpserver.NewMCPServer("cluster-manager", version, opts...)
 	t := &handlers{svc: svc, version: version}
@@ -93,6 +101,27 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithDescription("List the installation's clusters with the GPU operator's and the serving layer's readiness as structured fields, and the availability zones of the cluster's node subnets (zones: what a pool may be pinned to, the zones create_node_pool checks its zones against; zonesNote when they cannot be read) (gpuOperator.readiness: the operator release's Ready condition, the ClusterPolicy's state, the device plugin and GPU feature discovery DaemonSets' scheduled and ready pods — 0/0 at scale-to-zero; serving.readiness: the slice release and every child release with its Ready condition, the KServe controllers' available replicas, the LLMInferenceServiceConfigs count, the kserve backend registered with model-manager, the published presets count, the models Gateway's readiness — ready only with the Gateway Programmed, its models listener Programmed and ResolvedRefs, and the listener's cert-manager Certificate Ready, the reason and message naming what holds it back, a pending ACME challenge's included, the model cache claim of the serving namespace with the zone its volume is bound to — where every GPU pool created while the claim exists lands — and its monthly price from its size and tier, the tier read from its StorageClass or, the class gone, from the claim's tier annotations (tierSource)): name, organization and namespace, Giant Swarm release version, whether the cluster is the installation's own (its management cluster), whether the GPU operator and the serving layer are present and who provides them — chart (the platform's own release), cluster-manager, manual (by hand) — with the evidence, or unknown with the reason when the cluster cannot be read as you (serving is present with a KServe controller on the cluster, never with the KServe CRDs alone, which Helm leaves behind when a serving layer goes: those are absent with the served APIs noted); the GPU pool releases (HelmReleases of the gpu-node-pool chart) and the commit target (commitTarget: the git repository, branch and directory commit mode writes the cluster's releases to, from the Flux Kustomization that owns the cluster's HelmRelease or App, with whether it prunes; null when none owns it, note when it cannot be followed). Nothing the portal's Clusters pages already show. On an installation that does not serve the Cluster API (cluster.x-k8s.io) the list is empty and clusterApi says so."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listClusters)
+
+	s.AddTool(mcp.NewTool(ToolListReleases,
+		mcp.WithDescription("List the installation's releases (Release CRs), newest first per provider line: name (<provider>-<version>), provider, version, state (active, deprecated, wip, preview), date, the Kubernetes version, the cluster chart the release pins (clusterChart, cluster-<provider>@<version>) and the release chart a cluster of it installs (releaseChart: release-<provider> at the release's version, the cluster chart renamed by the releases repository, with published — whether the registry lists the tag, null with a note when the registry cannot be read). offered says whether create_cluster creates a cluster of the release — active, its release chart published, a provider line create_cluster offers (providers) — and note says why not. Read as you."),
+		mcp.WithString(argProvider, mcp.Description("Only this provider line's releases (aws, eks, azure, …); default every line")),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), t.listReleases)
+
+	s.AddTool(mcp.NewTool(ToolCreateCluster,
+		mcp.WithDescription("Create a workload cluster: composes, in the organization's namespace org-<organization>, a Flux HelmRelease named after the cluster installing the provider's release chart (release-<provider>, from the registry) through an OCIRepository at the release's tag, reading the installation's cluster values (ConfigMap cluster-app-installation-values) first and then the cluster's own values from the ConfigMap <name>-values: the values given, with global.metadata.name, global.metadata.organization, global.metadata.description, global.release.version and the cloud identity composed on top (a value given that contradicts one of them is refused). Every object carries app.kubernetes.io/managed-by: cluster-manager. Refused before anything is written: a name that is not a DNS label of at most 20 characters starting with a letter, or that a Cluster on the installation uses; a release that is not active, does not exist or whose release chart tag is not published; an organization whose namespace carries no installation values; values the release would install — the chart's defaults, the installation's values, the cluster's — that do not match the release chart's own values.schema.json, each violation named with its path. Mode apply creates the objects on the installation as you (RBAC decides); an object of that name someone else owns, or one a Flux Kustomization applies, is never patched. A re-run with the same arguments changes nothing (objects unchanged); its dryRun shows the difference. dryRun returns the rendered manifests and touches nothing. GPU pools are added afterwards with create_node_pool."),
+		mcp.WithString(argOrganization, mcp.Required(), mcp.Description("The organization the cluster belongs to; it lives in the namespace org-<organization>")),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("The cluster's name: a DNS label of at most 20 characters starting with a letter, unused on the installation; it prefixes the cluster's cloud resources and cannot change")),
+		mcp.WithString(argProvider, mcp.Required(), mcp.Enum(compose.Providers()...), mcp.Description("The provider line: its release chart is release-<provider>")),
+		mcp.WithString(argRelease, mcp.Description("The release version (36.0.0); default the newest active release of the provider line — list_releases names them")),
+		mcp.WithString(argIdentity, mcp.Description("The name of the provider's cloud identity object on the installation the cluster runs under (aws, eks: global.providerSpecific.awsClusterRoleIdentityName, an AWSClusterRoleIdentity; azure: global.providerSpecific.azureClusterIdentity.name); default the chart's. No credential passes through this tool")),
+		mcp.WithString(argDescription, mcp.Description("A sentence on the cluster's purpose (global.metadata.description)")),
+		mcp.WithObject(argValues, mcp.Description("The cluster's further values, checked with the composed ones against the release chart's values.schema.json (global.controlPlane, global.nodePools, …)")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: create the objects on the installation as you; commit is create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Return the rendered manifests without writing")),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+	), t.createCluster)
 
 	s.AddTool(mcp.NewTool(ToolListNodePools,
 		mcp.WithDescription("List the pools of one cluster with their lifecycle: phase (creating, ready, scaling, removing, failed) and steps — the pool release Ready, the MachinePool ready, the nodes (NodeClaims launching, ready, terminating — a terminating node named with its deletion time while Karpenter drains it and terminates its instance; a node Karpenter could not launch named with its refusal — every size refused, the zones tried, the zones AWS named as having the capacity when Karpenter's message still carries them, Karpenter's words verbatim — and the way around it: for a pool pinned to zones, the pin, the model cache claim living in the pinned zone when one does, and the re-run of create_node_pool that moves it (zones naming one zone with capacity — its slice then mounts that zone's claim —, or cache false), else wider sizes or another accelerator; on a GPU pool of cluster-manager's the ready nodes that hold nothing named idle since their last pod left, which delete_node_pool removes with the pool, and a MachinePool still listing instances the cluster no longer has said so), and for a pool created with prewarm the placeholder (prewarm: pending until the pool release installs its Job, then the Job's pod pending while the first node launches, waiting while the joined node advertises no nvidia.com/gpu yet (its pod Pending, or rejected by the node's kubelet in that window — never read as a preemption), holding a node, preempted by the first workload, done once a workload runs on the pool's node whatever the Job says, finished when the hold ended, failed where the hold container failed or a rejected pod left the pool without a node, or absent after its TTL — the step never decides the phase) — each pending, inProgress, done or failed with since/finishedAt timestamps; a pool release whose MachinePool is not created yet is listed creating, a pool under delete_node_pool stays listed removing with deleting: true and the teardown's pending objects until its HelmRelease is gone, and by its MachinePool, removing with the terminating node named, until the NodeClaim has gone with the terminated instance; plus the pool's Kubernetes version and the control plane's as two fields (no verdict is drawn), replicas and ready replicas, the instance types when readable, the accelerator of the owning pool release and its sizes (sizes: each size as AWS lists it, what it leaves a predictor, and its on-demand price per hour in the cluster's region — pricePerHourUSD, priceSource, priceAsOf, or priceNote saying why there is none), and the HelmRelease that owns the pool (null for a pool created by other means)."),
@@ -269,6 +298,46 @@ func (h *handlers) createNodePool(ctx context.Context, req mcp.CallToolRequest) 
 		DryRun: req.GetBool(argDryRun, false),
 	}
 	result, err := h.svc.CreateNodePool(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
+}
+
+func (h *handlers) listReleases(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	releases, err := h.svc.ListReleases(ctx, req.GetString(argProvider, ""))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(releases)
+}
+
+func (h *handlers) createCluster(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	in := tools.CreateClusterInput{
+		Release:     req.GetString(argRelease, ""),
+		Identity:    req.GetString(argIdentity, ""),
+		Description: req.GetString(argDescription, ""),
+		Mode:        req.GetString(argMode, tools.ModeApply),
+		DryRun:      req.GetBool(argDryRun, false),
+	}
+	for _, a := range []struct {
+		name string
+		dst  *string
+	}{{argOrganization, &in.Organization}, {argName, &in.Name}, {argProvider, &in.Provider}} {
+		v, err := req.RequireString(a.name)
+		if err != nil {
+			return errResult(err), nil
+		}
+		*a.dst = v
+	}
+	if raw, given := req.GetArguments()[argValues]; given && raw != nil {
+		values, ok := raw.(map[string]any)
+		if !ok {
+			return errResult(fmt.Errorf("values: want an object, got %T", raw)), nil
+		}
+		in.Values = values
+	}
+	result, err := h.svc.CreateCluster(ctx, in)
 	if err != nil {
 		return errResult(err), nil
 	}
