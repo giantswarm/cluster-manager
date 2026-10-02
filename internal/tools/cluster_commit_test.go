@@ -218,7 +218,7 @@ func TestDeleteClusterCommitPruningOwner(t *testing.T) {
 
 // TestDeleteClusterCommitRefusals: a cluster the repository does not carry
 // was applied and is removed in mode apply; a release cluster-manager did
-// not create is refused as in apply.
+// not create, or a Cluster without one, is refused as in apply.
 func TestDeleteClusterCommitRefusals(t *testing.T) {
 	_, svc, fake := deleteCommitLab(t, acmeBase())
 	_, err := svc.DeleteCluster(asPerson(context.Background()), dev01DeleteCommit())
@@ -228,6 +228,16 @@ func TestDeleteClusterCommitRefusals(t *testing.T) {
 	in.Name = "legacy"
 	_, err = svc.DeleteCluster(asPerson(context.Background()), in)
 	assertRefused(t, err, "delete_cluster removes only a cluster create_cluster created")
+
+	// byhand is in the repository, but its Cluster has no release of
+	// create_cluster's: the removal is not cluster-manager's to open.
+	inGitByHand := acmeBase()
+	inGitByHand[acmeClusters+"/byhand.yaml"] = []byte("kind: Kustomization\n")
+	_, svcByHand, fakeByHand := deleteCommitLab(t, inGitByHand)
+	in.Name = "byhand"
+	_, err = svcByHand.DeleteCluster(asPerson(context.Background()), in)
+	assertRefused(t, err, "cluster org-acme/byhand has no HelmRelease org-acme/byhand: it was not created by create_cluster")
+	assert.Empty(t, fakeByHand.PullRequests())
 	assert.Empty(t, fake.PullRequests())
 }
 

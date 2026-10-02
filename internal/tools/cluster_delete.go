@@ -92,7 +92,7 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	}
 	out := &WriteResult{Cluster: in.Name, Namespace: ns, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
 	if in.Mode == ModeCommit {
-		if err := s.commitDeleteCluster(ctx, dyn, hr, in, out, start); err != nil {
+		if err := s.commitDeleteCluster(ctx, dyn, cluster, hr, in, out, start); err != nil {
 			return nil, err
 		}
 		logApplied(ctx, "delete_cluster", out, start)
