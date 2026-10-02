@@ -408,6 +408,9 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	// namespace break the slice about to be composed: healed first, before
 	// anything lands.
 	if slice != nil {
+		if err := s.reclaimServingNamespace(ctx, target, in.DryRun, out); err != nil {
+			return nil, err
+		}
 		if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
 			return nil, err
 		}
@@ -767,6 +770,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	}
 	if err := td.deleteAll(plans); err != nil {
 		return nil, err
+	}
+	if slice != nil {
+		if err := s.retireServingNamespace(td, t); err != nil {
+			return nil, err
+		}
 	}
 	td.finish()
 	logApplied(ctx, "delete_node_pool", out, start)
