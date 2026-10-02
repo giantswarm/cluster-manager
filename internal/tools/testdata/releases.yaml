@@ -108,3 +108,32 @@ data:
       connectivity:
         baseDomain: gazelle.example.io
       managementCluster: gazelle
+---
+# rbac-operator's binding of acme's tenant ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: write-all-customer-sa
+  namespace: org-acme
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: automation
+    namespace: org-acme
+---
+# fresh is an organization created a minute ago: its namespace carries the
+# installation's values, rbac-operator has not bound its ServiceAccount yet.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-app-installation-values
+  namespace: org-fresh
+data:
+  values.yaml: |
+    global:
+      connectivity:
+        baseDomain: gazelle.example.io
+      managementCluster: gazelle

@@ -153,6 +153,30 @@ func TestCreateClusterRefusals(t *testing.T) {
 	}
 }
 
+// TestCreateClusterRefusesAnUnboundOrganization: in an organization whose
+// tenant ServiceAccount rbac-operator has not bound yet, the call refuses
+// before any write, dry run included, naming the binding and the re-run; an
+// organization with the binding passes.
+func TestCreateClusterRefusesAnUnboundOrganization(t *testing.T) {
+	l := newLab(t, "releases.yaml")
+	svc := l.service(Config{Installation: "gazelle", TenantServiceAccount: compose.DefaultTenantServiceAccount}, WithChartReader(releaseCharts(t)))
+	log := recordWrites(t, l)
+	ctx := context.Background()
+	for _, dryRun := range []bool{true, false} {
+		in := dev01()
+		in.Organization, in.DryRun = "fresh", dryRun
+		_, err := svc.CreateCluster(ctx, in)
+		assertRefused(t, err, "RoleBinding org-fresh/write-all-customer-sa does not exist yet: the organization's ServiceAccount automation")
+		assertRefused(t, err, "re-run create_cluster then")
+	}
+	assert.Empty(t, log.seen(), "the refusal comes before any write")
+
+	in := dev01()
+	in.DryRun = true
+	_, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+}
+
 // TestCreateClusterRefusesAGitOpsObject: an object of the cluster's names
 // that someone else owns is never patched; the refusal names its owner.
 func TestCreateClusterRefusesAGitOpsObject(t *testing.T) {
