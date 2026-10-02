@@ -148,6 +148,15 @@ spec:
               containerPort: {{ .Values.observability.metrics.port }}
               protocol: TCP
             {{- end }}
+          # Up to 5m30s to serve /healthz: building the Dex provider waits up to
+          # 5 minutes for an unavailable Dex, and liveness only starts after this.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 33
           livenessProbe:
             httpGet:
               path: /healthz
