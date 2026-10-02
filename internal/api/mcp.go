@@ -26,6 +26,7 @@ const (
 	ToolDeleteNodePool = "delete_node_pool"
 	ToolListReleases   = "list_releases"
 	ToolCreateCluster  = "create_cluster"
+	ToolDeleteCluster  = "delete_cluster"
 
 	ToolEnableModelServing  = "enable_model_serving"
 	ToolDisableModelServing = "disable_model_serving"
@@ -34,7 +35,7 @@ const (
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
-	return []string{ToolGetInfo, ToolListClusters, ToolListReleases, ToolCreateCluster, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing, ToolRemoveModelCache}
+	return []string{ToolGetInfo, ToolListClusters, ToolListReleases, ToolCreateCluster, ToolDeleteCluster, ToolListNodePools, ToolCreateNodePool, ToolDeleteNodePool, ToolEnableModelServing, ToolDisableModelServing, ToolRemoveModelCache}
 }
 
 const (
@@ -93,7 +94,7 @@ var commitTools = []string{ToolCreateCluster, ToolCreateNodePool, ToolDeleteNode
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	opts := append(tracingOptions(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you or, in mode commit, opens the pull request that adds it to the repository owning the organization; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you or, in mode commit, opens the pull request that adds it to the repository owning the organization; delete_cluster removes a cluster create_cluster created, as you, its GPU pools with it, and refuses the installation's own cluster and one Flux applies from git; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	s := mcpserver.NewMCPServer("cluster-manager", version, opts...)
 	t := &handlers{svc: svc, version: version}
@@ -128,6 +129,16 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 	), t.createCluster)
+
+	s.AddTool(mcp.NewTool(ToolDeleteCluster,
+		mcp.WithDescription("Delete a workload cluster create_cluster created, as you, in two calls with the same arguments. The first removes the kserve backend cluster-manager registered for the cluster with model-manager, then the cluster's HelmRelease in org-<organization> — helm-controller uninstalls the cluster and its default apps, and the GPU pool, GPU operator and serving-slice releases cluster-manager created go with the Cluster through their ownerReference to it —, its OCIRepository and its <name>-values ConfigMap, without waiting for the uninstall (a small cluster is gone in about five minutes); the answer lists those releases (withCluster), the models served on the cluster (models, or modelsNote saying why they cannot be told) and nextStep. The second, once list_clusters no longer lists the cluster, removes what the uninstall left in the namespace: the cluster's HelmReleases and OCIRepositories rendered by Helm or cluster-manager (a default app whose install was still running) and cluster-manager's own source and values; another owner's object is named in warnings and left; while the Cluster is still being removed it writes nothing and says so. Refused before anything is deleted, each with its reason and the way out: a HelmRelease cluster-manager did not create (delete the cluster the way it was made), the installation's own cluster, a release in a Flux Kustomization's inventory (remove it from git; a live delete would be undone), and a release helm-controller has not reconciled since its last write (no finalizers.fluxcd.io: the delete would not uninstall the cluster). dryRun lists what would be removed, or the refusal; nothing is written. Answers within the caller's deadline: what did not fit is pending (partial: true, nextStep) and the re-run continues."),
+		mcp.WithString(argOrganization, mcp.Required(), mcp.Description("The organization the cluster belongs to; it lives in the namespace org-<organization>")),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("The cluster's name as given to create_cluster")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+	), t.deleteCluster)
 
 	s.AddTool(mcp.NewTool(ToolListNodePools,
 		mcp.WithDescription("List the pools of one cluster with their lifecycle: phase (creating, ready, scaling, removing, failed) and steps — the pool release Ready, the MachinePool ready, the nodes (NodeClaims launching, ready, terminating — a terminating node named with its deletion time while Karpenter drains it and terminates its instance; a node Karpenter could not launch named with its refusal — every size refused, the zones tried, the zones AWS named as having the capacity when Karpenter's message still carries them, Karpenter's words verbatim — and the way around it: for a pool pinned to zones, the pin, the model cache claim living in the pinned zone when one does, and the re-run of create_node_pool that moves it (zones naming one zone with capacity — its slice then mounts that zone's claim —, or cache false), else wider sizes or another accelerator; on a GPU pool of cluster-manager's the ready nodes that hold nothing named idle since their last pod left, which delete_node_pool removes with the pool, and a MachinePool still listing instances the cluster no longer has said so), and for a pool created with prewarm the placeholder (prewarm: pending until the pool release installs its Job, then the Job's pod pending while the first node launches, waiting while the joined node advertises no nvidia.com/gpu yet (its pod Pending, or rejected by the node's kubelet in that window — never read as a preemption), holding a node, preempted by the first workload, done once a workload runs on the pool's node whatever the Job says, finished when the hold ended, failed where the hold container failed or a rejected pod left the pool without a node, or absent after its TTL — the step never decides the phase) — each pending, inProgress, done or failed with since/finishedAt timestamps; a pool release whose MachinePool is not created yet is listed creating, a pool under delete_node_pool stays listed removing with deleting: true and the teardown's pending objects until its HelmRelease is gone, and by its MachinePool, removing with the terminating node named, until the NodeClaim has gone with the terminated instance; plus the pool's Kubernetes version and the control plane's as two fields (no verdict is drawn), replicas and ready replicas, the instance types when readable, the accelerator of the owning pool release and its sizes (sizes: each size as AWS lists it, what it leaves a predictor, and its on-demand price per hour in the cluster's region — pricePerHourUSD, priceSource, priceAsOf, or priceNote saying why there is none), and the HelmRelease that owns the pool (null for a pool created by other means)."),
@@ -344,6 +355,25 @@ func (h *handlers) createCluster(ctx context.Context, req mcp.CallToolRequest) (
 		in.Values = values
 	}
 	result, err := h.svc.CreateCluster(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(result)
+}
+
+func (h *handlers) deleteCluster(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	in := tools.DeleteClusterInput{
+		Mode:   req.GetString(argMode, tools.ModeApply),
+		DryRun: req.GetBool(argDryRun, false),
+	}
+	var err error
+	if in.Organization, err = req.RequireString(argOrganization); err != nil {
+		return errResult(err), nil
+	}
+	if in.Name, err = req.RequireString(argName); err != nil {
+		return errResult(err), nil
+	}
+	result, err := h.svc.DeleteCluster(ctx, in)
 	if err != nil {
 		return errResult(err), nil
 	}

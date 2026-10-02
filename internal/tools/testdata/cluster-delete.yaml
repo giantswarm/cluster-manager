@@ -1,0 +1,329 @@
+# delete_cluster's installation: dev01, a cluster create_cluster created in
+# acme, with a GPU pool, the operator and the serving slice cluster-manager
+# composed for it (each owned by the Cluster), a default app its release
+# rendered (cert-exporter), and the kserve backend registered for it; and one
+# cluster per refusal: legacy (its release made by Helm, not cluster-manager),
+# gitops (its release in a Kustomization's inventory), pruned (labelled by
+# that Kustomization but out of its inventory: the removal was merged), fresh
+# (not reconciled since its last write: no Flux finalizer) and byhand (a
+# Cluster without a HelmRelease of that name).
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: dev01
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: dev01
+    giantswarm.io/organization: acme
+  uid: dev01-uid
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: dev01
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: release-aws
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+    giantswarm.io/organization: acme
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: dev01
+
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: dev01
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+spec:
+  url: oci://gsoci.azurecr.io/charts/giantswarm/release-aws
+  ref:
+    tag: 36.0.0
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dev01-values
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+data:
+  values: |
+    global:
+      metadata:
+        name: dev01
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dev01-kubeconfig
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: dev01
+type: cluster.x-k8s.io/secret
+data:
+  value: YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnCmNsdXN0ZXJzOgotIG5hbWU6IHdjMQogIGNsdXN0ZXI6CiAgICBzZXJ2ZXI6IGh0dHBzOi8vYXBpLndjMS5hY21lLmV4YW1wbGUuaW86NjQ0MwogICAgY2VydGlmaWNhdGUtYXV0aG9yaXR5LWRhdGE6IExTMHRMUzFDUlVkSlRpQkRSVkpVU1VaSlEwRlVSUzB0TFMwdENrMUpTVUptYVhoMGRYSmxRMEZ1YjNSaGNtVmhiR05sY25ScFptbGpZWFJsTURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNQW90TFMwdExVVk9SQ0JEUlZKVVNVWkpRMEZVUlMwdExTMHRDZz09CmNvbnRleHRzOgotIG5hbWU6IHdjMS1hZG1pbkB3YzEKICBjb250ZXh0OiB7Y2x1c3Rlcjogd2MxLCB1c2VyOiB3YzEtYWRtaW59CmN1cnJlbnQtY29udGV4dDogd2MxLWFkbWluQHdjMQp1c2VyczoKLSBuYW1lOiB3YzEtYWRtaW4KICB1c2VyOgogICAgY2xpZW50LWNlcnRpZmljYXRlLWRhdGE6IGJtOTBMWEpsWVdRdFlua3RZMngxYzNSbGNpMXRZVzVoWjJWeQogICAgY2xpZW50LWtleS1kYXRhOiBibTkwTFhKbFlXUXRZbmt0WTJ4MWMzUmxjaTF0WVc1aFoyVnkK
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: dev01-gpu
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: gpu-node-pool
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+    giantswarm.io/organization: acme
+    giantswarm.io/node-pool: gpu
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: dev01
+    uid: dev01-uid
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: dev01-gpu
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: dev01-gpu-operator
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: gpu-operator
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+    giantswarm.io/organization: acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: dev01
+    uid: dev01-uid
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: dev01-gpu-operator
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: dev01-agent-platform
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: agent-platform
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+    giantswarm.io/organization: acme
+  ownerReferences:
+  - apiVersion: cluster.x-k8s.io/v1beta1
+    kind: Cluster
+    name: dev01
+    uid: dev01-uid
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: dev01-agent-platform
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: dev01-cert-exporter
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: cert-exporter
+    app.kubernetes.io/managed-by: Helm
+    giantswarm.io/cluster: dev01
+    giantswarm.io/organization: acme
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: dev01-cert-exporter
+
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: dev01-cert-exporter
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    giantswarm.io/cluster: dev01
+spec:
+  url: oci://gsoci.azurecr.io/charts/giantswarm/release-aws
+  ref:
+    tag: 36.0.0
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-backend-kserve
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: dev01
+data:
+  backend.yaml: |
+    kind: kserve
+
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: legacy
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: legacy
+    giantswarm.io/organization: acme
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: legacy
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: release-aws
+    app.kubernetes.io/managed-by: Helm
+    giantswarm.io/cluster: legacy
+    giantswarm.io/organization: acme
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: legacy
+
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: gitops
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: gitops
+    giantswarm.io/organization: acme
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gitops
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: release-aws
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: gitops
+    giantswarm.io/organization: acme
+    kustomize.toolkit.fluxcd.io/name: acme-clusters
+    kustomize.toolkit.fluxcd.io/namespace: default
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: gitops
+
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: pruned
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: pruned
+    giantswarm.io/organization: acme
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: pruned
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: release-aws
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: pruned
+    giantswarm.io/organization: acme
+    kustomize.toolkit.fluxcd.io/name: acme-clusters
+    kustomize.toolkit.fluxcd.io/namespace: default
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: pruned
+
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: acme-clusters
+  namespace: default
+spec:
+  interval: 1m
+  path: ./management-clusters/gazelle/organizations/acme/workload-clusters
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: workload-clusters-fleet
+status:
+  inventory:
+    entries:
+    - id: org-acme_gitops_helm.toolkit.fluxcd.io_HelmRelease
+      v: v2
+
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: fresh
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: fresh
+    giantswarm.io/organization: acme
+
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: fresh
+  namespace: org-acme
+  labels:
+    app.kubernetes.io/name: release-aws
+    app.kubernetes.io/managed-by: cluster-manager
+    giantswarm.io/cluster: fresh
+    giantswarm.io/organization: acme
+  finalizers: []
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: fresh
+
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: byhand
+  namespace: org-acme
+  labels:
+    cluster.x-k8s.io/cluster-name: byhand
+    giantswarm.io/organization: acme
