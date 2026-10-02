@@ -199,6 +199,14 @@ type WriteResult struct {
 	// in it (SliceKept names it then).
 	LastPool  bool   `json:"lastPool,omitempty"`
 	SliceKept string `json:"sliceKept,omitempty"`
+	// WithCluster are the releases that go with a deleted cluster's release
+	// (delete_cluster): the GPU pool, operator and slice releases
+	// cluster-manager created, through their ownerReference to the Cluster,
+	// and the default apps the uninstall removes. Models are the models
+	// served on the cluster, ModelsNote why they cannot be told.
+	WithCluster []string `json:"withCluster,omitempty"`
+	Models      []string `json:"models,omitempty"`
+	ModelsNote  string   `json:"modelsNote,omitempty"`
 	// Sizes are the pool's instance sizes as composed (create): the node as
 	// AWS lists it, its NVMe instance store (what a pool node's /var/lib is
 	// from gpu-node-pool 0.7.0), what it leaves a predictor after the
