@@ -1,0 +1,52 @@
+{
+  "cluster": "dev01",
+  "namespace": "org-acme",
+  "mode": "apply",
+  "dryRun": true,
+  "objects": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "model-backend-kserve",
+      "namespace": "agent-platform",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "name": "dev01",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "name": "dev01",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "name": "dev01-values",
+      "namespace": "org-acme",
+      "action": "would-delete"
+    }
+  ],
+  "gpuOperator": {
+    "status": ""
+  },
+  "serving": {
+    "status": ""
+  },
+  "withCluster": [
+    "org-acme/dev01-agent-platform",
+    "org-acme/dev01-cert-exporter",
+    "org-acme/dev01-gpu",
+    "org-acme/dev01-gpu-operator"
+  ],
+  "models": [
+    "LLMInferenceService model-serving/llama-3-8b (meta-llama/Llama-3.1-8B-Instruct)"
+  ],
+  "nextStep": "helm-controller uninstalls the cluster — a small one is gone in about five minutes, list_clusters lists it until then —; re-run delete_cluster with the same arguments afterwards: it removes what the uninstall left in org-acme (a default app whose install was still running)"
+}
