@@ -122,11 +122,16 @@ func clusterLayoutError(err error) error {
 // backend registration cluster-manager wrote for the cluster is
 // model-manager's runtime state, no file of the repository: it is removed
 // live, as in apply. A cluster that is not in the repository was landed in
-// apply mode and is removed in apply mode.
-func (s *Service) commitDeleteCluster(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured, in DeleteClusterInput, out *WriteResult, start time.Time) error {
+// apply mode and is removed in apply mode. The guard is apply's: a cluster
+// whose release cluster-manager did not create, or a Cluster without that
+// release, was made by other means and is removed by them.
+func (s *Service) commitDeleteCluster(ctx context.Context, dyn dynamic.Interface, cluster, hr *unstructured.Unstructured, in DeleteClusterInput, out *WriteResult, start time.Time) error {
 	ns := out.Namespace
-	if hr != nil && !compose.OwnedBy(hr) {
+	switch {
+	case hr != nil && !compose.OwnedBy(hr):
 		return &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s %s: delete_cluster removes only a cluster create_cluster created — delete it the way it was made", ns, in.Name, ownerDescription(hr))}
+	case hr == nil && cluster != nil:
+		return &ErrRefused{Reason: fmt.Sprintf("cluster %s/%s has no HelmRelease %s/%s: it was not created by create_cluster — delete it the way it was made", ns, in.Name, ns, in.Name)}
 	}
 	place, err := clusterPlace(ctx, dyn, s.cfg.Installation, in.Organization, in.Name)
 	if err != nil {
