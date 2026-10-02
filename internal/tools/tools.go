@@ -34,6 +34,9 @@ var (
 	MachinePoolGVR = schema.GroupVersionResource{Group: ClusterAPIGroup, Version: "v1beta1", Resource: "machinepools"}
 	HelmReleaseGVR = compose.HelmReleaseGVR
 	ReleaseGVR     = schema.GroupVersionResource{Group: "release.giantswarm.io", Version: "v1alpha1", Resource: "releases"}
+	// OrganizationGVR is the cluster-scoped Organization CR; commit mode
+	// follows a new cluster's to the repository that owns it.
+	OrganizationGVR = schema.GroupVersionResource{Group: "security.giantswarm.io", Version: "v1alpha1", Resource: "organizations"}
 	// JobGVR is the prewarm placeholder's Job in a pool release's namespace
 	// (lifecycle.go); its pod is read through detect.PodsGVR.
 	JobGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}

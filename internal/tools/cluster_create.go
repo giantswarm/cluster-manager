@@ -251,11 +251,12 @@ type CreateClusterInput struct {
 // the release is active and its chart tag published, the organization's
 // namespace carries the installation's values, and the values the release
 // would install — the chart's defaults, the installation's, the cluster's —
-// match the chart's own values.schema.json. Mode commit arrives with
-// giantswarm/cluster-manager#134.
+// match the chart's own values.schema.json. Mode commit opens the pull
+// request that adds the cluster to the repository owning its Organization
+// instead (commitCreateCluster).
 func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*WriteResult, error) {
 	start := time.Now()
-	if err := s.checkMode(in.Mode, false); err != nil {
+	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
 	spec := compose.ClusterSpec{
@@ -309,7 +310,12 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 		Release: release.Name, ChartVersion: release.Version, KubernetesVersion: release.KubernetesVersion,
 		Objects: []ObjectAction{},
 	}
-	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start)); err != nil {
+	if in.Mode == ModeCommit {
+		err = s.commitCreateCluster(ctx, dyn, spec, objs, in.DryRun, out)
+	} else {
+		err = applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start))
+	}
+	if err != nil {
 		return nil, err
 	}
 	logApplied(ctx, "create_cluster", out, start)

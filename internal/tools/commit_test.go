@@ -197,7 +197,7 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 	assert.Empty(t, fakePGP.PullRequests())
 
 	_, err = svc.EnableModelServing(ctx, ModelServingInput{Cluster: "wc1", Mode: ModeCommit})
-	assertRefused(t, err, "mode commit covers create_node_pool and delete_node_pool; this tool lands its objects in mode apply only")
+	assertRefused(t, err, "mode commit covers create_cluster, create_node_pool and delete_node_pool; this tool lands its objects in mode apply only")
 }
 
 // TestDeleteNodePoolCommit: the removal pull request deletes the pool's

@@ -139,7 +139,7 @@ func TestCreateClusterRefusals(t *testing.T) {
 		"contradiction": {func(in *CreateClusterInput) {
 			in.Values = map[string]any{"global": map[string]any{"metadata": map[string]any{"organization": "other"}}}
 		}, "global.metadata.organization is other, but the organization argument sets it"},
-		"commit mode": {func(in *CreateClusterInput) { in.Mode = ModeCommit }, "this tool lands its objects in mode apply only"},
+		"commit mode without the GitHub App": {func(in *CreateClusterInput) { in.Mode = ModeCommit }, "mode commit (a pull request opened as you) is not offered by this server"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l, svc := releasesService(t)
