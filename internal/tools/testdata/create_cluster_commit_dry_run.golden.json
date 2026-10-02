@@ -1,0 +1,138 @@
+{
+  "cluster": "dev01",
+  "namespace": "org-acme",
+  "mode": "commit",
+  "dryRun": true,
+  "release": "aws-36.0.0",
+  "chartVersion": "36.0.0",
+  "kubernetesVersion": "1.36.5",
+  "objects": [],
+  "manifests": [
+    {
+      "apiVersion": "source.toolkit.fluxcd.io/v1",
+      "kind": "OCIRepository",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "interval": "10m",
+        "ref": {
+          "tag": "36.0.0"
+        },
+        "url": "oci://gsoci.azurecr.io/charts/giantswarm/release-aws"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "values.yaml": "global:\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01-values",
+        "namespace": "org-acme"
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "cluster-manager",
+          "app.kubernetes.io/name": "release-aws",
+          "giantswarm.io/cluster": "dev01",
+          "giantswarm.io/organization": "acme"
+        },
+        "name": "dev01",
+        "namespace": "org-acme"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "dev01"
+        },
+        "install": {
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "interval": "10m",
+        "releaseName": "dev01",
+        "serviceAccountName": "automation",
+        "upgrade": {
+          "remediation": {
+            "retries": 3
+          }
+        },
+        "valuesFrom": [
+          {
+            "kind": "ConfigMap",
+            "name": "cluster-app-installation-values",
+            "valuesKey": "values.yaml"
+          },
+          {
+            "kind": "ConfigMap",
+            "name": "dev01-values",
+            "valuesKey": "values.yaml"
+          }
+        ]
+      }
+    }
+  ],
+  "gpuOperator": {
+    "status": ""
+  },
+  "serving": {
+    "status": ""
+  },
+  "commit": {
+    "repository": "acme/workload-clusters-fleet",
+    "base": "main",
+    "directory": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01",
+    "kustomization": "default/gazelle-gitops",
+    "prune": false,
+    "branch": "cluster-manager/create-cluster-dev01",
+    "files": [
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01.yaml",
+        "action": "add",
+        "content": "apiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: gazelle-clusters-dev01\n  namespace: default\nspec:\n  decryption:\n    provider: sops\n    secretRef:\n      name: sops-keys\n  interval: 1m\n  path: ./management-clusters/gazelle/organizations/acme/workload-clusters/dev01\n  prune: true\n  serviceAccountName: automation\n  sourceRef:\n    kind: GitRepository\n    name: workload-clusters-fleet\n  timeout: 2m\n"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01-values.yaml",
+        "action": "add",
+        "content": "apiVersion: v1\ndata:\n  values.yaml: |\n    global:\n      metadata:\n        description: Acme's development cluster\n        name: dev01\n        organization: acme\n      providerSpecific:\n        awsClusterRoleIdentityName: acme-dev\n      release:\n        version: 36.0.0\nkind: ConfigMap\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: cluster-manager\n    app.kubernetes.io/name: release-aws\n    giantswarm.io/cluster: dev01\n    giantswarm.io/organization: acme\n  name: dev01-values\n  namespace: org-acme\n"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01.yaml",
+        "action": "add",
+        "content": "apiVersion: source.toolkit.fluxcd.io/v1\nkind: OCIRepository\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: cluster-manager\n    app.kubernetes.io/name: release-aws\n    giantswarm.io/cluster: dev01\n    giantswarm.io/organization: acme\n  name: dev01\n  namespace: org-acme\nspec:\n  interval: 10m\n  ref:\n    tag: 36.0.0\n  url: oci://gsoci.azurecr.io/charts/giantswarm/release-aws\n---\napiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: cluster-manager\n    app.kubernetes.io/name: release-aws\n    giantswarm.io/cluster: dev01\n    giantswarm.io/organization: acme\n  name: dev01\n  namespace: org-acme\nspec:\n  chartRef:\n    kind: OCIRepository\n    name: dev01\n  install:\n    remediation:\n      retries: 3\n  interval: 10m\n  releaseName: dev01\n  serviceAccountName: automation\n  upgrade:\n    remediation:\n      retries: 3\n  valuesFrom:\n  - kind: ConfigMap\n    name: cluster-app-installation-values\n    valuesKey: values.yaml\n  - kind: ConfigMap\n    name: dev01-values\n    valuesKey: values.yaml\n"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/kustomization.yaml",
+        "action": "add",
+        "content": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - dev01-values.yaml\n  - dev01.yaml\n"
+      },
+      {
+        "path": "management-clusters/gazelle/organizations/acme/workload-clusters/kustomization.yaml",
+        "action": "update",
+        "content": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - wc1.yaml\n  - dev01.yaml\n"
+      }
+    ],
+    "author": "jane"
+  },
+  "nextStep": "re-run without dryRun to open the pull request as jane in acme/workload-clusters-fleet"
+}

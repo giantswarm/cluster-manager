@@ -80,14 +80,20 @@ type Info struct {
 type Modes struct {
 	Apply  bool `json:"apply"`
 	Commit bool `json:"commit"`
+	// CommitTools are the tools that take mode commit.
+	CommitTools []string `json:"commitTools"`
 }
+
+// commitTools are the tools that take mode commit; every other write lands
+// in mode apply only.
+var commitTools = []string{ToolCreateCluster, ToolCreateNodePool, ToolDeleteNodePool}
 
 // NewMCPServer builds the MCP server exposing the tools. Results are JSON
 // text.
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	opts := append(tracingOptions(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
+		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you or, in mode commit, opens the pull request that adds it to the repository owning the organization; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)
 	s := mcpserver.NewMCPServer("cluster-manager", version, opts...)
 	t := &handlers{svc: svc, version: version}
@@ -117,8 +123,8 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argIdentity, mcp.Description("The name of the provider's cloud identity object on the installation the cluster runs under (aws, eks: global.providerSpecific.awsClusterRoleIdentityName, an AWSClusterRoleIdentity; azure: global.providerSpecific.azureClusterIdentity.name); default the chart's. No credential passes through this tool")),
 		mcp.WithString(argDescription, mcp.Description("A sentence on the cluster's purpose (global.metadata.description)")),
 		mcp.WithObject(argValues, mcp.Description("The cluster's further values, checked with the composed ones against the release chart's values.schema.json (global.controlPlane, global.nodePools, …)")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: create the objects on the installation as you; commit is create_node_pool's and delete_node_pool's, refused here")),
-		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Return the rendered manifests without writing")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: create the objects on the installation as you; commit: open the pull request as you in the git repository that owns the Organization (its Flux Kustomization's GitRepository): the objects as files under organizations/<organization>/workload-clusters/<name>/, the cluster's own Flux Kustomization <installation>-clusters-<name> in <name>.yaml beside it and its entry in workload-clusters/kustomization.yaml, answered with the pull request's URL in commit.pullRequest; needs the server registered with its GitHub App (get_info modes.commit) and your consent to it in muster; an Organization no Flux Kustomization reconciles, or a repository without the organization's directory, is refused. GPU pools of a cluster made this way go in commit mode to <name>/cluster-manager/")),
+		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Return the rendered manifests without writing; in mode commit also the files, the repository, the branch and the directory")),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 	), t.createCluster)
@@ -165,7 +171,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name; the installation's own cluster included")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithBoolean(argCache, mcp.DefaultBool(false), mcp.Description("Whether the slice's predictors mount a model cache claim — without the argument the release keeps its setting, and a first slice serves without a cache (default false): a claim is a volume billed every month it exists, never created unasked; true mounts the claim the release mounts already (the zone's claim the last create_node_pool named), else hf-cache; the answer's cache block names its size, tier and monthly list price. false composes modelServing.cache.enabled false on the release — no claim applied or mounted, the weights downloaded into each predictor pod's ephemeral storage, the existing claims left as they are and billed until removed; refused (refused{cacheOn}) while the release runs with the cache on — the way to serve without the cache is remove_model_cache")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you; commit is create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: land the objects on the installation as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("Render and compare only; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -178,7 +184,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Remove the serving slice even while models are served: they go with it, and the well-known LLMInferenceServiceConfigs are removed with their finalizer instead of waiting for the llm-d controller to clear them")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -191,7 +197,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argCluster, mcp.Required(), mcp.Description("Cluster name")),
 		mcp.WithString(argNamespace, mcp.Description("Cluster namespace (org-<organization>); optional when the name is unique on the installation")),
 		mcp.WithString(argClaim, mcp.Description("One model cache claim to remove, by name (hf-cache, hf-cache-eu-central-1a); default every hf-cache* claim of the serving namespace. The slice serves without the cache from then on when the claim removed is the one it mounts.")),
-		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation and the cluster as you; commit is create_node_pool's and delete_node_pool's, refused here")),
+		mcp.WithString(argMode, mcp.Enum(tools.ModeApply, tools.ModeCommit), mcp.DefaultString(tools.ModeApply), mcp.Description("apply: remove the objects from the installation and the cluster as you; commit is create_cluster's, create_node_pool's and delete_node_pool's, refused here")),
 		mcp.WithBoolean(argDryRun, mcp.DefaultBool(false), mcp.Description("List what would be removed; nothing is written")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -373,7 +379,7 @@ type handlers struct {
 }
 
 func (h *handlers) getInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return jsonResult(Info{Version: h.version, Modes: Modes{Apply: true, Commit: h.svc.CommitAvailable()}, Tools: ToolNames(), ClusterAPI: h.svc.ClusterAPI(ctx)})
+	return jsonResult(Info{Version: h.version, Modes: Modes{Apply: true, Commit: h.svc.CommitAvailable(), CommitTools: commitTools}, Tools: ToolNames(), ClusterAPI: h.svc.ClusterAPI(ctx)})
 }
 
 func (h *handlers) listClusters(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

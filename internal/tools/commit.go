@@ -50,11 +50,12 @@ const (
 )
 
 // GitHubRemote is what commit mode needs of GitHub: the pull request seams
-// and the reads of the base (gitops-commit's Remote and Reader), acting as
-// the person.
+// and the reads of the base (gitops-commit's Remote, Reader and Lister),
+// acting as the person.
 type GitHubRemote interface {
 	commit.Remote
 	commit.Reader
+	commit.Lister
 }
 
 // RemoteFor builds the GitHub remote from the person's App user token.
@@ -240,11 +241,11 @@ func releaseFiles(dir layout.Directory, objs []*unstructured.Unstructured) (map[
 	return files, nil
 }
 
-// commitPlan is the change set of one write in cluster-manager's directory
-// (gitops-commit's layout) with the remote that lands it.
+// commitPlan is the change set of one write (gitops-commit's layout) with
+// where it lands and the remote that lands it.
 type commitPlan struct {
 	*layout.Plan
-	loc    commitLocation
+	target *CommitTarget
 	remote GitHubRemote
 }
 
@@ -273,7 +274,7 @@ func planCommit(ctx context.Context, remote GitHubRemote, loc commitLocation, wr
 	if err != nil {
 		return nil, commitError(err)
 	}
-	return &commitPlan{Plan: plan, loc: loc, remote: remote}, nil
+	return &commitPlan{Plan: plan, target: loc.target(), remote: remote}, nil
 }
 
 // actions are the plan's files as the answer reports them.
@@ -289,8 +290,8 @@ func (p *commitPlan) actions() []CommitFile {
 // dry run. Nothing to change opens none.
 func (p *commitPlan) open(ctx context.Context, gh *identity.GitHub, branch, title, body string, dryRun bool) (*CommitResult, error) {
 	out := &CommitResult{
-		Repository: p.loc.Repository.String(), Base: p.loc.Branch, Directory: p.loc.dir(),
-		Kustomization: p.loc.kustomization, Prune: p.loc.prune, Branch: branch, Files: p.actions(), Author: gh.Login,
+		Repository: p.target.Repository, Base: p.target.Branch, Directory: p.target.Path,
+		Kustomization: p.target.Kustomization, Prune: p.target.Prune, Branch: branch, Files: p.actions(), Author: gh.Login,
 	}
 	if !dryRun {
 		for i := range out.Files {

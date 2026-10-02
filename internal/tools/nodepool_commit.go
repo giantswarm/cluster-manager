@@ -152,8 +152,15 @@ func (s *Service) commitDelete(ctx context.Context, dyn dynamic.Interface, c *un
 // body is the pull request's description: what it does, who asked through
 // which tool, the files, and what lands them.
 func (pc *poolCommit) body(what, tool string, plan *commitPlan, releases []*unstructured.Unstructured) string {
+	return commitBody(what, tool, pc.gh.Login, plan, releases)
+}
+
+// commitBody is a commit-mode pull request's description: what it does, who
+// asked through which tool, the releases, the files, and the Kustomization
+// that lands them.
+func commitBody(what, tool, login string, plan *commitPlan, releases []*unstructured.Unstructured) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s.\n\nOpened by @%s through cluster-manager (`%s`, mode commit).\n\n", what, pc.gh.Login, tool)
+	fmt.Fprintf(&b, "%s.\n\nOpened by @%s through cluster-manager (`%s`, mode commit).\n\n", what, login, tool)
 	if len(releases) > 0 {
 		b.WriteString("Releases:\n\n")
 		for _, obj := range releases {
@@ -169,7 +176,7 @@ func (pc *poolCommit) body(what, tool string, plan *commitPlan, releases []*unst
 			fmt.Fprintf(&b, "- %s `%s`\n", f.Action, f.Path)
 		}
 	}
-	fmt.Fprintf(&b, "\nFlux Kustomization `%s` applies the change after the merge.\n", pc.loc.kustomization)
+	fmt.Fprintf(&b, "\nFlux Kustomization `%s` applies the change after the merge.\n", plan.target.Kustomization)
 	return b.String()
 }
 
@@ -186,13 +193,19 @@ func chartVersionOf(objs []*unstructured.Unstructured, name string) string {
 
 // nextStep says what follows the commit.
 func (pc *poolCommit) nextStep(plan *commitPlan, res *CommitResult, dryRun bool, what string) string {
+	return commitNextStep(plan, res, dryRun, what, pc.gh.Login, fmt.Sprintf("Flux Kustomization %s applies it within its interval, and list_clusters shows the result", plan.target.Kustomization))
+}
+
+// commitNextStep says what follows a commit: nothing to commit, the run
+// that opens the pull request, or the merge and then landed.
+func commitNextStep(plan *commitPlan, res *CommitResult, dryRun bool, what, login, landed string) string {
 	switch {
 	case !plan.Changed():
 		return fmt.Sprintf("%s already carries %s: nothing to commit", res.Repository, what)
 	case dryRun:
-		return fmt.Sprintf("re-run without dryRun to open the pull request as %s in %s", pc.gh.Login, res.Repository)
+		return fmt.Sprintf("re-run without dryRun to open the pull request as %s in %s", login, res.Repository)
 	}
-	return fmt.Sprintf("review and merge %s; Flux Kustomization %s applies it within its interval, and list_clusters shows the result", res.PullRequest, pc.loc.kustomization)
+	return fmt.Sprintf("review and merge %s; %s", res.PullRequest, landed)
 }
 
 func dedupe(list []string) []string {
