@@ -60,6 +60,13 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "delete"]
+  # The serving namespace the connectivity chart keeps on uninstall: removed,
+  # or marked retired, by a slice teardown; the mark taken off when the slice
+  # is composed again (giantswarm/cluster-manager#154).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ .Values.serving.namespace | quote }}]
+    verbs: ["get", "patch", "delete"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]

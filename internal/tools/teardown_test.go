@@ -570,8 +570,9 @@ func TestDeleteLastPoolUnreadableTarget(t *testing.T) {
 
 	out := deleteLastPool(t, svc, ctx, true, false)
 	assert.Equal(t, []string{"delete HelmRelease org-acme/wc1-kserve-llmisvc-resources", "delete HelmRelease org-acme/wc1-kserve-runtime-configs"}, objectNames(out)[:2])
-	require.Len(t, out.Warnings, 1)
+	require.Len(t, out.Warnings, 2)
 	assert.Contains(t, out.Warnings[0], "whether LLMInferenceServiceConfigs remain in agent-platform on wc1 cannot be told")
+	assert.Contains(t, out.Warnings[1], "whether the serving namespace model-serving remains on wc1 cannot be told")
 }
 
 // TestDisableModelServingTearsDownInOrder: disable_model_serving takes the
