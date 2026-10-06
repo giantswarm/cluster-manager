@@ -4,7 +4,7 @@
   "pool": "gpu-l4b",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.7.9",
+  "chartVersion": "0.8.0",
   "kubernetesVersion": "1.30.8",
   "controlPlaneVersion": "v1.30.8",
   "machineImage": "flatcar-stable-4459.2.0-kube-1.30.8-tooling-1.26.0-gs",
@@ -62,7 +62,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "semver": "\u003e=0.7.9 \u003c1.0.0"
+          "semver": "\u003e=0.8.0 \u003c1.0.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }
@@ -382,5 +382,6 @@
   },
   "warnings": [
     "serving preset acme-l4-wide fits no size of pool gpu-l4b: requests 4 vCPU / 16 GiB; xlarge leaves a predictor 3 vCPU / 11.9 GiB after the node's kubelet reservations and daemonsets — 2xlarge (8 vCPU / 32 GiB) would host it — a predictor composed from it would sit Pending while Karpenter refuses every size (giantswarm/agent-platform#502); add the size to sizes or serve a smaller preset"
-  ]
+  ],
+  "prefetchNote": "the platform's own release provides serving on wc2 without a pre-pull DaemonSet: the pool's nodes fetch no image"
 }

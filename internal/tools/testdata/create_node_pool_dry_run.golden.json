@@ -4,7 +4,7 @@
   "pool": "gpu-l4",
   "mode": "apply",
   "dryRun": true,
-  "chartVersion": "0.7.9",
+  "chartVersion": "0.8.0",
   "kubernetesVersion": "1.31.4",
   "controlPlaneVersion": "v1.31.4",
   "machineImage": "flatcar-stable-4459.2.1-kube-1.31.4-tooling-1.26.1-gs",
@@ -91,7 +91,7 @@
       "spec": {
         "interval": "10m",
         "ref": {
-          "semver": "\u003e=0.7.9 \u003c1.0.0"
+          "semver": "\u003e=0.8.0 \u003c1.0.0"
         },
         "url": "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
       }
@@ -641,6 +641,7 @@
   "presetFit": {
     "note": "no serving preset is published on wc1 yet — the slice release publishes them once it is ready; a dryRun re-run then says which of the pool's sizes host each"
   },
+  "prefetchNote": "this server reads no chart registry: the pool's nodes fetch no image ahead of the pre-pull",
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
