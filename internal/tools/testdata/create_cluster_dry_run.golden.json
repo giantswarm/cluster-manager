@@ -54,7 +54,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "values.yaml": "global:\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
+        "values.yaml": "global:\n  apps:\n    rbacBootstrap:\n      values:\n        bindings:\n        - groups:\n          - giantswarm-ad:giantswarm-admins\n          - giantswarm-ad:giantswarm:giantswarm-admins\n          - giantswarm-github:giantswarm:giantswarm-admins\n          - giantswarm-github:giantswarm-admins\n          role: view\n        - groups:\n          - customer:acme:Admins\n          role: cluster-admin\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
       },
       "kind": "ConfigMap",
       "metadata": {
@@ -123,5 +123,13 @@
   "oidc": {
     "source": "none",
     "note": "the cluster trusts no identity provider: this server knows no audience the installation's apiserver accepts, so calls to the cluster as you are refused as Unauthorized — pass global.controlPlane.oidc in values to name one"
+  },
+  "rbac": {
+    "source": "composed",
+    "role": "cluster-admin",
+    "groups": [
+      "customer:acme:Admins"
+    ],
+    "note": "this call runs without a signed-in person, so no creator is bound"
   }
 }

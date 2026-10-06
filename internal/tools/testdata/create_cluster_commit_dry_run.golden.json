@@ -32,7 +32,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "values.yaml": "global:\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
+        "values.yaml": "global:\n  apps:\n    rbacBootstrap:\n      values:\n        bindings:\n        - groups:\n          - giantswarm-ad:giantswarm-admins\n          - giantswarm-ad:giantswarm:giantswarm-admins\n          - giantswarm-github:giantswarm:giantswarm-admins\n          - giantswarm-github:giantswarm-admins\n          role: view\n        - groups:\n          - customer:acme:Admins\n          role: cluster-admin\n  metadata:\n    description: Acme's development cluster\n    name: dev01\n    organization: acme\n  providerSpecific:\n    awsClusterRoleIdentityName: acme-dev\n  release:\n    version: 36.0.0\n"
       },
       "kind": "ConfigMap",
       "metadata": {
@@ -102,6 +102,14 @@
     "source": "none",
     "note": "the cluster trusts no identity provider: this server knows no audience the installation's apiserver accepts, so calls to the cluster as you are refused as Unauthorized — pass global.controlPlane.oidc in values to name one"
   },
+  "rbac": {
+    "source": "composed",
+    "role": "cluster-admin",
+    "groups": [
+      "customer:acme:Admins"
+    ],
+    "note": "this call runs without a signed-in person, so no creator is bound"
+  },
   "commit": {
     "repository": "acme/workload-clusters-fleet",
     "base": "main",
@@ -118,7 +126,7 @@
       {
         "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01-values.yaml",
         "action": "add",
-        "content": "apiVersion: v1\ndata:\n  values.yaml: |\n    global:\n      metadata:\n        description: Acme's development cluster\n        name: dev01\n        organization: acme\n      providerSpecific:\n        awsClusterRoleIdentityName: acme-dev\n      release:\n        version: 36.0.0\nkind: ConfigMap\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: cluster-manager\n    app.kubernetes.io/name: release-aws\n    giantswarm.io/cluster: dev01\n    giantswarm.io/organization: acme\n  name: dev01-values\n  namespace: org-acme\n"
+        "content": "apiVersion: v1\ndata:\n  values.yaml: |\n    global:\n      apps:\n        rbacBootstrap:\n          values:\n            bindings:\n            - groups:\n              - giantswarm-ad:giantswarm-admins\n              - giantswarm-ad:giantswarm:giantswarm-admins\n              - giantswarm-github:giantswarm:giantswarm-admins\n              - giantswarm-github:giantswarm-admins\n              role: view\n            - groups:\n              - customer:acme:Admins\n              role: cluster-admin\n      metadata:\n        description: Acme's development cluster\n        name: dev01\n        organization: acme\n      providerSpecific:\n        awsClusterRoleIdentityName: acme-dev\n      release:\n        version: 36.0.0\nkind: ConfigMap\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: cluster-manager\n    app.kubernetes.io/name: release-aws\n    giantswarm.io/cluster: dev01\n    giantswarm.io/organization: acme\n  name: dev01-values\n  namespace: org-acme\n"
       },
       {
         "path": "management-clusters/gazelle/organizations/acme/workload-clusters/dev01/dev01.yaml",

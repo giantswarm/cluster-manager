@@ -2,26 +2,33 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
 // releaseCharts is the registry as the release tests need it: release-aws
-// 35.1.1 and 36.0.0 published with the real 36.0.0 chart's values.yaml and
-// values.schema.json (compose's fixture, extracted unchanged from the
-// archive), release-eks 34.0.1 published, and no release-azure tag.
+// 35.1.1 and 36.0.0 published with the real 36.0.0 chart's values.yaml,
+// values.schema.json and rbac-bootstrap app (compose's fixture, extracted
+// unchanged from the archive), release-eks 34.0.1 published, and no
+// release-azure tag.
 func releaseCharts(t *testing.T) *fakeCharts {
 	t.Helper()
 	files := map[string]string{}
-	for _, name := range []string{"values.yaml", "values.schema.json"} {
+	for _, name := range []string{"values.yaml", "values.schema.json", compose.RBACBootstrapFile} {
 		raw, err := os.ReadFile(filepath.Join("..", "compose", "testdata", "charts", "release-aws-36.0.0", name)) //nolint:gosec // fixture named by the test
 		require.NoError(t, err)
 		files[name] = string(raw)
@@ -233,5 +240,160 @@ func TestCreateClusterRefusesAGitOpsObject(t *testing.T) {
 	log := recordWrites(t, l)
 	_, err = svc.CreateCluster(ctx, dev01())
 	assertRefused(t, err, "ConfigMap org-acme/dev01-values exists and is owned by GitOps (Flux Kustomization flux-acme)")
+	assert.Empty(t, log.seen())
+}
+
+// TestCreateClusterBindsTheCreatorAndTheOrgAdmins: the cluster's values bind
+// the signed-in creator (by email, the username the cluster takes from the
+// installation's Dex) and the subjects org-acme binds to cluster-admin as
+// cluster-admin, after the chart's own default bindings, which Helm's list
+// merge would otherwise drop; the readers' view binding is not an admin's.
+// The dry run names them, and list_clusters reads them back.
+func TestCreateClusterBindsTheCreatorAndTheOrgAdmins(t *testing.T) {
+	oidc := &compose.ClusterOIDC{IssuerURL: "https://dex.gazelle.example", ClientID: "dex-k8s-authenticator", UsernameClaim: "email", GroupsClaim: "groups"}
+	l := newLab(t, "releases.yaml")
+	svc := l.service(Config{Installation: "gazelle", ClusterOIDC: oidc}, WithChartReader(releaseCharts(t)))
+	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "CgVqYW5l", Email: "jane@acme.example", Source: identity.SourceSSO})
+	in := dev01()
+	in.DryRun = true
+	got, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, &ClusterRBAC{Source: RBACComposed, Role: "cluster-admin", ClusterAdmins: compose.ClusterAdmins{Users: []string{"jane@acme.example"}, Groups: []string{"customer:acme:Admins"}}}, got.RBAC)
+	assert.Contains(t, clusterValuesOf(t, got), `  apps:
+    rbacBootstrap:
+      values:
+        bindings:
+        - groups:
+          - giantswarm-ad:giantswarm-admins
+          - giantswarm-ad:giantswarm:giantswarm-admins
+          - giantswarm-github:giantswarm:giantswarm-admins
+          - giantswarm-github:giantswarm-admins
+          role: view
+        - groups:
+          - customer:acme:Admins
+          role: cluster-admin
+          users:
+          - jane@acme.example
+`)
+
+	// Applied, list_clusters reads the admins back from the cluster's values.
+	in.DryRun = false
+	_, err = svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	cluster := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "dev01", "namespace": "org-acme"}}}
+	admins, note := clusterAdminsOf(ctx, l.installation, cluster)
+	assert.Empty(t, note)
+	assert.Equal(t, &got.RBAC.ClusterAdmins, admins)
+	wc1 := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "wc1", "namespace": "org-acme"}}}
+	admins, note = clusterAdminsOf(ctx, l.installation, wc1)
+	assert.Nil(t, admins, "a cluster cluster-manager did not create")
+	assert.Empty(t, note)
+}
+
+// TestCreatorUsername: the creator's username is their email under the
+// cluster's usernamePrefix (the apiserver flag's "-" for none), the
+// installation's OIDC settings under the cluster's.
+func TestCreatorUsername(t *testing.T) {
+	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "CgVqYW5l", Email: "jane@acme.example"})
+	oidc := func(block map[string]any) map[string]any {
+		return map[string]any{"global": map[string]any{"controlPlane": map[string]any{"oidc": block}}}
+	}
+	for name, tc := range map[string]struct {
+		installation, cluster map[string]any
+		want, note            string
+	}{
+		"email":                 {nil, oidc(map[string]any{"usernameClaim": "email"}), "jane@acme.example", ""},
+		"prefix":                {oidc(map[string]any{"usernamePrefix": "dex:"}), oidc(map[string]any{"usernameClaim": "email"}), "dex:jane@acme.example", ""},
+		"no prefix":             {nil, oidc(map[string]any{"usernameClaim": "email", "usernamePrefix": "-"}), "jane@acme.example", ""},
+		"the chart's sub claim": {nil, oidc(map[string]any{"issuerUrl": "https://dex"}), "", `the cluster takes the username from the "sub" claim`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, note := creatorUsername(ctx, tc.installation, tc.cluster)
+			assert.Equal(t, tc.want, got)
+			if tc.note == "" {
+				assert.Empty(t, note)
+			} else {
+				assert.Contains(t, note, tc.note)
+			}
+		})
+	}
+	got, note := creatorUsername(identity.ContextWith(context.Background(), &identity.Identity{Subject: "CgVqYW5l"}), nil, oidc(map[string]any{"usernameClaim": "email"}))
+	assert.Empty(t, got)
+	assert.Contains(t, note, "your sign-in carries no email")
+}
+
+// TestCreateClusterRBACOverrides: the caller's own bindings win whole —
+// replaced or emptied — and are named as theirs; the installation's bindings
+// replace the chart's defaults the composed binding follows.
+func TestCreateClusterRBACOverrides(t *testing.T) {
+	_, svc := releasesService(t)
+	ctx := context.Background()
+	bindings := func(b ...any) map[string]any {
+		return map[string]any{"global": map[string]any{"apps": map[string]any{"rbacBootstrap": map[string]any{"values": map[string]any{"bindings": b}}}}}
+	}
+	in := dev01()
+	in.DryRun = true
+	in.Values = bindings(map[string]any{"role": "cluster-admin", "groups": []any{"customer:acme:Platform"}})
+	got, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, &ClusterRBAC{Source: RBACValues, Role: "cluster-admin", ClusterAdmins: compose.ClusterAdmins{Users: []string{}, Groups: []string{"customer:acme:Platform"}}}, got.RBAC)
+	assert.NotContains(t, clusterValuesOf(t, got), "customer:acme:Admins")
+
+	in.Values = bindings()
+	got, err = svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, RBACValues, got.RBAC.Source)
+	assert.True(t, got.RBAC.Empty())
+	assert.Contains(t, clusterValuesOf(t, got), "bindings: []")
+}
+
+// TestCreateClusterRBACFollowsTheInstallationsBindings: bindings the
+// installation's values carry replace the chart's defaults, so the composed
+// list starts with them.
+func TestCreateClusterRBACFollowsTheInstallationsBindings(t *testing.T) {
+	l, svc := releasesService(t)
+	ctx := context.Background()
+	cm, err := l.installation.Resource(ConfigMapGVR).Namespace("org-acme").Get(ctx, compose.InstallationValuesConfigMap, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(cm.Object, "global:\n  connectivity:\n    baseDomain: gazelle.example.io\n  managementCluster: gazelle\n  apps:\n    rbacBootstrap:\n      values:\n        bindings:\n        - role: view\n          groups: [installation:readers]\n", "data", compose.ValuesSecretKey))
+	_, err = l.installation.Resource(ConfigMapGVR).Namespace("org-acme").Update(ctx, cm, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	in := dev01()
+	in.DryRun = true
+	got, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	values := clusterValuesOf(t, got)
+	assert.Contains(t, values, "        - groups:\n          - installation:readers\n          role: view\n        - groups:\n          - customer:acme:Admins\n          role: cluster-admin\n")
+	assert.NotContains(t, values, "giantswarm-admins")
+}
+
+// TestCreateClusterRBACNotes: without a signed-in person, or with a
+// username claim other than the email, the creator is left out and the note
+// says why; a caller who may not read the organization's RoleBindings is
+// refused before any write, naming the values key that binds without them.
+func TestCreateClusterRBACNotes(t *testing.T) {
+	_, plain := releasesService(t)
+	in := dev01()
+	in.DryRun = true
+	got, err := plain.CreateCluster(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"customer:acme:Admins"}, got.RBAC.Groups)
+	assert.Empty(t, got.RBAC.Users)
+	assert.Contains(t, got.RBAC.Note, "without a signed-in person")
+
+	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "CgVqYW5l", Email: "jane@acme.example"})
+	got, err = plain.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Empty(t, got.RBAC.Users)
+	assert.Contains(t, got.RBAC.Note, `the cluster takes the username from the "sub" claim`)
+
+	l, svc := releasesService(t)
+	l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "rolebindings", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(RoleBindingGVR.GroupResource(), "", errors.New(`User "alice" cannot list resource "rolebindings"`))
+	})
+	log := recordWrites(t, l)
+	_, err = svc.CreateCluster(ctx, dev01())
+	assertRefused(t, err, "you may not list the RoleBindings of org-acme")
+	assertRefused(t, err, "global.apps.rbacBootstrap.values.bindings")
 	assert.Empty(t, log.seen())
 }

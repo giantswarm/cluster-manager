@@ -48,9 +48,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The tenant binding create_cluster waits for, and the organization's
+  # admins it binds on the new cluster (giantswarm/cluster-manager#171).
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["nodes", "pods", "events", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
