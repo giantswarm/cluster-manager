@@ -164,7 +164,8 @@ func TestListClustersLLMISVCWebhook(t *testing.T) {
 	t.Run("serving", func(t *testing.T) {
 		serving, w := webhook(t, newLab(t, "installation.yaml"), "wc2")
 		assert.Equal(t, &ready, w.Ready)
-		assert.Equal(t, []string{"mutatingwebhookconfigurations/llminferenceservice.serving.kserve.io", "validatingwebhookconfigurations/llminferenceservice.serving.kserve.io"}, w.Configurations)
+		assert.Equal(t, []string{"mutatingwebhookconfigurations/llminferenceservice.serving.kserve.io", "validatingwebhookconfigurations/llminferenceservice.serving.kserve.io"}, w.Configurations,
+			"kyverno's TTL webhook admits */* and has no endpoint on wc2: not the llmisvc webhook")
 		assert.Equal(t, "agent-platform/llmisvc-webhook-server-service", w.Namespace+"/"+w.Service)
 		assert.Equal(t, 1, w.Endpoints)
 		assert.Empty(t, w.Reason)
