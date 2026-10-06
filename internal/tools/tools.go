@@ -184,9 +184,24 @@ func New(clients ClientsFor, targets TargetClientsFor, cfg Config, opts ...Optio
 }
 
 // ErrNotFound is returned when a named cluster does not exist.
-type ErrNotFound struct{ What string }
+type ErrNotFound struct {
+	What string
+	// NotFound is the structured form beside the text, nil where the text
+	// says it all: delete_cluster's answer when nothing of the cluster is left.
+	NotFound *NotFound
+}
 
 func (e *ErrNotFound) Error() string { return e.What + " not found" }
+
+// NotFound is a not-found answer as a caller reads it without parsing prose.
+// NothingLeft marks delete_cluster's call that finds nothing of the cluster
+// in its namespace: no HelmRelease, no Cluster, no leftover release, source
+// or values — a removal that is complete, or a name never made there.
+type NotFound struct {
+	Cluster     string `json:"cluster"`
+	Namespace   string `json:"namespace"`
+	NothingLeft bool   `json:"nothingLeft"`
+}
 
 // ErrAmbiguous is returned when a cluster name matches in several namespaces
 // and the caller named none.

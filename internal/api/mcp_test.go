@@ -197,3 +197,18 @@ func TestErrResultRefused(t *testing.T) {
 	assert.True(t, plain.IsError)
 	assert.Len(t, plain.Content, 1, "a refusal without a block stays one text")
 }
+
+// TestErrResultNotFound (giantswarm/cluster-manager#167): delete_cluster's
+// "nothing of it is left" answers the message, then {"notFound": …} as JSON;
+// a plain not-found stays one text.
+func TestErrResultNotFound(t *testing.T) {
+	res := errResult(&tools.ErrNotFound{What: "cluster org-acme/dev01 (nothing of it is left)", NotFound: &tools.NotFound{Cluster: "dev01", Namespace: "org-acme", NothingLeft: true}})
+	assert.True(t, res.IsError)
+	require.Len(t, res.Content, 2)
+	assert.Equal(t, "cluster org-acme/dev01 (nothing of it is left) not found: list_clusters names the clusters you may see", res.Content[0].(mcp.TextContent).Text)
+	assert.JSONEq(t, `{"notFound":{"cluster":"dev01","namespace":"org-acme","nothingLeft":true}}`, res.Content[1].(mcp.TextContent).Text)
+
+	plain := errResult(&tools.ErrNotFound{What: "cluster nope"})
+	assert.True(t, plain.IsError)
+	assert.Len(t, plain.Content, 1, "a not-found without a block stays one text")
+}

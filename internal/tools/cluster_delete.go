@@ -203,7 +203,7 @@ func (s *Service) deleteLeftovers(ctx context.Context, dyn dynamic.Interface, cl
 		plans = append(plans, deletePlan{res: dyn.Resource(ConfigMapGVR).Namespace(ns), act: actionOf(values)})
 	}
 	if len(plans) == 0 && len(out.Warnings) == 0 {
-		return &ErrNotFound{What: fmt.Sprintf("cluster %s/%s (nothing of it is left)", ns, in.Name)}
+		return &ErrNotFound{What: fmt.Sprintf("cluster %s/%s (nothing of it is left)", ns, in.Name), NotFound: &NotFound{Cluster: in.Name, Namespace: ns, NothingLeft: true}}
 	}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
 	if err := td.deleteAll(plans); err != nil {
