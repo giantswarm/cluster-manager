@@ -167,23 +167,21 @@ func (w *WebhookState) evidence() string {
 	return "llmisvc webhook not ready (" + w.Message + ")"
 }
 
-// admitsLLMISVC reports whether a webhook's rules cover LLMInferenceServices.
+// admitsLLMISVC reports whether a webhook's rules name LLMInferenceServices.
+// Named, not covered: a policy engine's webhook with a wildcard rule (kyverno's
+// TTL webhook admits `*`/`*`) admits them too, but it is not the llmisvc
+// webhook a load_model needs, and its endpoints are not the controller's.
 func admitsLLMISVC(hook map[string]any) bool {
 	rules, _, _ := unstructured.NestedSlice(hook, "rules")
 	for _, r := range rules {
 		rule, _ := r.(map[string]any)
 		groups, _, _ := unstructured.NestedStringSlice(rule, "apiGroups")
 		resources, _, _ := unstructured.NestedStringSlice(rule, "resources")
-		if covers(groups, llmisvcGroup) && covers(resources, llmisvcResource) {
+		if slices.Contains(groups, llmisvcGroup) && slices.Contains(resources, llmisvcResource) {
 			return true
 		}
 	}
 	return false
-}
-
-// covers reports whether a rule's list names the item or everything.
-func covers(list []string, item string) bool {
-	return slices.Contains(list, item) || slices.Contains(list, "*")
 }
 
 // readyEndpoints counts the addresses of a Service's EndpointSlices and how

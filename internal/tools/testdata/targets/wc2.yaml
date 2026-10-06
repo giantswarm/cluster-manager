@@ -172,3 +172,29 @@ endpoints:
   conditions:
     ready: true
     serving: true
+---
+# A policy engine's webhook admitting everything (kyverno's TTL webhook): it
+# admits LLMInferenceServices too, but it is not the llmisvc webhook — its
+# Service has no EndpointSlice here, so counting it would hold serving back.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: kyverno-ttl-validating-webhook-cfg
+webhooks:
+- name: validate.kyverno.svc-fail
+  clientConfig:
+    caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t
+    service:
+      name: kyverno-cleanup-controller
+      namespace: kyverno
+      path: /validate/ttl
+  failurePolicy: Fail
+  objectSelector:
+    matchExpressions:
+    - key: cleanup.kyverno.io/ttl
+      operator: Exists
+  rules:
+  - apiGroups: ["*"]
+    apiVersions: ["*"]
+    operations: [CREATE, UPDATE]
+    resources: ["*"]
