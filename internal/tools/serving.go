@@ -111,7 +111,11 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if !pin.cache && reads.cache != nil && reads.cache.Enabled {
 		return nil, cacheOnRefusal(claims, c.GetName(), reads.release, reads.cache, infra.region)
 	}
-	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, pin.sliceCache())
+	runtime, err := s.readRuntime(ctx, reads, poolAccelerators(releases, "", ""))
+	if err != nil {
+		return nil, err
+	}
+	serving, slice, objs, err := s.sliceRelease(reads, target, facts, pool, pin.sliceCache(), runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -347,8 +351,9 @@ func composesSlice(serving detect.Component) bool {
 // from the platform's inputs when none does — or when the one running is
 // cluster-manager's own, so the re-run is its update —, a refusal when the
 // cluster cannot be read. cache is the model cache the slice serves from:
-// on with the claim its predictors mount, or off.
-func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string, cache sliceCache) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
+// on with the claim its predictors mount, or off; runtime the runtime image
+// set (readRuntime), nil for the chart's default.
+func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, pool string, cache sliceCache, runtime *compose.RuntimeImages) (detect.Component, *SliceRelease, []*unstructured.Unstructured, error) {
 	serving := r.serving
 	switch {
 	case serving.Status == detect.StatusUnknown:
@@ -357,7 +362,7 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 		return serving, nil, nil, nil
 	}
 	var err error
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim, Runtime: runtime}
 	if _, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
@@ -570,18 +575,6 @@ func ownPools(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (m
 	return out, nil
 }
 
-// poolNames are the cluster's GPU pools of cluster-manager's, by pool name,
-// sorted: its pool releases plus adding (the pool a write creates), counted
-// once. The operator's Node Feature Discovery worker is pinned to all of
-// them (compose.PoolAffinity); the slice's predictors to the one of them.
-func poolNames(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) ([]string, error) {
-	releases, err := ownPools(ctx, dyn, ns, cluster)
-	if err != nil {
-		return nil, err
-	}
-	return poolNamesOf(releases, adding), nil
-}
-
 // poolNamesOf names the pools of releases plus adding, counted once, sorted.
 func poolNamesOf(releases map[string]*unstructured.Unstructured, adding string) []string {
 	out := make([]string, 0, len(releases)+1)
@@ -595,20 +588,11 @@ func poolNamesOf(releases map[string]*unstructured.Unstructured, adding string) 
 	return out
 }
 
-// onlyPool is the GPU pool the slice's predictors are pinned to: the
-// cluster's one pool release of cluster-manager's (adding counts as one),
-// by pool name. Empty when the cluster has none or several — the predictors
-// are then placed by their GPU request alone, on whichever pool offers it —
-// so the rule is the same for every write and never flips between pools.
-func onlyPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, adding string) (string, error) {
-	pools, err := poolNames(ctx, dyn, ns, cluster, adding)
-	if err != nil {
-		return "", err
-	}
-	return onlyOf(pools), nil
-}
-
-// onlyOf is the one name of a list of one, else empty.
+// onlyOf is the one name of a list of one, else empty: the GPU pool the
+// slice's predictors are pinned to is the cluster's one pool. With none or
+// several the predictors are placed by their GPU request alone, on whichever
+// pool offers it, so the rule is the same for every write and never flips
+// between pools.
 func onlyOf(names []string) string {
 	if len(names) != 1 {
 		return ""

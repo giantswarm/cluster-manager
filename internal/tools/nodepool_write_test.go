@@ -526,10 +526,18 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	assert.InDelta(t, 27.37, *out.Cache.MonthlyPriceUSD, 1e-9, "100 GiB gp3 at 500 MiB/s in Frankfurt")
 	assert.Equal(t, "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)", out.Cache.PriceSource)
 	assert.Contains(t, out.Cache.Note, "it does not exist yet: the connectivity chart creates it and keeps it at its defaults, 100Gi gp3, 500 MiB/s, 3000 IOPS: about $27.37 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+"), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache")
-	// The pool's nodes fetch the slice's pre-pull images while they join,
-	// read from the same chart (giantswarm/agent-platform#812).
-	assert.Equal(t, []string{"gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0", "gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"}, out.PrefetchImages)
-	assert.Equal(t, "modelServing.prepull of agent-platform-connectivity 4.86.0, the chart the slice's agent-platform 4.85.0 release resolves", out.PrefetchNote)
+	// wc1's pools are A10G and L4: the slice takes the slim runtime, and the
+	// pool's nodes fetch its pre-pull images while they join, read from the
+	// slice's chart (giantswarm/agent-platform#812, giantswarm/llm-d#29).
+	assert.Equal(t, []string{"gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0", "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0"}, out.PrefetchImages)
+	assert.Equal(t, "the slim runtime's pre-pull images, from kserve-runtime-configs.kserve.llmisvcConfigs and modelServing.prepull.images of agent-platform 4.85.0", out.PrefetchNote)
+	var runtime string
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "wc1-agent-platform" {
+			runtime, _, _ = unstructured.NestedString(m, "spec", "values", "kserve-runtime-configs", "kserve", "llmisvcConfigs", "images", "kserve-config-llm-template", "main")
+		}
+	}
+	assert.Equal(t, "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0", runtime, "the slice's configs serve the slim runtime")
 	var prefetch []string
 	for _, m := range out.Manifests {
 		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "wc1-gpu-l4" {
@@ -554,8 +562,12 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	assert.Equal(t, "3 preset ConfigMap(s) in agent-platform on wc2", published.PresetFit.Source)
 
 	unreadable := lab.service(Config{Installation: "gazelle"}, WithChartReader(&fakeCharts{}))
-	out, err = unreadable.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
-	require.NoError(t, err)
+	_, err = unreadable.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
+	require.ErrorContains(t, err, "the slim serving runtime for the cluster's pools ([nvidia-a10g nvidia-l4]): pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.85.0: HTTP 404", "the slice is never composed with another runtime than its pools call for")
+	t4 := l4("wc1", "gpu-t4", true)
+	t4.Pool.Accelerator = "nvidia-t4"
+	out, err = unreadable.CreateNodePool(ctx, t4)
+	require.NoError(t, err, "a T4 pool keeps the chart's default runtime, read from nowhere")
 	assert.Equal(t, "no serving preset is published on wc1 yet — the slice release publishes them once it is ready, and the presets it would publish could not be read from the registry (pull oci://gsoci.azurecr.io/charts/giantswarm/agent-platform 4.85.0: HTTP 404): whether the pool's sizes host them is not judged", out.PresetFit.Note)
 	assert.Empty(t, out.PresetFit.Presets)
 	assert.Empty(t, out.PresetFit.Origin)
