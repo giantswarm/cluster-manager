@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
@@ -140,5 +141,103 @@ func TestListClustersModelsGateway(t *testing.T) {
 		require.NotNil(t, gw.Certificate)
 		assert.Equal(t, &ready, gw.Certificate.Ready)
 		assert.Empty(t, gw.Certificate.Challenge)
+	})
+}
+
+// Serving is not ready before the llmisvc admission webhook serves
+// (giantswarm/cluster-manager#166): the controller's release reads Ready and
+// its Deployment counts an available replica while the webhook Service has no
+// ready endpoint or the CA bundle is not injected, and a load_model in that
+// window fails admission with "failed calling webhook". The webhook is named
+// in the evidence until its Service has a ready endpoint and every
+// configuration carries its bundle.
+func TestListClustersLLMISVCWebhook(t *testing.T) {
+	const service = "Service agent-platform/llmisvc-webhook-server-service"
+	webhook := func(t *testing.T, l *lab, cluster string) (ServingComponent, *detect.WebhookState) {
+		t.Helper()
+		serving := clusterNamed(t, l, cluster).Serving
+		require.NotNil(t, serving.Readiness.Webhook)
+		return serving, serving.Readiness.Webhook
+	}
+	ready, notReady := true, false
+
+	t.Run("serving", func(t *testing.T) {
+		serving, w := webhook(t, newLab(t, "installation.yaml"), "wc2")
+		assert.Equal(t, &ready, w.Ready)
+		assert.Equal(t, []string{"mutatingwebhookconfigurations/llminferenceservice.serving.kserve.io", "validatingwebhookconfigurations/llminferenceservice.serving.kserve.io"}, w.Configurations)
+		assert.Equal(t, "agent-platform/llmisvc-webhook-server-service", w.Namespace+"/"+w.Service)
+		assert.Equal(t, 1, w.Endpoints)
+		assert.Empty(t, w.Reason)
+		assert.Empty(t, w.Message)
+		for _, e := range serving.Evidence {
+			assert.NotContains(t, e, "webhook", "a serving webhook holds nothing back")
+		}
+	})
+
+	t.Run("no configuration yet", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		for _, gvr := range []schema.GroupVersionResource{detect.MutatingWebhookGVR, detect.ValidatingWebhookGVR} {
+			require.NoError(t, l.targets[wc2APIServer].Resource(gvr).Delete(context.Background(), "llminferenceservice.serving.kserve.io", metav1.DeleteOptions{}))
+		}
+		serving, w := webhook(t, l, "wc2")
+		assert.Equal(t, &notReady, w.Ready)
+		assert.Equal(t, detect.WebhookNoConfiguration, w.Reason)
+		assert.Equal(t, "no webhook configuration admits LLMInferenceServices yet", w.Message)
+		assert.Equal(t, []string{}, w.Configurations, "empty, not null")
+		assert.Empty(t, w.Service)
+		assert.Contains(t, serving.Evidence, "llmisvc webhook not ready (no webhook configuration admits LLMInferenceServices yet)")
+	})
+
+	t.Run("endpoint absent", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		require.NoError(t, l.targets[wc2APIServer].Resource(detect.EndpointSliceGVR).Namespace("agent-platform").Delete(context.Background(), "llmisvc-webhook-server-service-x7k2p", metav1.DeleteOptions{}))
+		serving, w := webhook(t, l, "wc2")
+		assert.Equal(t, &notReady, w.Ready)
+		assert.Equal(t, detect.WebhookNoEndpoints, w.Reason)
+		assert.Equal(t, service+" has no endpoint yet", w.Message)
+		assert.Equal(t, 0, w.Endpoints)
+		assert.Contains(t, serving.Evidence, "llmisvc webhook not ready ("+service+" has no endpoint yet)")
+	})
+
+	t.Run("endpoint not ready", func(t *testing.T) {
+		l := newLab(t, "installation.yaml").target(t, wc1APIServer, "chart-kserve.yaml")
+		serving, w := webhook(t, l, "wc1")
+		assert.Equal(t, &notReady, w.Ready)
+		assert.Equal(t, detect.WebhookNoEndpoints, w.Reason)
+		assert.Equal(t, service+" has no ready endpoint (0 of 1 ready)", w.Message)
+		assert.Equal(t, 0, w.Endpoints)
+		assert.Contains(t, serving.Evidence, "llmisvc webhook not ready ("+service+" has no ready endpoint (0 of 1 ready))")
+	})
+
+	t.Run("CA bundle not injected", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		configs := l.targets[wc2APIServer].Resource(detect.MutatingWebhookGVR)
+		obj, err := configs.Get(context.Background(), "llminferenceservice.serving.kserve.io", metav1.GetOptions{})
+		require.NoError(t, err)
+		hooks, _, _ := unstructured.NestedSlice(obj.Object, "webhooks")
+		unstructured.RemoveNestedField(hooks[0].(map[string]any), "clientConfig", "caBundle")
+		require.NoError(t, unstructured.SetNestedSlice(obj.Object, hooks, "webhooks"))
+		_, err = configs.Update(context.Background(), obj, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		serving, w := webhook(t, l, "wc2")
+		assert.Equal(t, &notReady, w.Ready)
+		assert.Equal(t, detect.WebhookNoCABundle, w.Reason)
+		assert.Equal(t, "caBundle not injected yet on llminferenceservice.serving.kserve.io/llminferenceservice.kserve-webhook-server.v1alpha2.defaulter", w.Message)
+		assert.Equal(t, 1, w.Endpoints, "the endpoint is ready, the bundle holds it back")
+		assert.Contains(t, serving.Evidence, "llmisvc webhook not ready ("+w.Message+")")
+	})
+
+	t.Run("endpoints not readable", func(t *testing.T) {
+		l := newLab(t, "installation.yaml")
+		fakeTarget(t, l, wc2APIServer).PrependReactor("list", detect.EndpointSliceGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(detect.EndpointSliceGVR.GroupResource(), "", errors.New("no RBAC on endpointslices"))
+		})
+		serving, w := webhook(t, l, "wc2")
+		assert.Nil(t, w.Ready, "unknown, not false")
+		assert.Empty(t, w.Reason)
+		assert.Contains(t, w.Message, "EndpointSlices of "+service+" not readable")
+		assert.Contains(t, w.Message, "no RBAC on endpointslices")
+		assert.Contains(t, serving.Evidence, "llmisvc webhook readiness unknown ("+w.Message+")")
 	})
 }

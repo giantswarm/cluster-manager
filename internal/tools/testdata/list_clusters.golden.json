@@ -25,6 +25,7 @@
         },
         "presets": null,
         "modelsGateway": null,
+        "webhook": null,
         "cache": null,
         "cacheClaims": []
       }
@@ -76,6 +77,16 @@
           "count": 3
         },
         "modelsGateway": null,
+        "webhook": {
+          "configurations": [
+            "mutatingwebhookconfigurations/llminferenceservice.serving.kserve.io",
+            "validatingwebhookconfigurations/llminferenceservice.serving.kserve.io"
+          ],
+          "namespace": "agent-platform",
+          "service": "llmisvc-webhook-server-service",
+          "endpoints": 1,
+          "ready": true
+        },
         "cache": null,
         "cacheClaims": []
       }
@@ -118,6 +129,7 @@
         },
         "presets": null,
         "modelsGateway": null,
+        "webhook": null,
         "cache": null,
         "cacheClaims": [
           {

@@ -577,7 +577,8 @@
     "status": "present",
     "provider": "cluster-manager",
     "evidence": [
-      "HelmRelease org-acme/wc1-agent-platform"
+      "HelmRelease org-acme/wc1-agent-platform",
+      "llmisvc webhook not ready (no webhook configuration admits LLMInferenceServices yet)"
     ]
   },
   "slice": {

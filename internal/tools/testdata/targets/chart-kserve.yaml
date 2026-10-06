@@ -37,3 +37,60 @@ spec:
   replicas: 1
 status:
   readyReplicas: 0
+---
+# The controller's admission webhook, not serving yet: its Service's EndpointSlice carries the pod's address, not ready.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: llminferenceservice.serving.kserve.io
+  annotations:
+    cert-manager.io/inject-ca-from: agent-platform/llmisvc-serving-cert
+webhooks:
+- name: llminferenceservice.kserve-webhook-server.v1alpha2.defaulter
+  clientConfig:
+    caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t
+    service:
+      name: llmisvc-webhook-server-service
+      namespace: agent-platform
+      path: /mutate-serving-kserve-io-v1alpha2-llminferenceservice
+  failurePolicy: Fail
+  rules:
+  - apiGroups: [serving.kserve.io]
+    apiVersions: [v1alpha2]
+    operations: [CREATE, UPDATE]
+    resources: [llminferenceservices]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: llminferenceservice.serving.kserve.io
+  annotations:
+    cert-manager.io/inject-ca-from: agent-platform/llmisvc-serving-cert
+webhooks:
+- name: llminferenceservice.kserve-webhook-server.v1alpha2.validator
+  clientConfig:
+    caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t
+    service:
+      name: llmisvc-webhook-server-service
+      namespace: agent-platform
+      path: /validate-serving-kserve-io-v1alpha2-llminferenceservice
+  failurePolicy: Fail
+  rules:
+  - apiGroups: [serving.kserve.io]
+    apiVersions: [v1alpha2]
+    operations: [CREATE, UPDATE]
+    resources: [llminferenceservices]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: llmisvc-webhook-server-service-x7k2p
+  namespace: agent-platform
+  labels:
+    kubernetes.io/service-name: llmisvc-webhook-server-service
+addressType: IPv4
+endpoints:
+- addresses: ["10.0.3.17"]
+  conditions:
+    ready: false
+    serving: false

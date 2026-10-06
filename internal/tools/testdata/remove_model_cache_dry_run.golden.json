@@ -209,7 +209,8 @@
     "status": "present",
     "provider": "cluster-manager",
     "evidence": [
-      "HelmRelease org-giantswarm/gazelle-agent-platform"
+      "HelmRelease org-giantswarm/gazelle-agent-platform",
+      "llmisvc webhook not ready (no webhook configuration admits LLMInferenceServices yet)"
     ]
   },
   "slice": {

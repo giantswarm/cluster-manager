@@ -109,7 +109,8 @@ func TestDetectServing(t *testing.T) {
 		evidence []string
 	}{
 		{"chart-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
-			"Deployment agent-platform/llmisvc-controller-manager (0/1 ready)", "HelmRelease agent-platform/kserve-llmisvc-resources", "llmisvc API serving.kserve.io/v1alpha1 served"}},
+			"Deployment agent-platform/llmisvc-controller-manager (0/1 ready)", "HelmRelease agent-platform/kserve-llmisvc-resources", "llmisvc API serving.kserve.io/v1alpha1 served",
+			"llmisvc webhook not ready (Service agent-platform/llmisvc-webhook-server-service has no ready endpoint (0 of 1 ready))"}},
 		{"wc2.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderChart}, []string{
 			"discovery ConfigMap agent-platform/agent-platform-model-serving", "llmisvc API serving.kserve.io/v1alpha1 served"}},
 		{"manual-kserve.yaml", nil, detect.Component{Status: detect.StatusPresent, Provider: detect.ProviderManual}, []string{
