@@ -118,6 +118,48 @@ func TestCreateClusterAppliesAndReruns(t *testing.T) {
 	assert.Empty(t, log.seen())
 }
 
+// TestCreateClusterTrustsTheInstallationIdP: with the installation's Dex
+// configured the cluster's values carry it in global.controlPlane.oidc and
+// the answer names it; a caller's own block wins whole and is named as
+// theirs; without one the answer says the cluster trusts no provider.
+func TestCreateClusterTrustsTheInstallationIdP(t *testing.T) {
+	oidc := &compose.ClusterOIDC{IssuerURL: "https://dex.gazelle.example", ClientID: "dex-k8s-authenticator", UsernameClaim: "email", GroupsClaim: "groups", CAPem: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}
+	l := newLab(t, "releases.yaml")
+	svc := l.service(Config{Installation: "gazelle", ClusterOIDC: oidc}, WithChartReader(releaseCharts(t)))
+	ctx := context.Background()
+	in := dev01()
+	in.DryRun = true
+	got, err := svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, &ClusterTrust{Source: TrustInstallation, IssuerURL: oidc.IssuerURL, ClientID: oidc.ClientID, UsernameClaim: "email", GroupsClaim: "groups", CA: true}, got.OIDC)
+	assert.Contains(t, clusterValuesOf(t, got), "issuerUrl: https://dex.gazelle.example")
+
+	in.Values = map[string]any{"global": map[string]any{"controlPlane": map[string]any{"oidc": map[string]any{"issuerUrl": "https://login.acme.example", "clientId": "acme"}}}}
+	got, err = svc.CreateCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, &ClusterTrust{Source: TrustValues, IssuerURL: "https://login.acme.example", ClientID: "acme"}, got.OIDC)
+	assert.NotContains(t, clusterValuesOf(t, got), "dex.gazelle.example")
+
+	_, plain := releasesService(t)
+	got, err = plain.CreateCluster(ctx, dev01())
+	require.NoError(t, err)
+	assert.Equal(t, TrustNone, got.OIDC.Source)
+	assert.Contains(t, got.OIDC.Note, "the cluster trusts no identity provider")
+}
+
+// clusterValuesOf is the values document of a create's ConfigMap manifest.
+func clusterValuesOf(t *testing.T, got *WriteResult) string {
+	t.Helper()
+	for _, m := range got.Manifests {
+		if m["kind"] == "ConfigMap" {
+			v, _, _ := unstructured.NestedString(m, "data", compose.ValuesSecretKey)
+			return v
+		}
+	}
+	t.Fatal("no ConfigMap manifest")
+	return ""
+}
+
 // TestCreateClusterRefusals: every refusal names its reason and comes before
 // any write.
 func TestCreateClusterRefusals(t *testing.T) {

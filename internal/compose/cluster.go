@@ -102,6 +102,45 @@ type ClusterSpec struct {
 	// TenantServiceAccount is the org namespace's tenant ServiceAccount
 	// the release runs under (deliverAsTenant).
 	TenantServiceAccount string
+	// OIDC is the identity provider the cluster's apiserver trusts, nil for
+	// none: composed into global.controlPlane.oidc unless the caller's
+	// values carry that block.
+	OIDC *ClusterOIDC
+}
+
+// ClusterOIDC is the identity provider a created cluster's apiserver trusts:
+// the installation's own, whose id_token cluster-manager presents to the
+// cluster as the person. ClientID is the audience the apiserver accepts —
+// the cross-client audience muster requests at login, the one the
+// installation's own apiserver trusts. CAPem is the provider's CA for a
+// private certificate, empty for a public one.
+type ClusterOIDC struct {
+	IssuerURL     string `json:"issuerUrl"`
+	ClientID      string `json:"clientId"`
+	UsernameClaim string `json:"usernameClaim,omitempty"`
+	GroupsClaim   string `json:"groupsClaim,omitempty"`
+	CAPem         string `json:"caPem,omitempty"`
+}
+
+// oidcPath is where the cluster charts take the apiserver's OIDC settings.
+var oidcPath = []string{valuesGlobal, "controlPlane", "oidc"}
+
+// values is the global.controlPlane.oidc block.
+func (o ClusterOIDC) values() map[string]any {
+	out := map[string]any{"issuerUrl": o.IssuerURL, "clientId": o.ClientID}
+	for k, v := range map[string]string{"usernameClaim": o.UsernameClaim, "groupsClaim": o.GroupsClaim, "caPem": o.CAPem} {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// CallerOIDC reports whether the caller's values carry their own
+// global.controlPlane.oidc, which then wins over the composed one.
+func CallerOIDC(values map[string]any) bool {
+	_, found, _ := unstructured.NestedFieldNoCopy(values, oidcPath...)
+	return found
 }
 
 // Namespace is the organization's namespace, where the cluster lives.
@@ -124,7 +163,8 @@ func (s ClusterSpec) Validate() error {
 // ClusterValues are the cluster's own values: the caller's, with the name,
 // organization, description, release version and identity composed on top.
 // A caller value that contradicts a composed one is refused, naming the
-// argument that sets it, rather than silently overridden.
+// argument that sets it, rather than silently overridden. The OIDC block is
+// composed only where the caller's values carry none: theirs wins whole.
 func ClusterValues(s ClusterSpec) (map[string]any, error) {
 	values, _ := deepCopy(s.Values).(map[string]any)
 	if values == nil {
@@ -145,6 +185,11 @@ func ClusterValues(s ClusterSpec) (map[string]any, error) {
 	}
 	if s.Identity != "" {
 		set = append(set, composed{identityPaths[s.Provider], s.Identity, "identity"})
+	}
+	if s.OIDC != nil && !CallerOIDC(values) {
+		if err := unstructured.SetNestedMap(values, s.OIDC.values(), oidcPath...); err != nil {
+			return nil, fmt.Errorf("values: %s: %w", strings.Join(oidcPath, "."), err)
+		}
 	}
 	for _, f := range set {
 		if have, found, _ := unstructured.NestedFieldNoCopy(values, f.path...); found && have != f.value {

@@ -39,6 +39,30 @@
         "clusterID": {
             "type": "string"
         },
+        "createdClusters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "oidc": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "clientID": {
+                            "type": "string",
+                            "description": "Audience the cluster's apiserver accepts in the person's id_token; empty is the first of `muster.mcpServer.auth.requiredAudiences`, the cross-client audience muster requests at login. Both empty: created clusters trust no identity provider."
+                        },
+                        "groupsClaim": {
+                            "type": "string",
+                            "description": "id_token claim the cluster's apiserver takes as the groups."
+                        },
+                        "usernameClaim": {
+                            "type": "string",
+                            "description": "id_token claim the cluster's apiserver takes as the username."
+                        }
+                    }
+                }
+            }
+        },
         "extraArgs": {
             "type": "array",
             "description": "Extra container arguments."

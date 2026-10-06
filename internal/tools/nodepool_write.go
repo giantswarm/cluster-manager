@@ -207,6 +207,9 @@ type WriteResult struct {
 	WithCluster []string `json:"withCluster,omitempty"`
 	Models      []string `json:"models,omitempty"`
 	ModelsNote  string   `json:"modelsNote,omitempty"`
+	// OIDC is the identity provider a created cluster's apiserver trusts
+	// (create_cluster).
+	OIDC *ClusterTrust `json:"oidc,omitempty"`
 	// Sizes are the pool's instance sizes as composed (create): the node as
 	// AWS lists it, its NVMe instance store (what a pool node's /var/lib is
 	// from gpu-node-pool 0.7.0), what it leaves a predictor after the

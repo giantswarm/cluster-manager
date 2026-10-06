@@ -263,7 +263,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	spec := compose.ClusterSpec{
 		Organization: in.Organization, Name: in.Name, Provider: in.Provider, Release: in.Release,
 		Identity: in.Identity, Description: in.Description, Values: in.Values,
-		TenantServiceAccount: s.cfg.TenantServiceAccount,
+		TenantServiceAccount: s.cfg.TenantServiceAccount, OIDC: s.cfg.ClusterOIDC,
 	}
 	if err := spec.Validate(); err != nil {
 		return nil, &ErrRefused{Reason: err.Error()}
@@ -314,7 +314,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	out := &WriteResult{
 		Cluster: spec.Name, Namespace: spec.Namespace(), Mode: in.Mode, DryRun: in.DryRun,
 		Release: release.Name, ChartVersion: release.Version, KubernetesVersion: release.KubernetesVersion,
-		Objects: []ObjectAction{},
+		OIDC: clusterTrust(spec, values), Objects: []ObjectAction{},
 	}
 	if in.Mode == ModeCommit {
 		err = s.commitCreateCluster(ctx, dyn, spec, objs, in.DryRun, out)
@@ -326,6 +326,43 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	}
 	logApplied(ctx, "create_cluster", out, start)
 	return out, nil
+}
+
+// ClusterTrust is the identity provider a created cluster's apiserver trusts,
+// as composed into its global.controlPlane.oidc: Source "installation" (the
+// installation's own provider, whose id_token cluster-manager presents to the
+// cluster as the person), "values" (the caller's own block) or "none", Note
+// saying what that means for the calls as the person.
+type ClusterTrust struct {
+	Source        string `json:"source"`
+	IssuerURL     string `json:"issuerUrl,omitempty"`
+	ClientID      string `json:"clientId,omitempty"`
+	UsernameClaim string `json:"usernameClaim,omitempty"`
+	GroupsClaim   string `json:"groupsClaim,omitempty"`
+	// CA is whether a CA certificate of the provider is composed.
+	CA   bool   `json:"ca,omitempty"`
+	Note string `json:"note,omitempty"`
+}
+
+// Sources of a created cluster's trusted identity provider.
+const (
+	TrustInstallation = "installation"
+	TrustValues       = "values"
+	TrustNone         = "none"
+)
+
+// clusterTrust reads back the OIDC block the cluster's values carry.
+func clusterTrust(spec compose.ClusterSpec, values map[string]any) *ClusterTrust {
+	block, found, _ := unstructured.NestedMap(values, "global", "controlPlane", "oidc")
+	if !found {
+		return &ClusterTrust{Source: TrustNone, Note: "the cluster trusts no identity provider: this server knows no audience the installation's apiserver accepts, so calls to the cluster as you are refused as Unauthorized — pass global.controlPlane.oidc in values to name one"}
+	}
+	str := func(k string) string { v, _ := block[k].(string); return v }
+	out := &ClusterTrust{Source: TrustInstallation, IssuerURL: str("issuerUrl"), ClientID: str("clientId"), UsernameClaim: str("usernameClaim"), GroupsClaim: str("groupsClaim"), CA: str("caPem") != ""}
+	if compose.CallerOIDC(spec.Values) {
+		out.Source = TrustValues
+	}
+	return out
 }
 
 // nameFree refuses a name a Cluster on the installation uses — in any

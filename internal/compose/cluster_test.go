@@ -68,6 +68,42 @@ func TestClusterValuesRefuseAContradiction(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// dexOIDC is an installation Dex with a private certificate.
+func dexOIDC() *ClusterOIDC {
+	return &ClusterOIDC{IssuerURL: "https://dex.gazelle.example", ClientID: "dex-k8s-authenticator", UsernameClaim: "email", GroupsClaim: "groups", CAPem: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}
+}
+
+// TestClusterValuesComposeTheOIDC: the installation's identity provider lands
+// in global.controlPlane.oidc beside the caller's other control-plane values
+// and passes the release chart's schema; a caller's own block wins whole;
+// without a provider nothing is composed.
+func TestClusterValuesComposeTheOIDC(t *testing.T) {
+	spec := newCluster("aws", "36.0.0")
+	spec.OIDC = dexOIDC()
+	values, err := ClusterValues(spec)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{
+		"instanceType": "m6i.xlarge",
+		"oidc": map[string]any{
+			"issuerUrl": "https://dex.gazelle.example", "clientId": "dex-k8s-authenticator",
+			"usernameClaim": "email", "groupsClaim": "groups", "caPem": spec.OIDC.CAPem,
+		},
+	}, values["global"].(map[string]any)["controlPlane"])
+	require.NoError(t, ValidateClusterValues(releaseAWS(t), installationValues(), values))
+	assert.False(t, CallerOIDC(spec.Values), "composing never changes the caller's values")
+
+	own := map[string]any{"issuerUrl": "https://login.acme.example", "clientId": "acme"}
+	spec.Values = map[string]any{"global": map[string]any{"controlPlane": map[string]any{"oidc": own}}}
+	values, err = ClusterValues(spec)
+	require.NoError(t, err)
+	assert.Equal(t, own, values["global"].(map[string]any)["controlPlane"].(map[string]any)["oidc"])
+
+	spec = newCluster("aws", "36.0.0")
+	values, err = ClusterValues(spec)
+	require.NoError(t, err)
+	assert.False(t, CallerOIDC(values))
+}
+
 // TestClusterSpecValidate holds the name rules and the offered provider
 // lines.
 func TestClusterSpecValidate(t *testing.T) {

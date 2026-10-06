@@ -88,6 +88,11 @@ spec:
             {{- if include "cluster-manager.oauthDexCASecretName" . }}
             - --dex-ca-file=/etc/cluster-manager/idp-ca/{{ include "cluster-manager.oauthDexCASecretKey" . }}
             {{- end }}
+            {{- with .Values.createdClusters.oidc.clientID | default (first (.Values.muster.mcpServer.auth.requiredAudiences | default list)) }}
+            - --cluster-oidc-client-id={{ . }}
+            - --cluster-oidc-username-claim={{ $.Values.createdClusters.oidc.usernameClaim }}
+            - --cluster-oidc-groups-claim={{ $.Values.createdClusters.oidc.groupsClaim }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.logging.verbose }}
