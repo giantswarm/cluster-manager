@@ -231,11 +231,16 @@ type WriteResult struct {
 	// read). Cache is the model cache setting of the slice the write composed
 	// (create, enable): whether the predictors mount a claim, which, and what
 	// follows; null when no slice was composed.
-	Zones       []string             `json:"zones,omitempty"`
-	ZonesNote   string               `json:"zonesNote,omitempty"`
-	CacheClaim  *detect.CacheClaim   `json:"cacheClaim,omitempty"`
-	CacheClaims []*detect.CacheClaim `json:"cacheClaims,omitempty"`
-	Cache       *CacheSetting        `json:"cache,omitempty"`
+	// PrefetchImages are the images the pool's nodes fetch while they join,
+	// the serving layer's pre-pull images; PrefetchNote says where they were
+	// read, or why the nodes fetch none (giantswarm/agent-platform#812).
+	PrefetchImages []string             `json:"prefetchImages,omitempty"`
+	PrefetchNote   string               `json:"prefetchNote,omitempty"`
+	Zones          []string             `json:"zones,omitempty"`
+	ZonesNote      string               `json:"zonesNote,omitempty"`
+	CacheClaim     *detect.CacheClaim   `json:"cacheClaim,omitempty"`
+	CacheClaims    []*detect.CacheClaim `json:"cacheClaims,omitempty"`
+	Cache          *CacheSetting        `json:"cache,omitempty"`
 	// RemovedClaims are the model cache claims remove_model_cache deleted
 	// (or, dry-run, would delete), as read before the delete with their
 	// price: what stops being billed (giantswarm/cluster-manager#83).
@@ -356,6 +361,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	in.Pool.Zones = pin.zones
+	in.Pool.PrefetchImages = r.prefetch.images
 	objs, err := compose.Pool(facts, in.Pool)
 	if err != nil {
 		return nil, &ErrRefused{Reason: err.Error()}
@@ -403,6 +409,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
 		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: claims, Cache: s.cacheSettingFor(slice, r.cache, pin, cacheWords),
+		PrefetchImages: r.prefetch.images, PrefetchNote: r.prefetch.note,
 	}
 	// Configs a serving layer that went left terminating in the release
 	// namespace break the slice about to be composed: healed first, before
@@ -464,6 +471,9 @@ type poolReads struct {
 	// cache is the serving namespace's model cache claims on the target: the
 	// pool's zone pin and the claim its slice mounts.
 	cache cacheClaims
+	// prefetch is what the pool's nodes fetch while they join: the serving
+	// layer's pre-pull images (giantswarm/agent-platform#812).
+	prefetch prefetchReads
 }
 
 // readPool reads the pool's inputs concurrently: the cluster's facts, its
@@ -522,6 +532,8 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	// The pre-pull's source depends on who provides serving, known only now.
+	r.prefetch = s.readPrefetch(ctx, t, r.slice)
 	// Nothing published on the target and a slice about to be composed: the
 	// presets that slice would publish, from the chart it pins — the version
 	// is the platform's, known only now (giantswarm/cluster-manager#44).

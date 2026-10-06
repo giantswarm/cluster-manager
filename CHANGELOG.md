@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A GPU pool's nodes fetch the serving runtime while they join (giantswarm/agent-platform#812). `create_node_pool` sets the gpu-node-pool chart's `pool.prefetchImages` to the serving layer's pre-pull images: for the slice it composes, the connectivity chart's `modelServing.prepull.images` at the slice's version, read from the registry (the slice's DaemonSet exists only once it is installed); where someone else provides serving, the init containers of the pre-pull DaemonSet running on the cluster. A node then downloads the runtime's 6.6 GB in the minute before node Ready, and the pre-pull, which starts once the GPU is usable, only unpacks. On a cold g6.xlarge, node Ready → predictor Ready went from 471–482 s to 419–437 s. The answer names the images and their source in `prefetchImages` and `prefetchNote`, or says why the nodes fetch none. The pool release follows gpu-node-pool from 0.8.0, the first chart that takes the value.
+
 ### Fixed
 
 - `disable_model_serving`, and `delete_node_pool` of a cluster's last pool, no longer leave the `model-serving` namespace behind (giantswarm/cluster-manager#154). The connectivity chart keeps the namespace on uninstall, so the model cache claim survives. Before, it stayed labelled by a connectivity release that no longer exists, and model-manager's commit resolution refused the target. Once the connectivity release is uninstalled (waited for within the call's budget), the teardown removes the namespace when nothing is left in it. Otherwise it marks it retired (`cluster-manager.giantswarm.io/retired`), naming what holds it: the model cache claims, which `remove_model_cache` removes. A re-run once the slice is gone completes this step, which also cleans up namespaces left before this change. `enable_model_serving` and `create_node_pool` take the mark off and reuse the namespace, and refuse while it is being deleted. The chart's ClusterRole gains `get`, `patch` and `delete` on the serving namespace only.

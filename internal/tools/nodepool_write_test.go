@@ -526,6 +526,17 @@ func TestCreateNodePoolPresetFitFromChart(t *testing.T) {
 	assert.InDelta(t, 27.37, *out.Cache.MonthlyPriceUSD, 1e-9, "100 GiB gp3 at 500 MiB/s in Frankfurt")
 	assert.Equal(t, "AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1)", out.Cache.PriceSource)
 	assert.Contains(t, out.Cache.Note, "it does not exist yet: the connectivity chart creates it and keeps it at its defaults, 100Gi gp3, 500 MiB/s, 3000 IOPS: about $27.37 a month at list prices (AWS EBS gp3 list price, EU (Frankfurt) (eu-central-1), as of "+compose.PriceAsOf+"), billed from its first bind while the claim exists — after every pool of the cluster is removed too — until the cache is removed with remove_model_cache")
+	// The pool's nodes fetch the slice's pre-pull images while they join,
+	// read from the same chart (giantswarm/agent-platform#812).
+	assert.Equal(t, []string{"gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0", "gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"}, out.PrefetchImages)
+	assert.Equal(t, "modelServing.prepull of agent-platform-connectivity 4.86.0, the chart the slice's agent-platform 4.85.0 release resolves", out.PrefetchNote)
+	var prefetch []string
+	for _, m := range out.Manifests {
+		if m["kind"] == "HelmRelease" && m["metadata"].(map[string]any)["name"] == "wc1-gpu-l4" {
+			prefetch, _, _ = unstructured.NestedStringSlice(m, "spec", "values", "pool", "prefetchImages")
+		}
+	}
+	assert.Equal(t, out.PrefetchImages, prefetch, "the pool release's values carry them")
 	assertGolden(t, "create_node_pool_preset_fit_from_chart", out)
 
 	narrow := l4("wc1", "gpu-l4", true)
@@ -1388,4 +1399,38 @@ func TestDeleteNodePoolRefusesAnOrphaningDelete(t *testing.T) {
 	assertRefused(t, err, "HelmRelease org-acme/wc1-gpu-a10g carries no finalizers.fluxcd.io: helm-controller has not reconciled it since its last write, and deleting it now removes it without uninstalling the pool — its MachinePool and Karpenter NodePool would stay and could still launch a GPU node; re-run once helm-controller has reconciled it (within its interval, or at once with `flux reconcile helmrelease -n org-acme wc1-gpu-a10g`)")
 	_, err = res.Get(ctx, "wc1-gpu-a10g", metav1.GetOptions{})
 	assert.NoError(t, err, "nothing was deleted")
+}
+
+// TestCreateNodePoolPrefetchesTheRunningPrepull (giantswarm/agent-platform#812):
+// on wc2 the platform's own release provides serving, so the pool's nodes
+// fetch the images of the pre-pull DaemonSet running there; two of them leave
+// the pool nothing to fetch, which one serves it not being known.
+func TestCreateNodePoolPrefetchesTheRunningPrepull(t *testing.T) {
+	lab := newLab(t, "installation.yaml")
+	svc := lab.service(Config{Installation: "gazelle"})
+	ctx := context.Background()
+	prepull := func(name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1", "kind": "DaemonSet",
+			"metadata": map[string]any{"name": name, "namespace": "model-serving", "labels": map[string]any{compose.LabelPrepull: "true"}},
+			"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"initContainers": []any{
+				map[string]any{"name": "pull-0-llm-d-cuda", "image": "gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"},
+			}}}},
+		}}
+	}
+	daemonSets := lab.targets[wc2APIServer].Resource(detect.DaemonSetGVR).Namespace("model-serving")
+	_, err := daemonSets.Create(ctx, prepull("agent-platform-connectivity-model-serving-prepull"), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	out, err := svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"}, out.PrefetchImages)
+	assert.Equal(t, "the init containers of the pre-pull DaemonSet model-serving/agent-platform-connectivity-model-serving-prepull on wc2", out.PrefetchNote)
+
+	_, err = daemonSets.Create(ctx, prepull("other-prepull"), metav1.CreateOptions{})
+	require.NoError(t, err)
+	out, err = svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
+	require.NoError(t, err)
+	assert.Empty(t, out.PrefetchImages)
+	assert.Equal(t, "2 pre-pull DaemonSets on wc2 (model-serving/agent-platform-connectivity-model-serving-prepull, model-serving/other-prepull): which one serves the pool is not known, the pool's nodes fetch no image", out.PrefetchNote)
 }

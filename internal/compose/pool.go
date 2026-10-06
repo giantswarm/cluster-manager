@@ -19,7 +19,7 @@ const (
 	PoolChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/gpu-node-pool"
 	// MinPoolChartVersion is the lowest chart a pool release runs: when the
 	// caller names no version, the release follows the chart from here to
-	// the next major (`>=0.7.9 <1.0.0`), so a released gpu-node-pool fix
+	// the next major (`>=0.8.0 <1.0.0`), so a released gpu-node-pool fix
 	// reaches every existing pool without a re-run; the floor is raised here
 	// when a pool needs a newer chart. A chart patch or minor that changes the
 	// bootstrap rolls a pool's nodes — the chart consolidates only empty nodes
@@ -40,8 +40,9 @@ const (
 	// advertised and still never replaces a preempted one
 	// (giantswarm/cluster-manager#85); 0.7.9's placeholder has the memory the
 	// NVIDIA runtime's container start needs and retries a container that
-	// could not start.
-	MinPoolChartVersion = "0.7.9"
+	// could not start. 0.8.0 takes pool.prefetchImages, whose content a
+	// node fetches while it joins (giantswarm/agent-platform#812).
+	MinPoolChartVersion = "0.8.0"
 	// SysextPoolChartVersion is the first chart whose default bootstrap
 	// takes the NVIDIA driver from Flatcar's prebuilt, release-matched
 	// nvidia-drivers system extension instead of building it at first boot
@@ -170,6 +171,12 @@ type PoolSpec struct {
 	// claim's zone. Nil writes no zones block: the chart's default constrains
 	// nothing.
 	Zones []string
+	// PrefetchImages are the images whose content every node of the pool
+	// fetches while it joins: the chart's `pool.prefetchImages`, the serving
+	// layer's pre-pull images (PrepullImages), so the runtime's pull after
+	// the GPU is usable only unpacks (giantswarm/agent-platform#812). Nil
+	// writes none.
+	PrefetchImages []string
 }
 
 // Validate checks the caller's part against the chart's contract.
@@ -293,8 +300,8 @@ func Pool(c Cluster, p PoolSpec) ([]*unstructured.Unstructured, error) {
 // settings, the pins and the caller's shape. Chart defaults that the
 // snapshot does not override (minSize 0, volumes and their throughput,
 // consolidation, maxPods, the placeholder's hold and image) are left to the
-// chart; the prewarm block and the zones are written only when the caller
-// asks for them, so a re-run without them removes them.
+// chart; the prewarm block, the zones and the prefetched images are written
+// only when the pool has them, so a re-run without them removes them.
 func values(c Cluster, p PoolSpec) map[string]any {
 	mirrors := map[string]any{}
 	for host, endpoints := range c.RegistryMirrors {
@@ -345,6 +352,13 @@ func values(c Cluster, p PoolSpec) map[string]any {
 			zones = append(zones, z)
 		}
 		pool["zones"] = zones
+	}
+	if len(p.PrefetchImages) > 0 {
+		images := make([]any, 0, len(p.PrefetchImages))
+		for _, i := range p.PrefetchImages {
+			images = append(images, i)
+		}
+		pool["prefetchImages"] = images
 	}
 	return map[string]any{
 		"cluster": cluster,
