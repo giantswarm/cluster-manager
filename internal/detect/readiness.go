@@ -134,6 +134,11 @@ type ServingReadiness struct {
 	// ModelsGateway is the Gateway listening on models.<domain>, null where
 	// the slice runs none (or the cluster cannot be read).
 	ModelsGateway *GatewayState `json:"modelsGateway"`
+	// Webhook is the llmisvc admission webhook's readiness — whether the
+	// Service its configurations call has a ready endpoint and the CA bundle
+	// is injected, what a load_model needs to pass admission; null when the
+	// cluster cannot be read.
+	Webhook *WebhookState `json:"webhook"`
 	// Cache is the model cache as cluster-manager's slice release states it
 	// in its values (the chart's defaults where they name nothing): whether
 	// the predictors mount a claim, and which one — the claim of the zone the
