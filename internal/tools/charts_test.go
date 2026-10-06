@@ -62,7 +62,11 @@ const connectivityChartURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent-pla
 // preset, a 14B preset no L4 hosts and a preset only a 2xlarge hosts.
 func shippedPresetCharts() *fakeCharts {
 	return (&fakeCharts{}).
-		add(compose.SliceChartURL, "4.85.0", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n"}).
+		// The meta chart's runtime images: the configs' fast set and the
+		// pre-pull's images (giantswarm/llm-d#29).
+		add(compose.SliceChartURL, "4.85.0", map[string]string{"values.yaml": "components:\n  agent-platform-connectivity:\n    chart: agent-platform-connectivity\n    repository: oci://gsoci.azurecr.io/charts/giantswarm\n    versionRange: \">=4.0.0 <5.0.0\"\n" +
+			"kserve-runtime-configs:\n  kserve:\n    llmisvcConfigs:\n      imageRegistry: gsoci.azurecr.io/giantswarm/llm-d-fast/\n      images:\n        kserve-config-llm-template: {main: gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0}\n" +
+			"modelServing:\n  prepull:\n    images:\n      - gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0\n      - gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0\n"}).
 		add(connectivityChartURL, "4.85.0", map[string]string{"files/model-serving/presets/qwen3-4b-instruct.yaml": presetDoc("qwen3-4b-instruct", "Qwen3 4B Instruct", "Qwen/Qwen3-4B-Instruct-2507", "2", "10Gi", 8, 12)}).
 		add(connectivityChartURL, "4.86.0", map[string]string{
 			// The cache claim's defaults: 100Gi on the chart's own class, gp3 at

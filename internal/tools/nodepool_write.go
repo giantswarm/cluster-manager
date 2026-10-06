@@ -377,7 +377,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		return nil, err
 	}
 	pinned := onlyOf(r.pools)
-	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned, pin.sliceCache())
+	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned, pin.sliceCache(), r.runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -477,6 +477,9 @@ type poolReads struct {
 	// cache is the serving namespace's model cache claims on the target: the
 	// pool's zone pin and the claim its slice mounts.
 	cache cacheClaims
+	// runtime is the runtime image set the slice composes (readRuntime),
+	// nil for the chart's default.
+	runtime *compose.RuntimeImages
 	// prefetch is what the pool's nodes fetch while they join: the serving
 	// layer's pre-pull images (giantswarm/agent-platform#812).
 	prefetch prefetchReads
@@ -538,8 +541,14 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	// The pre-pull's source depends on who provides serving, known only now.
-	r.prefetch = s.readPrefetch(ctx, t, r.slice)
+	// The runtime set and the pre-pull's source depend on who provides
+	// serving, known only now.
+	runtime, err := s.readRuntime(ctx, r.slice, poolAccelerators(r.releases, in.Pool.Name, in.Pool.Accelerator))
+	if err != nil {
+		return nil, err
+	}
+	r.runtime = runtime
+	r.prefetch = s.readPrefetch(ctx, t, r.slice, r.runtime)
 	// Nothing published on the target and a slice about to be composed: the
 	// presets that slice would publish, from the chart it pins — the version
 	// is the platform's, known only now (giantswarm/cluster-manager#44).

@@ -258,11 +258,15 @@ func (s *Service) sliceWithoutCache(ctx context.Context, dyn dynamic.Interface, 
 	if err != nil {
 		return err
 	}
-	pool, err := onlyPool(ctx, dyn, c.GetNamespace(), c.GetName(), "")
+	releases, err := ownPools(ctx, dyn, c.GetNamespace(), c.GetName())
 	if err != nil {
 		return err
 	}
-	serving, slice, objs, err := s.sliceRelease(reads, t, facts, pool, sliceCache{on: false})
+	runtime, err := s.readRuntime(ctx, reads, poolAccelerators(releases, "", ""))
+	if err != nil {
+		return err
+	}
+	serving, slice, objs, err := s.sliceRelease(reads, t, facts, onlyOf(poolNamesOf(releases, "")), sliceCache{on: false}, runtime)
 	if err != nil {
 		return err
 	}

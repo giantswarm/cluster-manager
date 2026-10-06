@@ -23,15 +23,19 @@ type prefetchReads struct {
 // once a GPU node's GPU is usable, for the pool's nodes to fetch beforehand
 // (giantswarm/agent-platform#812). The serving layer's provider decides the
 // source: for the slice this write composes — cluster-manager's own, or none
-// yet — the connectivity chart at the slice's version, read from the registry
+// yet — the slim runtime's images where the slice takes that set (readRuntime),
+// else the connectivity chart at the slice's version, read from the registry
 // (compose.ReadPrepullImages), since the slice's DaemonSet exists only once
 // its release is installed; for serving someone else provides (the platform's
 // own release, a human), the pre-pull DaemonSet running on the target. A read
 // that fails is the note and the pool fetches nothing, never another
 // version's images: the pull then downloads after the GPU is usable, as
 // without the fetch.
-func (s *Service) readPrefetch(ctx context.Context, t target, slice sliceReads) prefetchReads {
+func (s *Service) readPrefetch(ctx context.Context, t target, slice sliceReads, runtime *compose.RuntimeImages) prefetchReads {
 	defer timed(ctx, "prefetch images")()
+	if composesSlice(slice.serving) && runtime != nil {
+		return prefetchReads{images: runtime.Prepull, note: "the slim runtime's pre-pull images, from " + runtime.Source}
+	}
 	if composesSlice(slice.serving) {
 		if s.charts == nil {
 			return prefetchReads{note: "this server reads no chart registry: the pool's nodes fetch no image ahead of the pre-pull"}
