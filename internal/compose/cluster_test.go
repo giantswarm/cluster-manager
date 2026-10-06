@@ -142,7 +142,7 @@ func releaseAWS(t *testing.T) *registry.Chart {
 	t.Helper()
 	dir := filepath.Join("testdata", "charts", "release-aws-36.0.0")
 	files := map[string][]byte{}
-	for _, name := range []string{valuesFile, valuesSchemaFile} {
+	for _, name := range []string{valuesFile, valuesSchemaFile, RBACBootstrapFile} {
 		raw, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // fixture named by the test
 		require.NoError(t, err)
 		files[name] = raw

@@ -250,7 +250,8 @@ type CreateClusterInput struct {
 // re-run on a cluster create_cluster created passes, and changes nothing),
 // the release is active and its chart tag published, the organization's
 // namespace carries the installation's values (and, applied, its tenant
-// ServiceAccount is bound), and the values the release
+// ServiceAccount is bound). The creator and the organization's admins are
+// composed cluster-admin on the cluster (composeClusterRBAC), and the values the release
 // would install — the chart's defaults, the installation's, the cluster's —
 // match the chart's own values.schema.json. Mode commit opens the pull
 // request that adds the cluster to the repository owning its Organization
@@ -304,6 +305,10 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	if err != nil {
 		return nil, &ErrRefused{Reason: err.Error()}
 	}
+	rbac, err := composeClusterRBAC(ctx, dyn, spec, chart, installation, values)
+	if err != nil {
+		return nil, err
+	}
 	if err := compose.ValidateClusterValues(chart, installation, values); err != nil {
 		return nil, &ErrRefused{Reason: err.Error()}
 	}
@@ -314,7 +319,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	out := &WriteResult{
 		Cluster: spec.Name, Namespace: spec.Namespace(), Mode: in.Mode, DryRun: in.DryRun,
 		Release: release.Name, ChartVersion: release.Version, KubernetesVersion: release.KubernetesVersion,
-		OIDC: clusterTrust(spec, values), Objects: []ObjectAction{},
+		OIDC: clusterTrust(spec, values), RBAC: rbac, Objects: []ObjectAction{},
 	}
 	if in.Mode == ModeCommit {
 		err = s.commitCreateCluster(ctx, dyn, spec, objs, in.DryRun, out)

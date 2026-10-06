@@ -210,6 +210,9 @@ type WriteResult struct {
 	// OIDC is the identity provider a created cluster's apiserver trusts
 	// (create_cluster).
 	OIDC *ClusterTrust `json:"oidc,omitempty"`
+	// RBAC is who a created cluster binds as cluster-admin by default
+	// (create_cluster).
+	RBAC *ClusterRBAC `json:"rbac,omitempty"`
 	// Sizes are the pool's instance sizes as composed (create): the node as
 	// AWS lists it, its NVMe instance store (what a pool node's /var/lib is
 	// from gpu-node-pool 0.7.0), what it leaves a predictor after the

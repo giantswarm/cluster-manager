@@ -124,6 +124,36 @@ subjects:
     name: automation
     namespace: org-acme
 ---
+# rbac-operator's binding of acme's admin group: the organization's admins.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: write-all-customer-group
+  namespace: org-acme
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: customer:acme:Admins
+---
+# acme's own readers: not admins.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acme-readers
+  namespace: org-acme
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: customer:acme:Readers
+---
 # fresh is an organization created a minute ago: its namespace carries the
 # installation's values, rbac-operator has not bound its ServiceAccount yet.
 apiVersion: v1

@@ -47,6 +47,12 @@ type Cluster struct {
 	// git repository, branch and directory from the Flux provenance of the
 	// cluster's HelmRelease or App, null when no Kustomization owns it.
 	CommitTarget *CommitTarget `json:"commitTarget"`
+	// Admins are who a cluster create_cluster made binds as cluster-admin,
+	// read from its values (giantswarm/cluster-manager#171); null for a
+	// cluster cluster-manager did not create, AdminsNote saying why they
+	// cannot be read.
+	Admins     *compose.ClusterAdmins `json:"admins,omitempty"`
+	AdminsNote string                 `json:"adminsNote,omitempty"`
 }
 
 // GPUOperatorComponent is the GPU operator's detection with its readiness:
@@ -193,6 +199,9 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 	// pinned to, for a caller to offer as choices.
 	var infra awsInfra
 	g.Go(func() error { infra = awsInfrastructure(gctx, dyn, c); return nil })
+	var admins *compose.ClusterAdmins
+	var adminsNote string
+	g.Go(func() error { admins, adminsNote = clusterAdminsOf(gctx, dyn, c); return nil })
 	_ = g.Wait()
 	serving.Readiness.Backend = backend
 	// Each claim priced in the cluster's region, the one the slice mounts
@@ -210,7 +219,29 @@ func (s *Service) cluster(ctx context.Context, dyn dynamic.Interface, c *unstruc
 		Zones:          infra.zonesList(),
 		ZonesNote:      infra.zonesReason,
 		CommitTarget:   commitTargetOf(ctx, dyn, c),
+		Admins:         admins,
+		AdminsNote:     adminsNote,
 	}
+}
+
+// clusterAdminsOf reads who the values of a cluster create_cluster made bind
+// as cluster-admin: nil for a cluster without cluster-manager's values
+// ConfigMap, the reason when it cannot be read.
+func clusterAdminsOf(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (*compose.ClusterAdmins, string) {
+	cm, err := getOptional(ctx, dyn, ConfigMapGVR, c.GetNamespace(), compose.ClusterValuesName(c.GetName()))
+	if err != nil {
+		return nil, err.Error()
+	}
+	if cm == nil || !compose.OwnedBy(cm) {
+		return nil, ""
+	}
+	raw, _, _ := unstructured.NestedString(cm.Object, "data", compose.ValuesSecretKey)
+	values, err := parseValues(cm.GetNamespace(), cm.GetName(), compose.ValuesSecretKey, raw)
+	if err != nil {
+		return nil, err.Error()
+	}
+	admins := compose.AdminsOf(values)
+	return &admins, ""
 }
 
 // backendState says whether model-manager's kserve backend document is
