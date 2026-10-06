@@ -185,6 +185,11 @@ type SliceSpec struct {
 	// (DefaultCacheClaimName), writes nothing; nothing is written with
 	// NoCache either, since no claim is mounted then.
 	CacheClaim string
+	// Runtime points the serving runtime at another image set than the
+	// chart's default (RuntimeImages.Slim for a cluster whose pools the slim
+	// set serves): the configs' registry and main images and the pre-pull's
+	// images. Nil keeps the chart's default.
+	Runtime *RuntimeImages
 }
 
 // SliceIssuer is the ClusterIssuer the slice asks for the models host's
@@ -448,6 +453,13 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		steps = append(steps, set(false, "modelServing", "cache", "enabled"))
 	case s.CacheClaim != "" && s.CacheClaim != DefaultCacheClaimName:
 		steps = append(steps, set(s.CacheClaim, "modelServing", "cache", "pvc", "name"))
+	}
+	if s.Runtime != nil {
+		steps = append(steps,
+			set(s.Runtime.Registry, "kserve-runtime-configs", "kserve", "llmisvcConfigs", "imageRegistry"),
+			set(s.Runtime.configImages(), "kserve-runtime-configs", "kserve", "llmisvcConfigs", "images"),
+			set(s.Runtime.prepullImages(), "modelServing", "prepull", "images"),
+		)
 	}
 	for _, err := range steps {
 		if err != nil {

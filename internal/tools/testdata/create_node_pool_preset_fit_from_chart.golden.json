@@ -195,7 +195,7 @@
             "name": "gpu-l4",
             "prefetchImages": [
               "gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0",
-              "gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"
+              "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0"
             ]
           }
         },
@@ -355,6 +355,18 @@
               "issuerUrl": "https://dex.gazelle.example.io"
             }
           },
+          "kserve-runtime-configs": {
+            "kserve": {
+              "llmisvcConfigs": {
+                "imageRegistry": "gsoci.azurecr.io/giantswarm/llm-d-slim/",
+                "images": {
+                  "kserve-config-llm-template": {
+                    "main": "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0"
+                  }
+                }
+              }
+            }
+          },
           "modelServing": {
             "modelsGateway": {
               "enabled": true,
@@ -363,6 +375,12 @@
                   "name": "letsencrypt-giantswarm"
                 }
               }
+            },
+            "prepull": {
+              "images": [
+                "gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0",
+                "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0"
+              ]
             },
             "serving": {
               "runtimeClassName": "nvidia"
@@ -680,9 +698,9 @@
   },
   "prefetchImages": [
     "gsoci.azurecr.io/giantswarm/storage-initializer:v0.21.0",
-    "gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0"
+    "gsoci.azurecr.io/giantswarm/llm-d-slim/llm-d-cuda:v0.8.0"
   ],
-  "prefetchNote": "modelServing.prepull of agent-platform-connectivity 4.86.0, the chart the slice's agent-platform 4.85.0 release resolves",
+  "prefetchNote": "the slim runtime's pre-pull images, from kserve-runtime-configs.kserve.llmisvcConfigs and modelServing.prepull.images of agent-platform 4.85.0",
   "cache": {
     "enabled": true,
     "claim": "model-serving/hf-cache",
