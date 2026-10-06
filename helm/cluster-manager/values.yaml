@@ -34,6 +34,25 @@ installation:
   # marks none.
   name: ""
 
+createdClusters:
+  # The identity provider a cluster `create_cluster` makes trusts
+  # (`global.controlPlane.oidc` of its values): the Dex this server validates
+  # the person's id_token against (`oauth.dex.issuerURL`, else
+  # `global.identity.issuerUrl`, with its CA), so the calls to the cluster as
+  # the person (`oauth.downstream`) are authenticated. Composed only with the
+  # dex provider and an audience; a caller's own `global.controlPlane.oidc`
+  # wins.
+  oidc:
+    # -- Audience the cluster's apiserver accepts in the person's id_token;
+    # empty is the first of `muster.mcpServer.auth.requiredAudiences`, the
+    # cross-client audience muster requests at login. Both empty: created
+    # clusters trust no identity provider.
+    clientID: ""
+    # -- id_token claim the cluster's apiserver takes as the username.
+    usernameClaim: email
+    # -- id_token claim the cluster's apiserver takes as the groups.
+    groupsClaim: groups
+
 modelManager:
   # -- Namespace model-manager runs in on the installation. `create_node_pool`
   # registers the serving cluster's `kserve` backend there by writing the

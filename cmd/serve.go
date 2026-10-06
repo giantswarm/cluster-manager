@@ -62,6 +62,10 @@ type serveOptions struct {
 	downstreamOAuth               bool
 	githubAuthorizationServer     string
 	githubAPIURL                  string
+
+	clusterOIDCClientID      string
+	clusterOIDCUsernameClaim string
+	clusterOIDCGroupsClaim   string
 }
 
 func newServeCmd() *cobra.Command {
@@ -89,6 +93,9 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.operatorDCGMExporter, "gpu-operator-dcgm-exporter", envBool("CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER", false), "Run NVIDIA's DCGM exporter on the GPU pools' nodes through the composed <cluster>-gpu-operator release (its dcgmExporter.enabled), for an installation whose observability scrapes it; off by default — nothing scrapes it out of the box, and on a fresh pool node it is an image pull and a pod initialising DCGM on the GPU while the device plugin brings nvidia.com/gpu up (CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
 	f.DurationVar(&o.applyBudget, "apply-budget", envDuration("CLUSTER_MANAGER_APPLY_BUDGET", tools.DefaultApplyBudget), "How long a write call (create_node_pool, enable_model_serving, delete_node_pool, disable_model_serving) may take before it stops writing and answers with what it did, the rest pending for the re-run: the aggregator's deadline for an upstream tool call less the answer's way back; a deadline the request carries wins when earlier (CLUSTER_MANAGER_APPLY_BUDGET)")
+	f.StringVar(&o.clusterOIDCClientID, "cluster-oidc-client-id", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID", ""), "Audience a cluster create_cluster makes accepts in the person's id_token: the cross-client audience muster requests at login, the one the installation's own apiserver trusts (dex-k8s-authenticator on Giant Swarm installations). With the Dex issuer (--dex-issuer-url, its CA from --dex-ca-file) it is composed into the cluster's global.controlPlane.oidc; empty composes none and the cluster trusts no identity provider (CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID)")
+	f.StringVar(&o.clusterOIDCUsernameClaim, "cluster-oidc-username-claim", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_USERNAME_CLAIM", "email"), "id_token claim a created cluster's apiserver takes as the username (CLUSTER_MANAGER_CLUSTER_OIDC_USERNAME_CLAIM)")
+	f.StringVar(&o.clusterOIDCGroupsClaim, "cluster-oidc-groups-claim", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_GROUPS_CLAIM", "groups"), "id_token claim a created cluster's apiserver takes as the groups (CLUSTER_MANAGER_CLUSTER_OIDC_GROUPS_CLAIM)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("CLUSTER_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (CLUSTER_MANAGER_OAUTH_ENABLED)")
@@ -168,6 +175,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return target.Dynamic, nil
 	}
 	toolsCfg := tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget}
+	if toolsCfg.ClusterOIDC, err = o.clusterOIDC(); err != nil {
+		return err
+	}
 	opts := []tools.Option{
 		// The platform's charts from their registry, anonymously: what the
 		// slice would install is read from there before it exists.
@@ -258,4 +268,23 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+// clusterOIDC is the identity provider a created cluster is composed to
+// trust: the Dex this server validates the person's id_token against, with
+// the audience the installation's apiserver accepts. Nil without a Dex or an
+// audience.
+func (o *serveOptions) clusterOIDC() (*compose.ClusterOIDC, error) {
+	if !o.oauthEnabled || o.oauthProvider != server.ProviderDex || o.dexIssuerURL == "" || o.clusterOIDCClientID == "" {
+		return nil, nil
+	}
+	out := &compose.ClusterOIDC{IssuerURL: o.dexIssuerURL, ClientID: o.clusterOIDCClientID, UsernameClaim: o.clusterOIDCUsernameClaim, GroupsClaim: o.clusterOIDCGroupsClaim}
+	if o.dexCAFile != "" {
+		ca, err := os.ReadFile(o.dexCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read the Dex CA for the created clusters' OIDC: %w", err)
+		}
+		out.CAPem = string(ca)
+	}
+	return out, nil
 }

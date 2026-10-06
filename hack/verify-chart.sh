@@ -70,4 +70,14 @@ echo "$got" | grep -q -- '^    observability.giantswarm.io/tenant: giantswarm$' 
   || fail "ServiceMonitor lacks serviceMonitor.labels"
 echo "$got" | grep -q -- '- port: metrics$' || fail "ServiceMonitor does not scrape the metrics port"
 
+# Created clusters trust the installation's Dex: the audience is
+# createdClusters.oidc.clientID, else muster's first required audience; with
+# neither, no --cluster-oidc-client-id and created clusters trust none.
+dex=(--set oauth.enabled=true --set oauth.dex.issuerURL=https://dex.example --set oauth.dex.clientID=platform --set oauth.baseURL=https://cluster-manager.example --set oauth.existingSecret=s)
+got=$(helm template t "$CHART" "${dex[@]}" --set 'muster.mcpServer.auth.requiredAudiences={dex-k8s-authenticator}')
+grep -qF -- '- --cluster-oidc-client-id=dex-k8s-authenticator' <<<"$got" || fail "created clusters: muster's required audience is not the OIDC client id"
+got=$(helm template t "$CHART" "${dex[@]}" --set 'muster.mcpServer.auth.requiredAudiences={dex-k8s-authenticator}' --set createdClusters.oidc.clientID=kubernetes)
+grep -qF -- '- --cluster-oidc-client-id=kubernetes' <<<"$got" || fail "created clusters: createdClusters.oidc.clientID does not win"
+if helm template t "$CHART" "${dex[@]}" | grep -q -- '--cluster-oidc-'; then fail "created clusters: an OIDC client id rendered without an audience"; fi
+
 echo "verify-chart: ok"

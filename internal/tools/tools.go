@@ -95,6 +95,12 @@ type Config struct {
 	// release names no gatewayApi.gateway.tls.secretName):
 	// `letsencrypt-giantswarm` on Giant Swarm clusters; empty composes none.
 	CertificateIssuer string
+	// ClusterOIDC is the installation's identity provider, which a cluster
+	// create_cluster makes is composed to trust (global.controlPlane.oidc),
+	// so cluster-manager's calls to it as the person are authenticated; nil
+	// when the server knows none (no Dex, or no audience the apiserver
+	// accepts), and the created cluster trusts no provider.
+	ClusterOIDC *compose.ClusterOIDC
 	// OperatorDCGMExporter runs NVIDIA's DCGM exporter on the GPU pools'
 	// nodes through the composed `<cluster>-gpu-operator` release, for an
 	// installation whose observability scrapes it; off by default
