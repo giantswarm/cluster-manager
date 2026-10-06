@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `delete_cluster` answers a call that finds nothing of the cluster left with a structured `{"notFound": {"cluster", "namespace", "nothingLeft": true}}` block beside its text (giantswarm/cluster-manager#167): a caller tells the complete removal without parsing prose.
 - A GPU pool's nodes fetch the serving runtime while they join (giantswarm/agent-platform#812). `create_node_pool` sets the gpu-node-pool chart's `pool.prefetchImages` to the serving layer's pre-pull images: for the slice it composes, the connectivity chart's `modelServing.prepull.images` at the slice's version, read from the registry (the slice's DaemonSet exists only once it is installed); where someone else provides serving, the init containers of the pre-pull DaemonSet running on the cluster. A node then downloads the runtime's 6.6 GB in the minute before node Ready, and the pre-pull, which starts once the GPU is usable, only unpacks. On a cold g6.xlarge, node Ready → predictor Ready went from 471–482 s to 419–437 s. The answer names the images and their source in `prefetchImages` and `prefetchNote`, or says why the nodes fetch none. The pool release follows gpu-node-pool from 0.8.0, the first chart that takes the value.
 
 ### Fixed

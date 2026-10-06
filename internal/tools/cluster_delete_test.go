@@ -138,7 +138,8 @@ func TestDeleteClusterAppliesThenRemovesLeftovers(t *testing.T) {
 	require.NoError(t, releases.Delete(ctx, "dev01-extra", metav1.DeleteOptions{}))
 	_, err = svc.DeleteCluster(ctx, dev01Delete())
 	var notFound *ErrNotFound
-	assert.True(t, errors.As(err, &notFound), "nothing of the cluster is left: %v", err)
+	require.True(t, errors.As(err, &notFound), "nothing of the cluster is left: %v", err)
+	assert.Equal(t, &NotFound{Cluster: "dev01", Namespace: "org-acme", NothingLeft: true}, notFound.NotFound, "a caller reads the complete removal without parsing prose")
 }
 
 // TestDeleteClusterRefusals: every refusal names its reason and the way out,
