@@ -191,7 +191,13 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	ns, name := c.GetNamespace(), compose.SliceReleaseName(c.GetName())
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return s.retireLeftNamespace(ctx, dyn, c, in, start)
+		// The slice is gone already: what it left is the serving namespace
+		// (retireLeftNamespace), else nothing of it is found.
+		out, err := s.retireLeftNamespace(ctx, dyn, c, "disable_model_serving", in.Mode, in.DryRun, start)
+		if err != nil || out != nil {
+			return out, err
+		}
+		return nil, &ErrNotFound{What: fmt.Sprintf("model serving of cluster %s (HelmRelease %s/%s)", c.GetName(), ns, name)}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
@@ -239,33 +245,6 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 func composesGatewayAPICRDs(hr *unstructured.Unstructured) bool {
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	return compose.GatewayAPICRDsOn(values)
-}
-
-// retireLeftNamespace is disable_model_serving where the slice release is
-// gone already: the serving namespace it left is removed or marked retired
-// (retireServingNamespace) — the re-run of a teardown cut before it, or of
-// one from before the step existed. Nothing of the slice's left is not found.
-func (s *Service) retireLeftNamespace(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in ModelServingInput, start time.Time) (*WriteResult, error) {
-	notFound := &ErrNotFound{What: fmt.Sprintf("model serving of cluster %s (HelmRelease %s/%s)", c.GetName(), c.GetNamespace(), compose.SliceReleaseName(c.GetName()))}
-	t := s.target(ctx, dyn, c)
-	if t.Reader == nil {
-		return nil, notFound
-	}
-	ns, err := s.servingNamespaceOf(ctx, t)
-	if err != nil {
-		return nil, err
-	}
-	if ns == nil || ns.GetDeletionTimestamp() != nil {
-		return nil, notFound
-	}
-	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
-	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
-	if err := s.retireServingNamespace(td, t); err != nil {
-		return nil, err
-	}
-	td.finish()
-	logApplied(ctx, "disable_model_serving", out, start)
-	return out, nil
 }
 
 // sliceReads is what the slice's part of a write reads: the serving layer

@@ -138,6 +138,85 @@ func TestDisableModelServingWaitsForTheConnectivityUninstall(t *testing.T) {
 	assert.Equal(t, []string{"delete Namespace /model-serving"}, objectNames(again))
 }
 
+// TestDeleteNodePoolRetiresTheNamespaceTheSliceLeft
+// (giantswarm/cluster-manager#191): the delete of the cluster's last pool
+// ends with the serving namespace, marked retired while the model cache
+// claim holds it; once the pool is gone, a repeated delete_node_pool on it
+// still answers the namespace — unchanged, then removed once the claim is
+// gone — and finds nothing only then. In mode commit the removed pool is
+// not found: the namespace is retired live.
+func TestDeleteNodePoolRetiresTheNamespaceTheSliceLeft(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	servingNamespace(t, l, true, false)
+	ctx := context.Background()
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply}
+
+	out := deleteLastPool(t, svc, ctx, false, false)
+	assert.True(t, out.LastPool)
+	assert.Equal(t, "retire Namespace /model-serving", lastObject(out))
+	assertGone(t, l, "wc1-agent-platform", "wc1-gpu-a10g")
+
+	again, err := svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err, "the pool is gone, the namespace it left is still the call's")
+	assert.Equal(t, []string{"unchanged Namespace /model-serving"}, objectNames(again))
+	assert.Equal(t, "gpu-a10g", again.Pool)
+	assert.False(t, again.Partial)
+
+	require.NoError(t, l.targets[wc1APIServer].Resource(detect.PersistentVolumeClaimGVR).Namespace("model-serving").Delete(ctx, "hf-cache", metav1.DeleteOptions{}))
+	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-delete Namespace /model-serving"}, objectNames(dry))
+	assert.NotNil(t, servingNamespaceOnWC1(t, l), "a dry run touches nothing")
+
+	removed, err := svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"delete Namespace /model-serving"}, objectNames(removed))
+	assert.Nil(t, servingNamespaceOnWC1(t, l))
+
+	_, err = svc.DeleteNodePool(ctx, del)
+	var notFound *ErrNotFound
+	require.ErrorAs(t, err, &notFound, "nothing of the pool or its slice is left")
+}
+
+// TestDeleteNodePoolRetiresTheNamespaceOnceTheSliceIsGone
+// (giantswarm/cluster-manager#191): the first call is cut while the
+// connectivity release is still being uninstalled, the namespace pending;
+// by the re-run the slice release is gone and the pool's release still
+// terminates (helm-controller uninstalls it). The namespace step is not the
+// slice's to skip: the re-run removes the namespace.
+func TestDeleteNodePoolRetiresTheNamespaceOnceTheSliceIsGone(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	servingNamespace(t, l, false, false)
+	finalizingResource(t, fakeInstallation(t, l), HelmReleaseGVR)
+	ctx := context.Background()
+	connectivity := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": map[string]any{"name": "wc1-agent-platform-connectivity", "namespace": "org-acme"}}}
+	_, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Create(ctx, connectivity, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	short, cancel := context.WithTimeout(ctx, writeReserve+300*time.Millisecond)
+	defer cancel()
+	cut, err := svc.DeleteNodePool(short, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	require.NoError(t, err)
+	assert.True(t, cut.Partial)
+	assert.Equal(t, "pending Namespace /model-serving", lastObject(cut))
+	for _, name := range []string{"wc1-gpu-a10g", "wc1-agent-platform"} {
+		hr, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, name, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, hr.GetDeletionTimestamp(), "HelmRelease %s terminates under helm-controller's finalizer", name)
+	}
+
+	// Flux finishes the slice's uninstall, the connectivity child's with it;
+	// the pool's release is still being uninstalled.
+	for _, name := range []string{"wc1-agent-platform", "wc1-agent-platform-connectivity"} {
+		require.NoError(t, fakeInstallation(t, l).Tracker().Delete(HelmReleaseGVR, "org-acme", name))
+	}
+	assertGone(t, l, "wc1-agent-platform")
+	again := deleteLastPool(t, svc, ctx, false, false)
+	assert.False(t, again.Partial)
+	assert.Equal(t, []string{"delete HelmRelease org-acme/wc1-gpu-a10g", "delete Namespace /model-serving"}, objectNames(again), "the pool's terminating release found again, then the namespace the gone slice left")
+	assert.Nil(t, servingNamespaceOnWC1(t, l))
+}
+
 // TestEnableModelServingTakesBackARetiredNamespace: the slice composed again
 // takes the retired mark off (Helm adopts the namespace as it stands), and a
 // namespace being deleted is a refusal before anything lands.

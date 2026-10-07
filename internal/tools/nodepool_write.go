@@ -708,6 +708,10 @@ func backendTargetName(t compose.BackendTarget) string {
 // operator, the backend registration, the slice release, and the pool's own
 // objects last, its HelmRelease the very last: the re-run finds the pool and
 // continues where the teardown stands (giantswarm/cluster-manager#28, #37).
+// After them the serving namespace the slice left (retireServingNamespace),
+// a step that depends on no pool: the re-run retires it once the slice
+// release is gone, and once the pool itself is (deleteRemovedPool;
+// giantswarm/cluster-manager#191).
 // With a pool that is not the last, the kserve backend document
 // cluster-manager registered for the cluster is re-written for the pools
 // that remain, right after the idle nodes: the one pool's form for the one
@@ -732,7 +736,7 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	ns, release := c.GetNamespace(), compose.ReleaseName(c.GetName(), in.Name)
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, release, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil, &ErrNotFound{What: fmt.Sprintf("node pool %s of cluster %s (HelmRelease %s/%s)", in.Name, c.GetName(), ns, release)}
+		return s.deleteRemovedPool(ctx, dyn, c, in, start)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get HelmRelease %s/%s: %w", ns, release, err)
@@ -805,7 +809,8 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if err := td.deleteAll(plans); err != nil {
 		return nil, err
 	}
-	if slice != nil {
+	switch {
+	case slice != nil:
 		if err := s.retireServingNamespace(td, t); err != nil {
 			return nil, err
 		}
@@ -814,9 +819,39 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 				return nil, err
 			}
 		}
+	case last && kept == "":
+		// The slice release went before this call — a re-run after a cut
+		// while its uninstall still ran —: the serving namespace it left is
+		// this teardown's to retire, whether or not the pool's release still
+		// stands (giantswarm/cluster-manager#191).
+		if err := s.retireLeftServingNamespace(td, t); err != nil {
+			return nil, err
+		}
 	}
 	td.finish()
 	logApplied(ctx, "delete_node_pool", out, start)
+	return out, nil
+}
+
+// deleteRemovedPool is delete_node_pool where the pool's release is gone
+// already: a re-run after the removal retires the serving namespace the
+// slice left — a teardown cut before that step, or one from before the step
+// existed, has no pool left to be re-run on (giantswarm/cluster-manager#191).
+// With nothing left, or in mode commit (the namespace is retired live), the
+// pool is not found.
+func (s *Service) deleteRemovedPool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in DeleteNodePoolInput, start time.Time) (*WriteResult, error) {
+	notFound := &ErrNotFound{What: fmt.Sprintf("node pool %s of cluster %s (HelmRelease %s/%s)", in.Name, c.GetName(), c.GetNamespace(), compose.ReleaseName(c.GetName(), in.Name))}
+	if in.Mode == ModeCommit {
+		return nil, notFound
+	}
+	out, err := s.retireLeftNamespace(ctx, dyn, c, "delete_node_pool", in.Mode, in.DryRun, start)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, notFound
+	}
+	out.Pool = in.Name
 	return out, nil
 }
 
