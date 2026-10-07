@@ -120,7 +120,7 @@ func TestEnableModelServingWorkload(t *testing.T) {
 	dry, err := svc.EnableModelServing(ctx, serving("wc1", true))
 	require.NoError(t, err)
 	assert.Equal(t, "gpu-a10g", dry.Slice.GPUPool)
-	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the pinned pool's shapes, read from its release: nvidia-a10g in the chart's default sizes (giantswarm/cluster-manager#26)")
+	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - computeCapability: \"8.6\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the pinned pool's shapes, read from its release: nvidia-a10g in the chart's default sizes (giantswarm/cluster-manager#26), each with the A10G's compute capability (#178)")
 	assert.Contains(t, backendDoc(dry), "instanceType: g5.4xlarge\n")
 	assert.Equal(t, "models.wc1.acme.example.io", dry.Slice.ModelsHost, "models.<cluster>.<base domain>")
 	assert.Equal(t, "https://dex.gazelle.example.io/keys", dry.Slice.JWKS, "a workload cluster cannot reach the installation's Dex service: the public issuer")

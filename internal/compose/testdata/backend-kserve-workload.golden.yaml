@@ -12,7 +12,8 @@ data:
           namespace: agent-platform
         gpuPool:
           instances:
-          - gpuMemoryGiB: 24
+          - computeCapability: "8.9"
+            gpuMemoryGiB: 24
             gpus: 1
             instanceType: g6.xlarge
             memoryGiB: 16
@@ -20,7 +21,8 @@ data:
             usableMemoryGiB: 11.9
             usableVcpu: 3
             vcpu: 4
-          - gpuMemoryGiB: 24
+          - computeCapability: "8.9"
+            gpuMemoryGiB: 24
             gpus: 1
             instanceType: g6.2xlarge
             memoryGiB: 32

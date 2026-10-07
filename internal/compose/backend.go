@@ -61,10 +61,11 @@ type BackendTarget struct {
 
 // documentShape is one size as model-manager's backend document declares it
 // (spec.kserve.gpuPool.instances[], spec.kserve.gpuPools[<pool>].instances[]):
-// the node as AWS lists it and what it leaves a predictor. model-manager reads
-// the document strictly — a key it does not declare fails the parse and with
-// it the fit check — so the shape's other fields (the price, the instance
-// store) are the answer's and are never written here.
+// the node as AWS lists it, what it leaves a predictor and its GPU's compute
+// capability. model-manager reads the document strictly — a key it does not
+// declare fails the parse and with it the fit check — so the shape's other
+// fields (the price, the instance store) are the answer's and are never
+// written here.
 type documentShape struct {
 	InstanceType    string  `json:"instanceType"`
 	Size            string  `json:"size"`
@@ -74,12 +75,21 @@ type documentShape struct {
 	GPUMemoryGiB    int     `json:"gpuMemoryGiB"`
 	UsableVCPU      float64 `json:"usableVcpu"`
 	UsableMemoryGiB float64 `json:"usableMemoryGiB"`
+	// ComputeCapability is the GPU's CUDA compute capability as major.minor
+	// ("8.6"): model-manager judges the GPU generation a model's weights need
+	// against it instead of its own instance-family table (model-manager
+	// 1.12.0, giantswarm/model-manager#266). A shape without one is left out
+	// of the key, and model-manager keeps its table for it.
+	ComputeCapability string `json:"computeCapability,omitempty"`
 }
 
 func documentShapes(shapes []InstanceShape) []documentShape {
 	out := make([]documentShape, 0, len(shapes))
 	for _, s := range shapes {
-		out = append(out, documentShape{s.InstanceType, s.Size, s.VCPU, s.MemoryGiB, s.GPUs, s.GPUMemoryGiB, s.UsableVCPU, s.UsableMemoryGiB})
+		out = append(out, documentShape{
+			InstanceType: s.InstanceType, Size: s.Size, VCPU: s.VCPU, MemoryGiB: s.MemoryGiB, GPUs: s.GPUs, GPUMemoryGiB: s.GPUMemoryGiB,
+			UsableVCPU: s.UsableVCPU, UsableMemoryGiB: s.UsableMemoryGiB, ComputeCapability: s.ComputeCapability,
+		})
 	}
 	return out
 }

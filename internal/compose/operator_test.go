@@ -191,12 +191,12 @@ func TestKServeBackendGoldens(t *testing.T) {
 			case 0:
 				assert.NotContains(t, doc, "gpuPool", "no pool: no gpuPool block, model-manager's fit check keeps its answer")
 			case 1:
-				assert.Contains(t, doc, "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.2xlarge\n", "the pinned pool's shapes in the pool's order, keyed as model-manager's spec.kserve.gpuPool.instances[] declares them")
+				assert.Contains(t, doc, "gpuPool:\n      instances:\n      - computeCapability: \"8.9\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n      - computeCapability: \"8.9\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.2xlarge\n", "the pinned pool's shapes in the pool's order, keyed as model-manager's spec.kserve.gpuPool.instances[] declares them, each with its GPU's compute capability (giantswarm/cluster-manager#178)")
 				assert.NotContains(t, doc, "gpuPools")
 			default:
 				assert.NotContains(t, doc, "gpuPool:", "several pools: no one-pool block")
-				assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "each pool's shapes under its release name, the keys sorted")
-				assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n")
+				assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - computeCapability: \"8.6\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "each pool's shapes under its release name, the keys sorted; an A10G pool's sizes carry the Ampere generation")
+				assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - computeCapability: \"8.9\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n")
 			}
 			assert.NotContains(t, doc, "taint", "the taint and the node selector stay the discovery ConfigMap's")
 		})
