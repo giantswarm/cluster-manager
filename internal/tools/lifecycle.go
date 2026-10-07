@@ -680,17 +680,17 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 }
 
 // terminatingNodes names the nodes whose NodeClaim is deleted, each since
-// when, and what goes on meanwhile: Karpenter drains the node and terminates
-// its instance, and the claim — with it the MachinePool of a pool being
-// removed — is gone once EC2 confirms the termination, minutes later. The
-// person watching a pool go sees what is still going, not a bare count
+// when and where its termination stands (terminationStage): the claim —
+// with it the MachinePool of a pool being removed — is gone once EC2
+// confirms the termination. The person watching a pool go sees what is
+// still going and whether it is still billed, not a bare count
 // (giantswarm/cluster-manager#57).
 func terminatingNodes(nodes []*poolNode) string {
 	parts := make([]string, 0, len(nodes))
 	for _, n := range nodes {
-		parts = append(parts, fmt.Sprintf("%s terminating since %s", n.name(), n.deletedAt()))
+		parts = append(parts, fmt.Sprintf("%s terminating since %s (%s)", n.name(), n.deletedAt(), n.terminationStage()))
 	}
-	return strings.Join(parts, ", ") + " (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)"
+	return strings.Join(parts, "; ")
 }
 
 // gpuPoolRelease reports whether hr is a GPU pool release of

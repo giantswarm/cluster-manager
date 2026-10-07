@@ -66,6 +66,34 @@ func (n *poolNode) deletedAt() string {
 	return detect.Timestamp(n.claim.GetDeletionTimestamp().Time)
 }
 
+// The conditions Karpenter sets on a deleted NodeClaim, in the order its
+// termination passes them: the node drained (its volumes detached next),
+// then the instance's termination requested from EC2.
+const (
+	claimDrained             = "Drained"
+	claimInstanceTerminating = "InstanceTerminating"
+)
+
+// terminationStage says where a terminating node's termination stands, from
+// its NodeClaim's conditions: draining, its volumes detaching, or its
+// instance shutting down. Karpenter keeps the claim until EC2 reports the
+// instance terminated, and a GPU instance stays shutting-down for about five
+// minutes after a drain of seconds; EC2 bills no instance from
+// shutting-down on, so that wait costs nothing.
+func (n *poolNode) terminationStage() string {
+	if cond, found := detect.ConditionOf(n.claim, claimInstanceTerminating); found && cond.Status == "True" {
+		return fmt.Sprintf("instance shutting down since %s, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes", cond.LastTransitionTime)
+	}
+	drained, _ := detect.ConditionOf(n.claim, claimDrained)
+	switch {
+	case drained.Status == "True":
+		return fmt.Sprintf("drained since %s, its volumes detaching before the instance is terminated", drained.LastTransitionTime)
+	case drained.Message != "":
+		return "draining: " + drained.Message
+	}
+	return "Karpenter drains the node, then terminates its instance"
+}
+
 // idleSince is when the node's last pod left: the NodeClaim's
 // status.lastPodEventTime (Karpenter records every pod scheduled on or
 // removed from the node), else the claim's Ready transition, else the Node's

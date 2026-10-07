@@ -42,3 +42,17 @@ status:
     - type: Ready
       status: "True"
       lastTransitionTime: "2026-09-17T07:12:30Z"
+    # Karpenter's termination as a g5 pool's showed it: drained and the
+    # volumes detached within a minute, the instance shutting down after.
+    - type: Drained
+      status: "True"
+      reason: Drained
+      lastTransitionTime: "2026-09-17T09:40:38Z"
+    - type: VolumesDetached
+      status: "True"
+      reason: VolumesDetached
+      lastTransitionTime: "2026-09-17T09:40:40Z"
+    - type: InstanceTerminating
+      status: "True"
+      reason: InstanceTerminating
+      lastTransitionTime: "2026-09-17T09:40:41Z"
