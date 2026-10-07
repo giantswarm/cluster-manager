@@ -350,7 +350,8 @@ func Serving(ctx context.Context, t Target) Component {
 
 // ServingState is Serving's verdict with the layer's readiness beside it:
 // cluster-manager's slice release and every child of it with their Ready
-// conditions, the llm-d controller's available replicas, the counts of
+// conditions — the slice release ready only once every child is —, the
+// llm-d controller's available replicas, the counts of
 // LLMInferenceServiceConfigs in the release namespace and of published
 // serving presets, the models Gateway's readiness — Programmed, its models
 // listener's Programmed and ResolvedRefs, the listener Certificate's Ready —
@@ -372,6 +373,7 @@ func ServingState(ctx context.Context, t Target) (Component, ServingReadiness) {
 			r.Release = &state
 			r.Cache = SliceCacheOf(hr)
 			r.Children = sliceChildren(ctx, t.Installation, t.Namespace, hr.GetName())
+			r.Release.judge(r.Children)
 		}
 	}
 	children := childEvidence(r.Children)
@@ -446,10 +448,11 @@ func SliceCacheOf(hr *unstructured.Unstructured) *SliceCache {
 // HelmReleases the meta chart renders into the slice's namespace on the
 // installation, labelled by Flux as the release's — with their Ready
 // conditions, sorted by name. The meta release reports Ready whether or not
-// a child installed: on gazelle the connectivity child failed its render and
-// the slice served no models Gateway while serving read present
-// (giantswarm/cluster-manager#30); a child whose uninstall failed stays,
-// deleted, until Flux's retry succeeds (giantswarm/cluster-manager#37).
+// a child installed, so its state is judged against them (ReleaseState.judge):
+// on gazelle the connectivity child failed its render and the slice served no
+// models Gateway while serving read present (giantswarm/cluster-manager#30);
+// a child whose uninstall failed stays, deleted, until Flux's retry succeeds
+// (giantswarm/cluster-manager#37).
 func sliceChildren(ctx context.Context, installation dynamic.Interface, namespace, release string) []ReleaseState {
 	out := []ReleaseState{}
 	selector := fmt.Sprintf("%s=%s,%s=%s", LabelFluxReleaseName, release, LabelFluxReleaseNamespace, namespace)

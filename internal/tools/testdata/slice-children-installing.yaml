@@ -1,0 +1,61 @@
+# The children of wc1's slice release on the installation about 30 s after
+# the meta release turned Ready: the connectivity and kserve-runtime-configs
+# children installed, the llmisvc controller's still installing, as
+# helm-controller reports it (Ready=Unknown, Progressing).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-agent-platform-connectivity
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-agent-platform-connectivity
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-10-07T09:00:21Z"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-kserve-runtime-configs
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-kserve-runtime-configs
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: InstallSucceeded
+      lastTransitionTime: "2026-10-07T09:00:18Z"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: wc1-kserve-llmisvc-resources
+  namespace: org-acme
+  labels:
+    helm.toolkit.fluxcd.io/name: wc1-agent-platform
+    helm.toolkit.fluxcd.io/namespace: org-acme
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: wc1-kserve-llmisvc-resources
+status:
+  conditions:
+    - type: Ready
+      status: "Unknown"
+      reason: Progressing
+      message: Running 'install' action with timeout of 10m0s
+      lastTransitionTime: "2026-10-07T09:00:05Z"

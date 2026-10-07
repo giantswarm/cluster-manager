@@ -242,3 +242,91 @@ func TestListClustersLLMISVCWebhook(t *testing.T) {
 		assert.Contains(t, serving.Evidence, "llmisvc webhook readiness unknown ("+w.Message+")")
 	})
 }
+
+// The slice's meta release reports Ready once its own manifests — the
+// children's HelmReleases — are applied, about 30 s before the children have
+// installed, kserve-llmisvc-resources last (giantswarm/cluster-manager#177):
+// a caller reading the slice from the parent alone concluded it was ready
+// while a child still installed, and a load_model in that window failed.
+// serving.readiness.release is ready only once every child is, naming the
+// pending child with its condition until then; the parent's own condition
+// stands while it is not Ready itself.
+func TestListClustersSliceReleaseChildren(t *testing.T) {
+	ready, notReady := true, false
+	const (
+		parent    = "wc1-agent-platform"
+		llmisvc   = "wc1-kserve-llmisvc-resources"
+		installed = "2026-10-07T09:00:00Z"
+	)
+	condition := func(status, reason, message string) []any {
+		return []any{map[string]any{"type": "Ready", "status": status, "reason": reason, "message": message, "lastTransitionTime": installed}}
+	}
+	// sliceLab is wc1 with cluster-manager's slice release in the state
+	// helm-controller reports and the children of the fixture beside it.
+	sliceLab := func(t *testing.T, parentCondition []any) *lab {
+		t.Helper()
+		l := newLab(t, "installation.yaml")
+		_, err := l.service(Config{Installation: "gazelle"}).EnableModelServing(context.Background(), serving("wc1", false))
+		require.NoError(t, err)
+		releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+		hr, err := releases.Get(context.Background(), parent, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedSlice(hr.Object, parentCondition, "status", "conditions"))
+		_, err = releases.Update(context.Background(), hr, metav1.UpdateOptions{})
+		require.NoError(t, err)
+		for _, child := range loadFixtures(t, "slice-children-installing.yaml") {
+			_, err := releases.Create(context.Background(), child.(*unstructured.Unstructured), metav1.CreateOptions{})
+			require.NoError(t, err)
+		}
+		return l
+	}
+	release := func(t *testing.T, l *lab) (ServingComponent, *detect.ReleaseState) {
+		t.Helper()
+		serving := clusterNamed(t, l, "wc1").Serving
+		require.NotNil(t, serving.Readiness.Release)
+		return serving, serving.Readiness.Release
+	}
+	const pending = "HelmRelease org-acme/wc1-kserve-llmisvc-resources not Ready (Ready=False [Progressing] Running 'install' action with timeout of 10m0s)"
+
+	t.Run("a child still installing", func(t *testing.T) {
+		serving, r := release(t, sliceLab(t, condition("True", "InstallSucceeded", "")))
+		assert.Equal(t, &notReady, r.Ready, "the parent reads Ready; the slice is not")
+		assert.Equal(t, detect.ReasonChildNotReady, r.Reason)
+		assert.Equal(t, pending, r.Message, "the pending child, with helm-controller's own account")
+		assert.Equal(t, installed, r.Since, "the parent's own transition")
+		assert.Contains(t, serving.Evidence, pending)
+		assert.Contains(t, serving.Evidence, "HelmRelease org-acme/"+parent)
+		assert.Len(t, serving.Readiness.Children, 3)
+	})
+
+	t.Run("every child Ready", func(t *testing.T) {
+		l := sliceLab(t, condition("True", "InstallSucceeded", ""))
+		releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+		hr, err := releases.Get(context.Background(), llmisvc, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedSlice(hr.Object, condition("True", "InstallSucceeded", ""), "status", "conditions"))
+		_, err = releases.Update(context.Background(), hr, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		serving, r := release(t, l)
+		assert.Equal(t, &ready, r.Ready)
+		assert.Equal(t, "InstallSucceeded", r.Reason, "the parent's own reason")
+		assert.Empty(t, r.Message)
+		for _, e := range serving.Evidence {
+			assert.NotContains(t, e, "not Ready", "nothing holds the slice back")
+		}
+	})
+
+	t.Run("the parent not Ready itself", func(t *testing.T) {
+		_, r := release(t, sliceLab(t, condition("False", "InstallFailed", "Helm install failed for release org-acme/wc1-agent-platform: timed out waiting for the condition")))
+		assert.Equal(t, &notReady, r.Ready)
+		assert.Equal(t, "InstallFailed", r.Reason, "the parent's own account, not the child's")
+		assert.Equal(t, "Helm install failed for release org-acme/wc1-agent-platform: timed out waiting for the condition", r.Message)
+	})
+
+	t.Run("the parent without a condition yet", func(t *testing.T) {
+		_, r := release(t, sliceLab(t, []any{}))
+		assert.Nil(t, r.Ready, "null until the parent reports one: nothing to hold back")
+		assert.Empty(t, r.Reason)
+	})
+}

@@ -59,6 +59,8 @@ type ReleaseState struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	// Ready mirrors the Ready condition; null until the release reports one.
+	// The slice release's is held back while a child release it renders is
+	// not Ready (Reason ReasonChildNotReady, Message naming the children).
 	Ready   *bool  `json:"ready"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
@@ -114,7 +116,8 @@ type OperandState struct {
 // ServingReadiness is the serving layer's readiness on a cluster.
 type ServingReadiness struct {
 	// Release is cluster-manager's slice release, null when the layer is
-	// the platform's own or a hand install.
+	// the platform's own or a hand install; ready only once every child
+	// release it renders is Ready too (ReleaseState.judge).
 	Release *ReleaseState `json:"release"`
 	// Children are the slice release's child HelmReleases (the KServe
 	// charts, the connectivity child, kserve-runtime-configs), every one
@@ -276,6 +279,28 @@ func childEvidence(children []ReleaseState) []string {
 		out = append(out, "HelmRelease "+c.Namespace+"/"+c.Name+" not Ready ("+detail+")")
 	}
 	return out
+}
+
+// ReasonChildNotReady is a slice release's reason while it reads Ready and a
+// child release it renders does not.
+const ReasonChildNotReady = "ChildNotReady"
+
+// judge holds a Ready slice release back while a child release it renders is
+// not Ready, naming each with why: the meta release reports Ready once its
+// own manifests — the children's HelmReleases — are applied, about 30 s
+// before the children have installed (kserve-llmisvc-resources last), and a
+// caller reading the slice from the parent alone loaded a model into that
+// window (giantswarm/cluster-manager#177).
+func (r *ReleaseState) judge(children []ReleaseState) {
+	if r.Ready == nil || !*r.Ready {
+		return
+	}
+	pending := childEvidence(children)
+	if len(pending) == 0 {
+		return
+	}
+	notReady := false
+	r.Ready, r.Reason, r.Message = &notReady, ReasonChildNotReady, strings.Join(pending, "; ")
 }
 
 // OperandsAbsent is OperatorReadiness.OperandsMessage while the operator has
