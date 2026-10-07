@@ -66,8 +66,8 @@ func TestListNodePoolsLifecycle(t *testing.T) {
 	term := byName["wc1-gpu-term"]
 	assert.Equal(t, PhaseScaling, term.Phase)
 	assert.Equal(t, []string{StepDone, StepDone, StepInProgress}, states(term.Steps))
-	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-7-7.eu-west-1.compute.internal terminating since 2026-09-17T09:40:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", term.Steps[2].Message,
-		"the terminating node named by its Node, with the NodeClaim's deletion time (giantswarm/cluster-manager#57)")
+	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-7-7.eu-west-1.compute.internal terminating since 2026-09-17T09:40:00Z (instance shutting down since 2026-09-17T09:40:41Z, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes)", term.Steps[2].Message,
+		"the terminating node named by its Node, with the NodeClaim's deletion time (giantswarm/cluster-manager#57) and where its termination stands")
 	assert.Equal(t, "2026-09-17T09:40:00Z", term.Steps[2].Since, "since the NodeClaim's deletion")
 
 	gone := byName["wc1-gpu-gone"]
@@ -557,12 +557,36 @@ func TestNodesStepNamesTerminatingNodes(t *testing.T) {
 	st := nodesStep(mp, nil, live, true, true, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:37:00Z", st.Since, "since the latest event among the claims: the launching one's creation")
-	assert.Equal(t, "1 NodeClaim(s) launching, 0 ready, 2 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z, mc-gpu-l40s-x7k2p terminating since 2026-09-18T03:31:00Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message,
+	assert.Equal(t, "1 NodeClaim(s) launching, 0 ready, 2 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node, then terminates its instance); mc-gpu-l40s-x7k2p terminating since 2026-09-18T03:31:00Z (Karpenter drains the node, then terminates its instance)", st.Message,
 		"the registered node by its Node's name, the unregistered by its claim's, each since its deletion")
 
 	only := &poolLive{nodes: []*poolNode{{claim: registered, node: node}}}
 	st = nodesStep(mp, nil, only, true, true, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:36:08Z", st.Since, "since the NodeClaim's deletion")
-	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node and terminates its instance; the NodeClaim goes once the instance is terminated, minutes later)", st.Message)
+	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node, then terminates its instance)", st.Message)
+}
+
+// TestTerminationStageFollowsKarpentersConditions:
+// a terminating node says where its termination stands from its NodeClaim's
+// conditions — draining with Karpenter's message, drained with the volumes
+// detaching, the instance shutting down and no longer billed — and falls
+// back to what Karpenter does when the claim carries none of them.
+func TestTerminationStageFollowsKarpentersConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		conds []map[string]any
+		want  string
+	}{
+		{"no termination condition yet", nil, "Karpenter drains the node, then terminates its instance"},
+		{"draining", []map[string]any{condition("Drained", "Unknown", "Draining", "awaiting pod eviction: model-serving/qwen3-predictor-0", "2026-10-07T17:08:03Z")}, "draining: awaiting pod eviction: model-serving/qwen3-predictor-0"},
+		{"drained", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "Unknown", "AwaitingVolumeDetachment", "", "2026-10-07T17:08:40Z")}, "drained since 2026-10-07T17:08:40Z, its volumes detaching before the instance is terminated"},
+		{"instance shutting down", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "True", "VolumesDetached", "", "2026-10-07T17:08:41Z"), condition("InstanceTerminating", "True", "InstanceTerminating", "", "2026-10-07T17:08:42Z")}, "instance shutting down since 2026-10-07T17:08:42Z, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claim := fakeClaim("mc-gpu-a10g-mtv2k", "2026-10-07T16:57:34Z", tc.conds...)
+			claim.Object["metadata"].(map[string]any)["deletionTimestamp"] = "2026-10-07T17:08:02Z"
+			assert.Equal(t, tc.want, (&poolNode{claim: claim}).terminationStage())
+		})
+	}
 }
