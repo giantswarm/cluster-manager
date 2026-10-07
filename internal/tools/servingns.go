@@ -127,6 +127,63 @@ func (s *Service) retireServingNamespace(td *teardown, t target) error {
 	return nil
 }
 
+// retireLeftServingNamespace is the namespace step where the cluster's slice
+// release went before the call — the re-run of a teardown cut before the
+// step, of one from before the step existed, or delete_node_pool once the
+// pool is gone (giantswarm/cluster-manager#191): the serving namespace the
+// slice left is removed or marked retired (retireServingNamespace). While a
+// slice release of that name stands, whoever's, the namespace is its and
+// nothing happens.
+func (s *Service) retireLeftServingNamespace(td *teardown, t target) error {
+	gone, err := sliceReleaseGone(td.ctx, td.dyn, t.Namespace, t.Cluster)
+	if err != nil || !gone {
+		return err
+	}
+	return s.retireServingNamespace(td, t)
+}
+
+// sliceReleaseGone reports whether no slice release of the cluster's name
+// exists on the installation, cluster-manager's or anyone's.
+func sliceReleaseGone(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (bool, error) {
+	name := compose.SliceReleaseName(cluster)
+	_, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
+	}
+	return false, nil
+}
+
+// retireLeftNamespace is a teardown call that finds the cluster's slice
+// release gone already — disable_model_serving, or delete_node_pool of a
+// pool removed since (giantswarm/cluster-manager#191): the serving namespace
+// the slice left is removed or marked retired (retireLeftServingNamespace).
+// The answer is nil when nothing of the slice's is left, or the cluster
+// cannot be read as the caller: the tool's not found.
+func (s *Service) retireLeftNamespace(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, tool, mode string, dryRun bool, start time.Time) (*WriteResult, error) {
+	t := s.target(ctx, dyn, c)
+	if t.Reader == nil {
+		return nil, nil
+	}
+	ns, err := s.servingNamespaceOf(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	if ns == nil || ns.GetDeletionTimestamp() != nil {
+		return nil, nil
+	}
+	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: mode, DryRun: dryRun, Objects: []ObjectAction{}}
+	td := newTeardown(ctx, dyn, dryRun, out, s.budget(ctx, start))
+	if err := s.retireLeftServingNamespace(td, t); err != nil {
+		return nil, err
+	}
+	td.finish()
+	logApplied(ctx, tool, out, start)
+	return out, nil
+}
+
 // retiredReason says why a retired serving namespace stays and how it goes.
 func retiredReason(cluster string, holders []string) string {
 	return fmt.Sprintf("model serving is off on %s, and the namespace still holds %s — remove_model_cache removes the model cache claims; once nothing is left, disable_model_serving removes the namespace, and enable_model_serving takes it back as it stands", cluster, strings.Join(holders, ", "))
