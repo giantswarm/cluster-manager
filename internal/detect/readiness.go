@@ -61,7 +61,10 @@ type ReleaseState struct {
 	// Ready mirrors the Ready condition; null until the release reports one.
 	// The slice release's is held back while a child release it renders is
 	// not Ready (Reason ReasonChildNotReady, Message naming the children).
-	Ready   *bool  `json:"ready"`
+	Ready *bool `json:"ready"`
+	// Status is the Ready condition's status (True, False, Unknown): a
+	// release Flux still reconciles reads Unknown, not False.
+	Status  string `json:"status,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
 	// Since is the Ready condition's lastTransitionTime (RFC3339).
@@ -246,7 +249,7 @@ func NewReleaseState(hr *unstructured.Unstructured) ReleaseState {
 	}
 	if cond, found := ReadyCondition(hr); found {
 		ready := cond.Status == "True"
-		r.Ready, r.Reason, r.Since = &ready, cond.Reason, cond.LastTransitionTime
+		r.Ready, r.Status, r.Reason, r.Since = &ready, cond.Status, cond.Reason, cond.LastTransitionTime
 		if !ready {
 			r.Message = strings.Join(strings.Fields(cond.Message), " ")
 		}
@@ -257,6 +260,8 @@ func NewReleaseState(hr *unstructured.Unstructured) ReleaseState {
 // childEvidence names the children that are not Ready, the way the evidence
 // always has: with the condition's reason and message, and the deletion
 // where Flux's uninstall failed and retries (giantswarm/cluster-manager#37).
+// The condition's own status is shown: a child Flux still reconciles reads
+// Ready=Unknown [Progressing], only a failure Ready=False.
 func childEvidence(children []ReleaseState) []string {
 	var out []string
 	for _, c := range children {
@@ -265,7 +270,11 @@ func childEvidence(children []ReleaseState) []string {
 		}
 		detail := "no Ready condition yet"
 		if c.Ready != nil {
-			detail = "Ready=False"
+			status := c.Status
+			if status == "" {
+				status = "False"
+			}
+			detail = "Ready=" + status
 			if c.Reason != "" {
 				detail += " [" + c.Reason + "]"
 			}
