@@ -605,7 +605,10 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 // nothing is named idle, since its last pod left — delete_node_pool removes
 // it with the pool —, and a MachinePool that still lists instances the
 // cluster no longer has is said so, its list lags by minutes
-// (giantswarm/cluster-manager#49); any other pool's nodes carry the
+// (giantswarm/cluster-manager#49) — once a node was seen (nodeSeen): a new
+// pool's replicas are set before Karpenter launches its first node, and
+// until a NodeClaim exists the node is launching, not gone
+// (giantswarm/cluster-manager#195); any other pool's nodes carry the
 // cluster's workloads and are never idle in that sense. While the pool is
 // removed (removing) and the cluster is readable, its NodeClaims and Nodes
 // are all the step reads: the MachinePool's replicas lag a gone NodeClaim by
@@ -660,15 +663,18 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	case removing && live != nil && len(ready) > 0:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d node(s) ready (%s): their NodeClaims go with the pool's release", len(ready), strings.Join(nodeNames(ready), ", "))
-	case removing && live != nil && replicas > 0:
+	case removing && live != nil && replicas > 0 && nodeSeen(mp, infra):
 		st.State, st.FinishedAt = StepDone, since
-		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
+		st.Message = goneMessage(replicas, infra)
 	case removing && live != nil:
 		st.State, st.FinishedAt = StepDone, since
 		st.Message = "0 nodes on the cluster"
-	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0:
+	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0 && nodeSeen(mp, infra):
 		st.State, st.FinishedAt = StepDone, since
-		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
+		st.Message = goneMessage(replicas, infra)
+	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0:
+		st.State = StepInProgress
+		st.Message = fmt.Sprintf("%d node(s) launching, no NodeClaim yet", replicas)
 	case replicas != readyReplicas:
 		st.State = StepInProgress
 		st.Message = fmt.Sprintf("%d of %d node(s) ready", readyReplicas, replicas)
@@ -704,6 +710,22 @@ func terminatingNodes(nodes []*poolNode) string {
 		parts = append(parts, fmt.Sprintf("%s terminating since %s (%s)", n.name(), n.deletedAt(), n.terminationStage()))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// nodeSeen reports whether the MachinePool ever listed a node of the pool:
+// its infrastructure names an instance, or its status counted a replica.
+// Both follow the nodes Karpenter launched and lag their going by minutes;
+// a new pool has neither until its first NodeClaim, whatever spec.replicas
+// says (giantswarm/cluster-manager#195).
+func nodeSeen(mp, infra *unstructured.Unstructured) bool {
+	return len(providerIDs(infra)) > 0 || nestedInt(mp, "status", "replicas") > 0
+}
+
+// goneMessage words a pool whose cluster shows no node while the MachinePool
+// still lists replicas of it: the list lags by minutes
+// (giantswarm/cluster-manager#49).
+func goneMessage(replicas int64, infra *unstructured.Unstructured) string {
+	return fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
 }
 
 // gpuPoolRelease reports whether hr is a GPU pool release of
