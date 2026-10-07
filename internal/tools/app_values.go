@@ -45,8 +45,8 @@ func (l appValuesLayer) String() string {
 // lowest precedence first: the extraConfigs up to priority 50, spec.config,
 // the extraConfigs up to 100, spec.userConfig, the extraConfigs above;
 // entries of one priority in list order. Neither the catalog's values nor
-// Secrets are read: the snapshot needs no catalog default, and a Secret's
-// content is credentials. Every ConfigMap the App names must exist, as
+// Secrets are read: effectiveValues underlays the installation's values the
+// catalog layer adds, and a Secret's content is credentials. Every ConfigMap the App names must exist, as
 // app-operator requires: a snapshot of partial values would be wrong.
 func appValues(ctx context.Context, dyn dynamic.Interface, app *unstructured.Unstructured) (map[string]any, error) {
 	ref := app.GetNamespace() + "/" + app.GetName()

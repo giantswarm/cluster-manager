@@ -343,8 +343,15 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
+	vals, err := effectiveValues(ctx, dyn, c)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.clusterPrerequisites(ctx, dyn, c, vals); err != nil {
+		return nil, err
+	}
 	target := s.target(ctx, dyn, c)
-	r, err := s.readPool(ctx, dyn, target, c, in, shapes)
+	r, err := s.readPool(ctx, dyn, target, c, vals, in, shapes)
 	if err != nil {
 		return nil, err
 	}
@@ -488,13 +495,13 @@ type poolReads struct {
 // readPool reads the pool's inputs concurrently: the cluster's facts, its
 // control plane version, its pool releases, what the target runs (operator,
 // serving, presets), the platform's inputs and the backend registered.
-func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target, c *unstructured.Unstructured, in CreateNodePoolInput, shapes []compose.InstanceShape) (*poolReads, error) {
+func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target, c *unstructured.Unstructured, vals map[string]any, in CreateNodePoolInput, shapes []compose.InstanceShape) (*poolReads, error) {
 	defer timed(ctx, "reads")()
 	r := &poolReads{}
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
 		defer timed(gctx, "cluster facts")()
-		r.facts, err = s.clusterFacts(gctx, dyn, c)
+		r.facts, err = s.clusterFacts(gctx, dyn, c, vals)
 		return err
 	})
 	g.Go(func() error {
@@ -1095,20 +1102,13 @@ func servedModelsClause(ctx context.Context, t target, live bool) (string, []str
 
 // clusterFacts reads what the pool release needs: the pins from the
 // cluster's Release CR, the credential-free snapshot from the cluster's
-// values.
-func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (compose.Cluster, error) {
+// effective values (clusterPrerequisites checked their base domain).
+func (s *Service) clusterFacts(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, vals map[string]any) (compose.Cluster, error) {
 	facts := s.identity(c)
 	if err := s.releasePins(ctx, dyn, c, &facts); err != nil {
 		return facts, err
 	}
-	vals, err := clusterValues(ctx, dyn, c)
-	if err != nil {
-		return facts, err
-	}
 	facts.BaseDomain, _, _ = unstructured.NestedString(vals, "global", "connectivity", "baseDomain")
-	if facts.BaseDomain == "" {
-		return facts, fmt.Errorf("values of cluster %s carry no global.connectivity.baseDomain: the pool's bootstrap needs the installation's base domain", c.GetName())
-	}
 	facts.ManagementCluster, _, _ = unstructured.NestedString(vals, "global", "managementCluster")
 	if facts.ManagementCluster == "" {
 		facts.ManagementCluster = s.cfg.Installation

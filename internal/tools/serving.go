@@ -601,19 +601,19 @@ func chartOf(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstru
 
 // sliceCluster reads what the slice release needs to know about the
 // cluster: its identity and, on a workload cluster, the base domain from
-// its values (the models host is models.<cluster>.<base domain>).
+// its effective values (the models host is models.<cluster>.<base domain>).
 func (s *Service) sliceCluster(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) (compose.Cluster, error) {
 	facts := s.identity(c)
 	if s.ownCluster(c) {
 		return facts, nil
 	}
-	vals, err := clusterValues(ctx, dyn, c)
+	vals, err := effectiveValues(ctx, dyn, c)
 	if err != nil {
 		return facts, err
 	}
 	facts.BaseDomain, _, _ = unstructured.NestedString(vals, "global", "connectivity", "baseDomain")
 	if facts.BaseDomain == "" {
-		return facts, fmt.Errorf("values of cluster %s carry no global.connectivity.baseDomain: the models host derives from it", c.GetName())
+		return facts, fmt.Errorf("values of cluster %s carry no global.connectivity.baseDomain, nor does %s/%s: the models host derives from it — add it to the cluster's values", c.GetName(), c.GetNamespace(), compose.InstallationValuesConfigMap)
 	}
 	return facts, nil
 }
