@@ -554,39 +554,96 @@ func TestNodesStepNamesTerminatingNodes(t *testing.T) {
 	launching := fakeClaim("mc-gpu-l40s-n3wb1", "2026-09-18T03:37:00Z")
 
 	live := &poolLive{nodes: []*poolNode{{claim: registered, node: node}, {claim: unregistered}, {claim: launching}}}
-	st := nodesStep(mp, nil, live, true, true, launchContext{})
+	st := nodesStep(mp, nil, live, true, true, false, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:37:00Z", st.Since, "since the latest event among the claims: the launching one's creation")
 	assert.Equal(t, "1 NodeClaim(s) launching, 0 ready, 2 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node, then terminates its instance); mc-gpu-l40s-x7k2p terminating since 2026-09-18T03:31:00Z (Karpenter drains the node, then terminates its instance)", st.Message,
 		"the registered node by its Node's name, the unregistered by its claim's, each since its deletion")
 
 	only := &poolLive{nodes: []*poolNode{{claim: registered, node: node}}}
-	st = nodesStep(mp, nil, only, true, true, launchContext{})
+	st = nodesStep(mp, nil, only, true, true, false, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T03:36:08Z", st.Since, "since the NodeClaim's deletion")
 	assert.Equal(t, "0 NodeClaim(s) launching, 0 ready, 1 terminating — ip-10-0-147-35.eu-central-1.compute.internal terminating since 2026-09-18T03:36:08Z (Karpenter drains the node, then terminates its instance)", st.Message)
 }
 
+// TestNodesStepOfARemovingPoolReadsTheClusterAlone
+// (giantswarm/cluster-manager#190): once a removed pool's NodeClaim is gone
+// the cluster has no node of it, whatever the MachinePool still counts — its
+// replicas lag the claim by minutes, and the step read "1 node(s) ready" for
+// a node that no longer existed, with the pool's release gone (no GPU pool
+// to judge by). While the pool is removed, the NodeClaims and Nodes decide:
+// no NodeClaim, no node; a claim still ready is named, going with the
+// release. A pool not being removed, or a cluster not readable, keeps the
+// MachinePool's count.
+func TestNodesStepOfARemovingPoolReadsTheClusterAlone(t *testing.T) {
+	mp := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cluster.x-k8s.io/v1beta1", "kind": "MachinePool",
+		"metadata": map[string]any{"name": "wc1-gpu-l4", "namespace": "org-acme", "creationTimestamp": "2026-10-07T18:20:00Z", "deletionTimestamp": "2026-10-07T19:05:00Z"},
+		"spec":     map[string]any{"replicas": int64(1)},
+		"status":   map[string]any{"replicas": int64(1), "readyReplicas": int64(1), "conditions": []any{condition("Ready", "True", "", "", "2026-10-07T18:24:00Z")}},
+	}}
+	infra := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta2", "kind": "AWSMachinePool",
+		"metadata": map[string]any{"name": "wc1-gpu-l4", "namespace": "org-acme"},
+		"spec":     map[string]any{"providerIDList": []any{"aws:///eu-central-1a/i-0a1b2c3d4e5f60190"}},
+	}}
+	node := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Node",
+		"metadata": map[string]any{"name": "ip-10-0-19-0.eu-central-1.compute.internal", "creationTimestamp": "2026-10-07T18:23:00Z"},
+		"spec":     map[string]any{"providerID": "aws:///eu-central-1a/i-0a1b2c3d4e5f60190"},
+	}}
+
+	claimGone := &poolLive{nodes: []*poolNode{{node: node}}}
+	st := nodesStep(mp, infra, claimGone, true, false, true, launchContext{})
+	assert.Equal(t, StepDone, st.State)
+	assert.Equal(t, "0 nodes on the cluster: the MachinePool still lists 1 gone (aws:///eu-central-1a/i-0a1b2c3d4e5f60190), its list follows within minutes", st.Message,
+		"the Node object alone, its NodeClaim gone: no node, whatever the MachinePool counts")
+
+	st = nodesStep(mp, infra, &poolLive{}, true, false, true, launchContext{})
+	assert.Equal(t, StepDone, st.State)
+	assert.Equal(t, "0 nodes on the cluster: the MachinePool still lists 1 gone (aws:///eu-central-1a/i-0a1b2c3d4e5f60190), its list follows within minutes", st.Message)
+
+	ready := fakeClaim("wc1-gpu-l4-k7m2p", "2026-10-07T18:21:00Z", condition("Ready", "True", "", "", "2026-10-07T18:24:00Z"))
+	st = nodesStep(mp, infra, &poolLive{nodes: []*poolNode{{claim: ready, node: node}}}, true, false, true, launchContext{})
+	assert.Equal(t, StepInProgress, st.State)
+	assert.Equal(t, "1 node(s) ready (ip-10-0-19-0.eu-central-1.compute.internal): their NodeClaims go with the pool's release", st.Message, "a claim still ready while the pool goes is named from the cluster, not counted from the MachinePool")
+
+	st = nodesStep(mp, infra, claimGone, true, false, false, launchContext{})
+	assert.Equal(t, "1 node(s) ready (aws:///eu-central-1a/i-0a1b2c3d4e5f60190)", st.Message, "not being removed: the MachinePool's count stands")
+	st = nodesStep(mp, infra, nil, true, false, true, launchContext{})
+	assert.Equal(t, "1 node(s) ready (aws:///eu-central-1a/i-0a1b2c3d4e5f60190)", st.Message, "the cluster not readable: the MachinePool is all there is")
+}
+
 // TestTerminationStageFollowsKarpentersConditions:
 // a terminating node says where its termination stands from its NodeClaim's
-// conditions — draining with Karpenter's message, drained with the volumes
-// detaching, the instance shutting down and no longer billed — and falls
-// back to what Karpenter does when the claim carries none of them.
+// conditions — draining with the pods the drain waits on, drained with the
+// volumes detaching, the instance shutting down and no longer billed — and
+// falls back to what Karpenter does when the claim carries none of them.
+// Karpenter's Drained message is its reason repeated (`Draining`) and is
+// never printed; the pods still on the node are, a few named and the rest
+// counted, else plain draining (giantswarm/cluster-manager#189).
 func TestTerminationStageFollowsKarpentersConditions(t *testing.T) {
+	draining := condition("Drained", "False", "Draining", "Draining", "2026-10-07T17:08:03Z")
+	pods := []string{"kube-system/coredns-7c65d6cfc9-x2k9p", "model-serving/qwen3-predictor-0", "kube-system/ebs-csi-controller-6d9f8b7c5-abcde", "monitoring/alloy-logs-4", "monitoring/prometheus-0"}
 	for _, tc := range []struct {
-		name  string
-		conds []map[string]any
-		want  string
+		name     string
+		conds    []map[string]any
+		draining []string
+		want     string
 	}{
-		{"no termination condition yet", nil, "Karpenter drains the node, then terminates its instance"},
-		{"draining", []map[string]any{condition("Drained", "Unknown", "Draining", "awaiting pod eviction: model-serving/qwen3-predictor-0", "2026-10-07T17:08:03Z")}, "draining: awaiting pod eviction: model-serving/qwen3-predictor-0"},
-		{"drained", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "Unknown", "AwaitingVolumeDetachment", "", "2026-10-07T17:08:40Z")}, "drained since 2026-10-07T17:08:40Z, its volumes detaching before the instance is terminated"},
-		{"instance shutting down", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "True", "VolumesDetached", "", "2026-10-07T17:08:41Z"), condition("InstanceTerminating", "True", "InstanceTerminating", "", "2026-10-07T17:08:42Z")}, "instance shutting down since 2026-10-07T17:08:42Z, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes"},
+		{"no termination condition yet", nil, nil, "Karpenter drains the node, then terminates its instance"},
+		{"draining, the message its reason repeated, no pod left", []map[string]any{draining}, nil, "draining"},
+		{"draining, the pods named", []map[string]any{draining}, pods[:2], "draining: 2 pod(s) still on the node (kube-system/coredns-7c65d6cfc9-x2k9p, model-serving/qwen3-predictor-0)"},
+		{"draining, the pods capped", []map[string]any{draining}, pods, "draining: 5 pod(s) still on the node (kube-system/coredns-7c65d6cfc9-x2k9p, model-serving/qwen3-predictor-0, kube-system/ebs-csi-controller-6d9f8b7c5-abcde and 2 more)"},
+		{"draining, a message that says more is kept", []map[string]any{condition("Drained", "Unknown", "Draining", "awaiting pod eviction: model-serving/qwen3-predictor-0", "2026-10-07T17:08:03Z")}, nil, "draining — awaiting pod eviction: model-serving/qwen3-predictor-0"},
+		{"drained", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "Unknown", "AwaitingVolumeDetachment", "", "2026-10-07T17:08:40Z")}, nil, "drained since 2026-10-07T17:08:40Z, its volumes detaching before the instance is terminated"},
+		{"instance shutting down", []map[string]any{condition("Drained", "True", "Drained", "", "2026-10-07T17:08:40Z"), condition("VolumesDetached", "True", "VolumesDetached", "", "2026-10-07T17:08:41Z"), condition("InstanceTerminating", "True", "InstanceTerminating", "", "2026-10-07T17:08:42Z")}, nil, "instance shutting down since 2026-10-07T17:08:42Z, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claim := fakeClaim("mc-gpu-a10g-mtv2k", "2026-10-07T16:57:34Z", tc.conds...)
 			claim.Object["metadata"].(map[string]any)["deletionTimestamp"] = "2026-10-07T17:08:02Z"
-			assert.Equal(t, tc.want, (&poolNode{claim: claim}).terminationStage())
+			assert.Equal(t, tc.want, (&poolNode{claim: claim, draining: tc.draining}).terminationStage())
 		})
 	}
 }

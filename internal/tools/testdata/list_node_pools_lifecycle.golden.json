@@ -198,7 +198,7 @@
           "state": "done",
           "since": "2026-09-17T06:02:10Z",
           "finishedAt": "2026-09-17T06:02:10Z",
-          "message": "0 nodes: scale-to-zero, a node launches with the first predictor"
+          "message": "0 nodes on the cluster"
         }
       ],
       "deleting": true,
@@ -297,7 +297,7 @@
           "state": "done",
           "since": "2026-09-17T05:02:10Z",
           "finishedAt": "2026-09-17T05:02:10Z",
-          "message": "0 nodes: scale-to-zero, a node launches with the first predictor"
+          "message": "0 nodes on the cluster"
         }
       ],
       "deleting": true,
