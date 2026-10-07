@@ -54,12 +54,12 @@ func TestShapesCoverTheChart(t *testing.T) {
 func TestShapeUsable(t *testing.T) {
 	l4, err := Shapes("nvidia-l4", []string{"xlarge", "2xlarge", "8xlarge"})
 	require.NoError(t, err)
-	assert.Equal(t, InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 11.9}, l4[0])
-	assert.Equal(t, InstanceShape{InstanceType: "g6.2xlarge", Size: "2xlarge", VCPU: 8, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 450, InstanceStoreDisks: 1, InstanceStoreDiskGB: 450, UsableVCPU: 7, UsableMemoryGiB: 27.1}, l4[1])
-	assert.Equal(t, InstanceShape{InstanceType: "g6.8xlarge", Size: "8xlarge", VCPU: 32, MemoryGiB: 128, GPUs: 1, GPUMemoryGiB: 24, InstanceStoreGB: 900, InstanceStoreDisks: 2, InstanceStoreDiskGB: 450, UsableVCPU: 31, UsableMemoryGiB: 118.3}, l4[2], "two devices: /var/lib is 450 GB, not 900")
+	assert.Equal(t, InstanceShape{InstanceType: "g6.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 16, GPUs: 1, GPUMemoryGiB: 24, ComputeCapability: "8.9", InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 11.9}, l4[0])
+	assert.Equal(t, InstanceShape{InstanceType: "g6.2xlarge", Size: "2xlarge", VCPU: 8, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 24, ComputeCapability: "8.9", InstanceStoreGB: 450, InstanceStoreDisks: 1, InstanceStoreDiskGB: 450, UsableVCPU: 7, UsableMemoryGiB: 27.1}, l4[1])
+	assert.Equal(t, InstanceShape{InstanceType: "g6.8xlarge", Size: "8xlarge", VCPU: 32, MemoryGiB: 128, GPUs: 1, GPUMemoryGiB: 24, ComputeCapability: "8.9", InstanceStoreGB: 900, InstanceStoreDisks: 2, InstanceStoreDiskGB: 450, UsableVCPU: 31, UsableMemoryGiB: 118.3}, l4[2], "two devices: /var/lib is 450 GB, not 900")
 	l40s, err := Shapes("nvidia-l40s", []string{"xlarge", "8xlarge"})
 	require.NoError(t, err)
-	assert.Equal(t, InstanceShape{InstanceType: "g6e.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 48, InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 27.1}, l40s[0])
+	assert.Equal(t, InstanceShape{InstanceType: "g6e.xlarge", Size: "xlarge", VCPU: 4, MemoryGiB: 32, GPUs: 1, GPUMemoryGiB: 48, ComputeCapability: "8.9", InstanceStoreGB: 250, InstanceStoreDisks: 1, InstanceStoreDiskGB: 250, UsableVCPU: 3, UsableMemoryGiB: 27.1}, l40s[0])
 	assert.Equal(t, []int{900, 2, 450}, []int{l40s[1].InstanceStoreGB, l40s[1].InstanceStoreDisks, l40s[1].InstanceStoreDiskGB}, "g6e.8xlarge: two devices of 450 GB, like the g6")
 	a10g, err := Shapes("nvidia-a10g", []string{"8xlarge"})
 	require.NoError(t, err)
@@ -119,6 +119,47 @@ func TestFit(t *testing.T) {
 	unset := PresetRequests{Name: "bare", GPUs: 1, GPUMemoryGiB: 20}
 	assert.Equal(t, "xlarge", Fit(xlarge, unset).Size, "no requests: judged on the GPU alone")
 	assert.Equal(t, "the pool has no sizes", Fit(nil, unset).Reason)
+}
+
+// TestFitComputeCapability (giantswarm/cluster-manager#178): a preset that
+// declares the GPU generation it runs natively on is never hosted by a size
+// whose GPU is below it — an FP8 preset on an A10G (8.6) goes Ready and
+// answers wrong — and no size of the family would, so it is no warning. An
+// L4 (8.9) still hosts it, and a preset declaring none is judged on memory.
+func TestFitComputeCapability(t *testing.T) {
+	a10g, err := Shapes("nvidia-a10g", nil)
+	require.NoError(t, err)
+	l4, err := Shapes("nvidia-l4", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "8.6", a10g[0].ComputeCapability)
+	assert.Equal(t, "8.9", l4[0].ComputeCapability)
+
+	fp8 := preset("qwen3-5-9b-fp8", "2", "10Gi", 1, 23)
+	fp8.MinComputeCapability = "8.9"
+	assert.Equal(t, SizeFit{Preset: "qwen3-5-9b-fp8", Reason: "needs compute capability 8.9; a g5 GPU (A10G) has 8.6"}, Fit(a10g, fp8))
+	assert.Equal(t, SizeFit{Preset: "qwen3-5-9b-fp8", Size: "xlarge", Hostable: true}, Fit(l4, fp8))
+
+	undeclared := preset("qwen3-5-9b-fp8", "2", "10Gi", 1, 23)
+	assert.Equal(t, "xlarge", Fit(a10g, undeclared).Size, "a preset declaring no generation is judged on memory as before")
+
+	bf16 := preset("qwen3-4b-instruct", "2", "10Gi", 1, 20)
+	bf16.MinComputeCapability = "8.0"
+	assert.Equal(t, "xlarge", Fit(a10g, bf16).Size)
+	t4, err := Shapes("nvidia-t4", nil)
+	require.NoError(t, err)
+	fit := Fit(t4, bf16)
+	assert.False(t, fit.Hostable)
+	assert.Equal(t, "needs compute capability 8.0; a g4dn GPU (T4) has 7.5", fit.Reason)
+
+	nvfp4 := preset("nemotron-nvfp4", "2", "10Gi", 1, 20)
+	nvfp4.MinComputeCapability = "10.0"
+	l40s, err := Shapes("nvidia-l40s", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "needs compute capability 10.0; a g6e GPU (L40S) has 8.9", Fit(l40s, nvfp4).Reason, "10.0 compares as a number, not as text")
+
+	garbled := preset("garbled", "2", "10Gi", 1, 20)
+	garbled.MinComputeCapability = "ada"
+	assert.Equal(t, SizeFit{Preset: "garbled", Reason: `requirements.minComputeCapability "ada" is not major.minor (8.9)`}, Fit(l4, garbled))
 }
 
 // TestPoolSpecValidateSizes: Validate refuses a size outside the family the

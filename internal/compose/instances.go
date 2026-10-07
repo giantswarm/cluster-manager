@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -19,6 +20,13 @@ import (
 var (
 	instanceFamilies = map[string]string{"nvidia-l4": "g6", "nvidia-a10g": "g5", "nvidia-t4": "g4dn", "nvidia-l40s": "g6e"}
 	gpuMemoryGiB     = map[string]int{"g6": 24, "g5": 24, "g4dn": 16, "g6e": 48}
+	// gpuModels and computeCapabilities are each family's GPU and its CUDA
+	// compute capability: the generation a preset's
+	// requirements.minComputeCapability is judged against. vLLM runs FP8
+	// natively from 8.9 (Ada) only; below it, an A10G's 8.6, an FP8 preset
+	// goes Ready and answers wrong (giantswarm/model-manager#264).
+	gpuModels           = map[string]string{"g6": "L4", "g5": "A10G", "g4dn": "T4", "g6e": "L40S"}
+	computeCapabilities = map[string]string{"g6": "8.9", "g5": "8.6", "g4dn": "7.5", "g6e": "8.9"}
 	// familySizes lists every size of a family with its nominal vCPU, memory
 	// (GiB) and GPUs, smallest first. The G families share their size names,
 	// vCPU and GPU counts (gSizes); they differ in the memory per vCPU — 4 GiB
@@ -119,8 +127,10 @@ type InstanceShape struct {
 	VCPU         int    `json:"vcpu"`
 	MemoryGiB    int    `json:"memoryGiB"`
 	GPUs         int    `json:"gpus"`
-	// GPUMemoryGiB is the memory of one GPU.
-	GPUMemoryGiB int `json:"gpuMemoryGiB"`
+	// GPUMemoryGiB is the memory of one GPU, ComputeCapability its CUDA
+	// compute capability (8.9 on an L4, 8.6 on an A10G).
+	GPUMemoryGiB      int    `json:"gpuMemoryGiB"`
+	ComputeCapability string `json:"computeCapability"`
 	// InstanceStoreGB is the node's local NVMe instance store as AWS lists
 	// it, InstanceStoreDisks devices of InstanceStoreDiskGB each — local to
 	// the host, included in the price, gone with the node. From gpu-node-pool
@@ -150,7 +160,7 @@ type InstanceShape struct {
 func newShape(family string, n nominal) InstanceShape {
 	return InstanceShape{
 		InstanceType: family + "." + n.size, Size: n.size,
-		VCPU: n.vcpu, MemoryGiB: n.gib, GPUs: n.gpus, GPUMemoryGiB: gpuMemoryGiB[family],
+		VCPU: n.vcpu, MemoryGiB: n.gib, GPUs: n.gpus, GPUMemoryGiB: gpuMemoryGiB[family], ComputeCapability: computeCapabilities[family],
 		InstanceStoreGB: n.store.disks * n.store.diskGB, InstanceStoreDisks: n.store.disks, InstanceStoreDiskGB: n.store.diskGB,
 		UsableVCPU:      round1(float64(n.vcpu) - kubeletReservedVCPU - daemonSetVCPU),
 		UsableMemoryGiB: round1(float64(n.gib)*(1-hypervisorMemoryShare) - kubeletReservedGiB - daemonSetGiB),
@@ -216,6 +226,10 @@ type PresetRequests struct {
 	GPUs   int
 	// GPUMemoryGiB is weightsGiB + overheadGiB across the preset's GPUs.
 	GPUMemoryGiB float64
+	// MinComputeCapability is the GPU generation the preset runs natively
+	// on (requirements.minComputeCapability, "8.9"); empty when it declares
+	// none, and the preset is judged on memory alone.
+	MinComputeCapability string
 }
 
 // SizeFit places one preset against a pool's sizes: Size is the smallest of
@@ -245,6 +259,13 @@ func Fit(shapes []InstanceShape, p PresetRequests) SizeFit {
 	}
 	largest := sorted[len(sorted)-1]
 	family, _, _ := strings.Cut(largest.InstanceType, ".")
+	if below, err := BelowComputeCapability(largest.ComputeCapability, p.MinComputeCapability); err != nil || below {
+		reason := fmt.Sprintf("needs compute capability %s; a %s GPU (%s) has %s", p.MinComputeCapability, family, gpuModels[family], largest.ComputeCapability)
+		if err != nil {
+			reason = err.Error()
+		}
+		return SizeFit{Preset: p.Name, Reason: reason}
+	}
 	gpus := max(p.GPUs, 1)
 	switch {
 	case p.GPUMemoryGiB > float64(largest.GPUMemoryGiB*gpus):
@@ -267,6 +288,9 @@ func Fit(shapes []InstanceShape, p PresetRequests) SizeFit {
 
 // hosts reports whether a node of shape s can run the preset's predictor.
 func hosts(s InstanceShape, p PresetRequests) bool {
+	if below, err := BelowComputeCapability(s.ComputeCapability, p.MinComputeCapability); err != nil || below {
+		return false
+	}
 	gpus := max(p.GPUs, 1)
 	return vcpuOf(p.CPU) <= s.UsableVCPU && gibOf(p.Memory) <= s.UsableMemoryGiB &&
 		p.GPUs <= s.GPUs && p.GPUMemoryGiB <= float64(s.GPUMemoryGiB*gpus)
@@ -280,6 +304,40 @@ func familyHost(family string, p PresetRequests) (InstanceShape, bool) {
 		}
 	}
 	return InstanceShape{}, false
+}
+
+// BelowComputeCapability reports whether a GPU of compute capability have is
+// below the need ("8.6" below "8.9"). No need is never below; a need that is
+// not major.minor is an error naming it.
+func BelowComputeCapability(have, need string) (bool, error) {
+	if need == "" {
+		return false, nil
+	}
+	needMajor, needMinor, err := parseComputeCapability(need)
+	if err != nil {
+		return false, fmt.Errorf("requirements.minComputeCapability %q is not major.minor (8.9)", need)
+	}
+	haveMajor, haveMinor, err := parseComputeCapability(have)
+	if err != nil {
+		return false, fmt.Errorf("compute capability %q of the pool's GPU is not major.minor", have)
+	}
+	return haveMajor < needMajor || haveMajor == needMajor && haveMinor < needMinor, nil
+}
+
+func parseComputeCapability(v string) (int, int, error) {
+	major, minor, ok := strings.Cut(strings.TrimSpace(v), ".")
+	if !ok {
+		return 0, 0, fmt.Errorf("%q: not major.minor", v)
+	}
+	ma, err := strconv.Atoi(major)
+	if err != nil {
+		return 0, 0, err
+	}
+	mi, err := strconv.Atoi(minor)
+	if err != nil {
+		return 0, 0, err
+	}
+	return ma, mi, nil
 }
 
 func vcpuOf(q resource.Quantity) float64 { return float64(q.MilliValue()) / 1000 }

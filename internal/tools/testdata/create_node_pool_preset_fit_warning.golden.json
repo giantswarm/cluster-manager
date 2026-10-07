@@ -336,6 +336,7 @@
       "memoryGiB": 16,
       "gpus": 1,
       "gpuMemoryGiB": 24,
+      "computeCapability": "8.9",
       "instanceStoreGB": 250,
       "instanceStoreDisks": 1,
       "instanceStoreDiskGB": 250,

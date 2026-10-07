@@ -52,6 +52,10 @@ type PresetSizeFit struct {
 	Memory       string  `json:"memory"`
 	GPUs         int     `json:"gpus"`
 	GPUMemoryGiB float64 `json:"gpuMemoryGiB"`
+	// MinComputeCapability is the GPU generation the preset declares it
+	// runs natively on (requirements.minComputeCapability); a size whose GPU
+	// is below it never hosts the preset.
+	MinComputeCapability string `json:"minComputeCapability,omitempty"`
 	// Size is the smallest of the pool's sizes that hosts the preset; empty
 	// with Reason when none does.
 	Size   string `json:"size,omitempty"`
@@ -74,8 +78,9 @@ type publishedPreset struct {
 			Requests map[string]any `json:"requests"`
 		} `json:"resources"`
 		Requirements struct {
-			WeightsGiB  float64  `json:"weightsGiB"`
-			OverheadGiB *float64 `json:"overheadGiB"`
+			WeightsGiB           float64  `json:"weightsGiB"`
+			OverheadGiB          *float64 `json:"overheadGiB"`
+			MinComputeCapability string   `json:"minComputeCapability"`
 		} `json:"requirements"`
 	} `json:"spec"`
 }
@@ -203,7 +208,8 @@ func presetRequests(name, doc string) (PresetSizeFit, compose.PresetRequests, er
 		overhead = *p.Spec.Requirements.OverheadGiB
 	}
 	req.GPUMemoryGiB = p.Spec.Requirements.WeightsGiB + overhead
-	row := PresetSizeFit{Preset: name, DisplayName: p.Spec.DisplayName, Model: p.Spec.Model.ID, CPU: presetUnset, Memory: presetUnset, GPUs: req.GPUs, GPUMemoryGiB: req.GPUMemoryGiB}
+	req.MinComputeCapability = p.Spec.Requirements.MinComputeCapability
+	row := PresetSizeFit{Preset: name, DisplayName: p.Spec.DisplayName, Model: p.Spec.Model.ID, CPU: presetUnset, Memory: presetUnset, GPUs: req.GPUs, GPUMemoryGiB: req.GPUMemoryGiB, MinComputeCapability: req.MinComputeCapability}
 	var err error
 	if req.CPU, row.CPU, err = quantityOf(p.Spec.Resources.Requests, "cpu"); err != nil {
 		return PresetSizeFit{}, compose.PresetRequests{}, err
