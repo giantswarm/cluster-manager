@@ -592,6 +592,11 @@
       "issuer": "letsencrypt-giantswarm",
       "solver": "dns01",
       "zone": "acme.example.io."
+    },
+    "gatewayAPI": {
+      "composed": false,
+      "version": "v1.6.1",
+      "note": "wc1 serves Gateway API v1.6.1 (standard channel) already: the slice composes no Gateway API CRDs and leaves them as they are"
     }
   },
   "backend": {

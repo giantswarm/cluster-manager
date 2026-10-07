@@ -80,7 +80,7 @@ var servingSliceProfile []byte
 // ServingComponents are the components the serving slice switches on; a
 // slice release with any other component on carries another slice too and
 // is not removed with the last GPU pool.
-var ServingComponents = []string{"kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing", "agentgateway"}
+var ServingComponents = []string{"kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing", "agentgateway", GatewayAPICRDsComponent}
 
 // PlatformInputs are the values the slice release takes from the
 // installation's own platform release, never invented: the domain, the
@@ -190,6 +190,10 @@ type SliceSpec struct {
 	// set serves): the configs' registry and main images and the pre-pull's
 	// images. Nil keeps the chart's default.
 	Runtime *RuntimeImages
+	// GatewayAPICRDs switches the Gateway API CRDs component on: the target
+	// serves no Gateway kind, or the slice composed them before. Refused on
+	// a chart below MinGatewayAPICRDsChartVersion.
+	GatewayAPICRDs bool
 }
 
 // SliceIssuer is the ClusterIssuer the slice asks for the models host's
@@ -281,11 +285,24 @@ func SliceIngressNamespaces(s SliceSpec) ([]string, error) {
 // SliceChartVersion resolves the slice release's chart version: the spec's
 // explicit version when set (pinned), else the version the installation's
 // platform release runs (the floor of the range the slice follows) — refused below MinSliceChartVersion, the first chart whose
-// serving slice is the llm-d control plane alone, and when the release has not
-// deployed a chart yet. Flux records the chart's digest as the version's
+// serving slice is the llm-d control plane alone, below
+// MinGatewayAPICRDsChartVersion where the slice composes the Gateway API
+// CRDs, and when the release has not deployed a chart yet. Flux records the chart's digest as the version's
 // build metadata (`4.27.2+b9d9972a5aca`); the version is the chart's tag, so
 // the metadata is dropped.
 func SliceChartVersion(s SliceSpec) (string, error) {
+	tag, err := sliceChartVersion(s)
+	if err != nil || !s.GatewayAPICRDs || s.ChartVersion != "" {
+		return tag, err
+	}
+	if v, err := version.ParseSemantic(tag); err == nil && v.LessThan(version.MustParseSemantic(MinGatewayAPICRDsChartVersion)) {
+		return "", fmt.Errorf("the slice would follow the %s chart from %s, below %s, the first with the %s component: the cluster serves no Gateway API, and an older chart composes no CRDs for the models Gateway and its routes — upgrade the platform to %s or newer (or pin a newer slice chart) and re-run", SliceChart, tag, MinGatewayAPICRDsChartVersion, GatewayAPICRDsComponent, MinGatewayAPICRDsChartVersion)
+	}
+	return tag, nil
+}
+
+// sliceChartVersion is SliceChartVersion before the Gateway API CRDs' floor.
+func sliceChartVersion(s SliceSpec) (string, error) {
 	if s.ChartVersion != "" {
 		return s.ChartVersion, nil
 	}
@@ -418,6 +435,9 @@ func SliceValues(c Cluster, s SliceSpec) (map[string]any, error) {
 		set(KubeconfigSecretName(c.Name), "gitops", "target", "kubeConfig", "secretRef", "name"),
 		set(c.Name, "gitops", "target", "name"),
 		set(SliceTargetNamespace(c, s.OwnCluster), "gitops", "targetNamespace"),
+	}
+	if s.GatewayAPICRDs {
+		steps = append(steps, set(true, "components", GatewayAPICRDsComponent, valueEnabled))
 	}
 	if jwks.InCluster() {
 		steps = append(steps,

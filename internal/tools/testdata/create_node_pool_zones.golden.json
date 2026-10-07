@@ -511,7 +511,12 @@
     "chartVersion": "4.85.0",
     "domain": "gazelle.example.io",
     "modelsHost": "models.gazelle.example.io",
-    "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys"
+    "jwks": "http://dex.giantswarm.svc.cluster.local:5556/keys",
+    "gatewayAPI": {
+      "composed": false,
+      "version": "v1.6.1",
+      "note": "gazelle serves Gateway API v1.6.1 (standard channel) already: the slice composes no Gateway API CRDs and leaves them as they are"
+    }
   },
   "backend": {
     "kind": "kserve",

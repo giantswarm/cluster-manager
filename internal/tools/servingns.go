@@ -230,3 +230,56 @@ func (s *Service) reclaimServingNamespace(ctx context.Context, t target, dryRun 
 	out.Objects = append(out.Objects, act)
 	return nil
 }
+
+// agentgatewayRelease is the slice's child release of agentgateway, whose
+// controller watches the Gateway API kinds.
+func agentgatewayRelease(cluster string) string {
+	return compose.SliceChildName(cluster, "agentgateway")
+}
+
+// retireGatewayAPICRDs is the teardown's step for the Gateway API CRDs a
+// slice composed (giantswarm/cluster-manager#183): the gateway-api-crds chart
+// applies them from a hook Job, so its uninstall leaves them. Once the
+// connectivity release and agentgateway are uninstalled — their objects of
+// those kinds gone with them, waited for within the budget — the CRDs are
+// removed as the caller, unless objects of the kinds remain that none of the
+// slice's releases rendered: removing the CRDs would take those along, so
+// they stay, named.
+func (s *Service) retireGatewayAPICRDs(td *teardown, t target) error {
+	crds := strings.Join(compose.GatewayAPICRDs, " ")
+	if t.Reader == nil {
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the Gateway API CRDs the slice composed on %s are left (%s): the cluster cannot be read as you — remove them once nothing uses them (kubectl delete crd %s)", t.Cluster, t.Reason, crds))
+		return nil
+	}
+	for _, release := range []string{connectivityRelease(t.Cluster), agentgatewayRelease(t.Cluster)} {
+		gone, err := td.waitGone(td.dyn.Resource(HelmReleaseGVR).Namespace(t.Namespace), release)
+		if err != nil {
+			return err
+		}
+		if !gone && !td.dryRun {
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the Gateway API CRDs the slice composed on %s are left: %s/%s was still being uninstalled when the call's budget ran out — remove them once it is gone and nothing uses them (kubectl delete crd %s)", t.Cluster, t.Namespace, release, crds))
+			return nil
+		}
+	}
+	foreign, err := detect.ForeignGatewayAPIObjects(td.ctx, t.Reader, compose.GatewayAPICRDs, t.Namespace, t.Cluster)
+	if err != nil {
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the Gateway API CRDs the slice composed on %s are left: what uses them cannot be read as you (%v) — remove them once nothing does (kubectl delete crd %s)", t.Cluster, err, crds))
+		return nil
+	}
+	if len(foreign) > 0 {
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the Gateway API CRDs the slice composed on %s are kept: %s use them, and removing the CRDs would remove those too", t.Cluster, strings.Join(foreign, ", ")))
+		return nil
+	}
+	res := t.Reader.Resource(detect.CRDGVR)
+	for _, name := range compose.GatewayAPICRDs {
+		err := td.delete(res, ObjectAction{APIVersion: "apiextensions.k8s.io/v1", Kind: "CustomResourceDefinition", Name: name})
+		if apierrors.IsForbidden(err) {
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the Gateway API CRDs the slice composed on %s are left: %v — remove them as someone allowed to (kubectl delete crd %s)", t.Cluster, err, crds))
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

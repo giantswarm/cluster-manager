@@ -1,0 +1,22 @@
+# The Gateway API as a cluster with the fleet's gateway-api-crds app serves it:
+# the Gateway CRD of the standard channel, annotated with its bundle. Every
+# target carries it unless a test takes it away (lab.withoutGatewayAPI): a
+# workload cluster created with kubectl-gs has none
+# (giantswarm/cluster-manager#183).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gateways.gateway.networking.k8s.io
+  annotations:
+    gateway.networking.k8s.io/bundle-version: v1.6.1
+    gateway.networking.k8s.io/channel: standard
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    kind: Gateway
+    plural: gateways
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
