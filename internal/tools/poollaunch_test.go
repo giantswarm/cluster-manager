@@ -239,14 +239,14 @@ func TestNodesStepWithARefusedClaim(t *testing.T) {
 	live := &poolLive{nodes: []*poolNode{{claim: refused}}}
 	live.failures = launchFailures("mc-gpu-l40s", live.claims(), nil)
 
-	st := nodesStep(mp, nil, live, true, true, launchContext{})
+	st := nodesStep(mp, nil, live, true, true, false, launchContext{})
 	assert.Equal(t, StepInProgress, st.State)
 	assert.Equal(t, "2026-09-18T06:10:04Z", st.Since, "since Karpenter's refusal")
 	assert.Equal(t, `1 NodeClaim could not launch, the last (mc-gpu-l40s-k9d2m) at 2026-09-18T06:10:04Z — LaunchFailed; Karpenter: "creating instance, with fleet error(s), UnauthorizedOperation: You are not authorized to perform this operation."; it retries while a pod waits — wider sizes or another accelerator (a re-run of create_node_pool) give it more to choose from`, st.Message)
 	assert.Equal(t, "LaunchFailed", live.refusal(launchContext{}))
 
 	without := &poolLive{}
-	assert.Equal(t, StepDone, nodesStep(mp, nil, without, true, true, launchContext{}).State, "no claim, no refusal: scale-to-zero")
+	assert.Equal(t, StepDone, nodesStep(mp, nil, without, true, true, false, launchContext{}).State, "no claim, no refusal: scale-to-zero")
 	assert.Empty(t, without.refusal(launchContext{}))
 	var none *poolLive
 	assert.Empty(t, none.refusal(launchContext{}), "an unreadable cluster refuses nothing")

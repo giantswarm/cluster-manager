@@ -270,7 +270,7 @@ func lifecycle(r *poolState) (Phase, []Step, bool, []ObjectAction) {
 	if r.mp != nil && r.mp.GetDeletionTimestamp() != nil {
 		removing = true
 	}
-	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release), r.launch))
+	steps = append(steps, nodesStep(r.mp, r.infra, r.live, steps[len(steps)-1].State == StepDone, gpuPoolRelease(r.release), removing, r.launch))
 	phase := poolPhase(steps)
 	if r.prewarm != nil {
 		steps = append(steps, prewarmStep(r.prewarm, release.State == StepDone, r.live.refusal(r.launch), r.live))
@@ -606,14 +606,18 @@ func machinePoolStep(mp *unstructured.Unstructured) Step {
 // it with the pool —, and a MachinePool that still lists instances the
 // cluster no longer has is said so, its list lags by minutes
 // (giantswarm/cluster-manager#49); any other pool's nodes carry the
-// cluster's workloads and are never idle in that sense.
-func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool bool, lc launchContext) Step {
+// cluster's workloads and are never idle in that sense. While the pool is
+// removed (removing) and the cluster is readable, its NodeClaims and Nodes
+// are all the step reads: the MachinePool's replicas lag a gone NodeClaim by
+// minutes and read a node ready after it went — no NodeClaim, no node
+// (giantswarm/cluster-manager#190).
+func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, gpuPool, removing bool, lc launchContext) Step {
 	st := Step{Name: StepNodes, State: StepPending}
 	if mp == nil {
 		return st
 	}
-	var launching, ready int
-	var terminating []*poolNode
+	var launching int
+	var ready, terminating []*poolNode
 	var since string
 	if live != nil {
 		for _, n := range live.nodes {
@@ -626,7 +630,7 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 				terminating = append(terminating, n)
 				since = latest(since, n.deletedAt())
 			case found && cond.Status == "True":
-				ready++
+				ready = append(ready, n)
 				since = latest(since, cond.LastTransitionTime)
 			default:
 				launching++
@@ -646,13 +650,22 @@ func nodesStep(mp, infra *unstructured.Unstructured, live *poolLive, poolReady, 
 	case live != nil && len(live.failures) > 0:
 		st.State = StepInProgress
 		st.Since = live.failures[len(live.failures)-1].at
-		st.Message = launchFailureMessage(live.failures, launching, ready, len(terminating), lc)
+		st.Message = launchFailureMessage(live.failures, launching, len(ready), len(terminating), lc)
 	case launching > 0 || len(terminating) > 0:
 		st.State = StepInProgress
-		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, ready, len(terminating))
+		st.Message = fmt.Sprintf("%d NodeClaim(s) launching, %d ready, %d terminating", launching, len(ready), len(terminating))
 		if len(terminating) > 0 {
 			st.Message += " — " + terminatingNodes(terminating)
 		}
+	case removing && live != nil && len(ready) > 0:
+		st.State = StepInProgress
+		st.Message = fmt.Sprintf("%d node(s) ready (%s): their NodeClaims go with the pool's release", len(ready), strings.Join(nodeNames(ready), ", "))
+	case removing && live != nil && replicas > 0:
+		st.State, st.FinishedAt = StepDone, since
+		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))
+	case removing && live != nil:
+		st.State, st.FinishedAt = StepDone, since
+		st.Message = "0 nodes on the cluster"
 	case gpuPool && live != nil && len(live.nodes) == 0 && replicas > 0:
 		st.State, st.FinishedAt = StepDone, since
 		st.Message = fmt.Sprintf("0 nodes on the cluster: the MachinePool still lists %d gone (%s), its list follows within minutes", replicas, joinOrUnknown(providerIDs(infra)))

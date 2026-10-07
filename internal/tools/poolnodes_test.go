@@ -62,6 +62,32 @@ func TestHolder(t *testing.T) {
 	}
 }
 
+// TestDrainWaitsOn (giantswarm/cluster-manager#189): a draining node's drain
+// waits on every pod still on it that Karpenter evicts — one being evicted
+// included, until it is gone — and not on a finished pod, a DaemonSet's, a
+// static pod's mirror, or a pod on another node; named namespace/name in
+// order.
+func TestDrainWaitsOn(t *testing.T) {
+	pod := func(ns, name, node, phase string, meta map[string]any) unstructured.Unstructured {
+		m := map[string]any{"name": name, "namespace": ns}
+		for k, v := range meta {
+			m[k] = v
+		}
+		return unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": m, "spec": map[string]any{"nodeName": node}, "status": map[string]any{"phase": phase}}}
+	}
+	pods := []unstructured.Unstructured{
+		pod("model-serving", "qwen3-predictor-0", "node-1", "Running", nil),
+		pod("kube-system", "coredns-7c65d6cfc9-x2k9p", "node-1", "Running", map[string]any{"deletionTimestamp": "2026-10-07T17:08:05Z"}),
+		pod("gpu-operator", "nvidia-cuda-validator", "node-1", "Succeeded", nil),
+		pod("jobs", "crashed", "node-1", "Failed", nil),
+		pod("gpu-operator", "nvidia-device-plugin", "node-1", "Running", map[string]any{"ownerReferences": []any{map[string]any{"apiVersion": "apps/v1", "kind": kindDaemonSet, "name": "nvidia-device-plugin-daemonset", "uid": "1"}}}),
+		pod("kube-system", "kube-proxy-node-1", "node-1", "Running", map[string]any{"annotations": map[string]any{mirrorPodAnnotation: "abc"}}),
+		pod("model-serving", "elsewhere", "node-2", "Running", nil),
+	}
+	assert.Equal(t, []string{"kube-system/coredns-7c65d6cfc9-x2k9p", "model-serving/qwen3-predictor-0"}, drainWaitsOn(pods, "node-1"))
+	assert.Equal(t, []string{}, drainWaitsOn(nil, "node-1"))
+}
+
 // TestPoolNodeIdleSince: the NodeClaim's lastPodEventTime — when Karpenter
 // last saw a pod scheduled on or removed from the node — else its Ready
 // transition, else the Node's creation.

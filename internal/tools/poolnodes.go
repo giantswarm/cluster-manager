@@ -39,8 +39,11 @@ type poolNode struct {
 	// holders are the pods that keep the node busy, each with what holds
 	// it: `model-serving/qwen3-8b-fp8-kserve-6649fb66c8-dllt7 (1 GPU)`.
 	holders []string
+	// draining are the pods a terminating node's drain still waits on
+	// (`namespace/name`), read with the holders from the same pod list.
+	draining []string
 	// holdersErr says why the pods on the node could not be read: whether
-	// the node is idle cannot be told then.
+	// the node is idle, or what its drain waits on, cannot be told then.
 	holdersErr error
 }
 
@@ -75,23 +78,51 @@ const (
 )
 
 // terminationStage says where a terminating node's termination stands, from
-// its NodeClaim's conditions: draining, its volumes detaching, or its
-// instance shutting down. Karpenter keeps the claim until EC2 reports the
-// instance terminated, and a GPU instance stays shutting-down for about five
-// minutes after a drain of seconds; EC2 bills no instance from
-// shutting-down on, so that wait costs nothing.
+// its NodeClaim's conditions: draining (with the pods the drain waits on),
+// its volumes detaching, or its instance shutting down. Karpenter keeps the
+// claim until EC2 reports the instance terminated, and a GPU instance stays
+// shutting-down for about five minutes after a drain of seconds; EC2 bills
+// no instance from shutting-down on, so that wait costs nothing.
 func (n *poolNode) terminationStage() string {
 	if cond, found := detect.ConditionOf(n.claim, claimInstanceTerminating); found && cond.Status == "True" {
 		return fmt.Sprintf("instance shutting down since %s, no longer billed; EC2 reports it terminated about five minutes later, then the NodeClaim goes", cond.LastTransitionTime)
 	}
-	drained, _ := detect.ConditionOf(n.claim, claimDrained)
+	drained, found := detect.ConditionOf(n.claim, claimDrained)
 	switch {
 	case drained.Status == "True":
 		return fmt.Sprintf("drained since %s, its volumes detaching before the instance is terminated", drained.LastTransitionTime)
-	case drained.Message != "":
-		return "draining: " + drained.Message
+	case found:
+		return n.drainStage(drained)
 	}
 	return "Karpenter drains the node, then terminates its instance"
+}
+
+// drainNamed is how many of the pods a drain waits on are named; the rest
+// are counted.
+const drainNamed = 3
+
+// drainStage names what a draining node's drain waits on: the pods still on
+// the node, or plain draining while there are none or they cannot be read.
+// The Drained condition's message is Karpenter's reason repeated (`Draining`)
+// and says nothing a person can act on (giantswarm/cluster-manager#189); one
+// that says more is kept.
+func (n *poolNode) drainStage(drained detect.Condition) string {
+	stage := "draining"
+	if len(n.draining) > 0 {
+		stage += fmt.Sprintf(": %d pod(s) still on the node (%s)", len(n.draining), capped(n.draining, drainNamed))
+	}
+	if msg := strings.TrimSpace(drained.Message); msg != "" && !strings.EqualFold(msg, drained.Reason) {
+		stage += " — " + msg
+	}
+	return stage
+}
+
+// capped joins the first n names, counting the rest.
+func capped(names []string, n int) string {
+	if len(names) <= n {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:n], ", "), len(names)-n)
 }
 
 // idleSince is when the node's last pod left: the NodeClaim's
@@ -224,11 +255,12 @@ func (l *poolLive) holds(n *poolNode) string {
 // them (the claim's status.nodeName, else its providerID against the Node's
 // spec.providerID), reads Karpenter's refusals to launch a node of the pool
 // (the claims' conditions and the Warning events on NodeClaims, which
-// outlive a claim Karpenter deleted for want of capacity), and —
-// withHolders — reads the pods on every registered node. What holds a node
-// is a GPU pool's notion (a GPU workload or a predictor); on any other pool
-// the nodes carry the cluster's workloads and are never idle in that sense,
-// so their pods are not read.
+// outlive a claim Karpenter deleted for want of capacity), and reads the
+// pods on every registered node — withHolders — or on the terminating ones
+// alone, for what their drain waits on. What holds a node is a GPU pool's
+// notion (a GPU workload or a predictor); on any other pool the nodes carry
+// the cluster's workloads and are never idle in that sense, so their pods
+// are not read.
 func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, withHolders bool) *poolLive {
 	defer timed(ctx, "read pool nodes", "pool", pool)()
 	l := &poolLive{}
@@ -279,21 +311,31 @@ func readPoolLive(ctx context.Context, reader dynamic.Interface, pool string, wi
 		}
 	}
 	sort.Slice(l.nodes, func(i, j int) bool { return l.nodes[i].name() < l.nodes[j].name() })
-	if !withHolders {
-		return l
-	}
 	g, gctx = errgroup.WithContext(ctx)
 	for _, n := range l.nodes {
-		if n.node == nil {
+		if n.node == nil || (!withHolders && !n.terminating()) {
 			continue
 		}
 		g.Go(func() error {
-			n.holders, n.holdersErr = holders(gctx, reader, n.node.GetName())
+			n.readPods(gctx, reader)
 			return nil
 		})
 	}
 	_ = g.Wait()
 	return l
+}
+
+// readPods reads the pods on the node once, for what holds it and what its
+// drain waits on.
+func (n *poolNode) readPods(ctx context.Context, reader dynamic.Interface) {
+	node := n.node.GetName()
+	pods, err := reader.Resource(detect.PodsGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + node})
+	if err != nil {
+		n.holdersErr = fmt.Errorf("list the pods on node %s: %w", node, err)
+		return
+	}
+	n.holders = holders(pods.Items, node)
+	n.draining = drainWaitsOn(pods.Items, node)
 }
 
 // nodeClaimWarnings selects the Warning events on NodeClaims — Karpenter's
@@ -330,41 +372,68 @@ func listOrNone(ctx context.Context, reader dynamic.Interface, gvr schema.GroupV
 	return items, nil
 }
 
-// holders names the pods that hold a node: every pod on it that is not
-// finished, not a DaemonSet's (those run on every node of the pool by
-// design), not preemptible by design (a negative priority: the pool's
-// prewarm placeholder, which the first predictor evicts), and that requests
-// a GPU or is a KServe predictor's. Read as the caller across namespaces — a
-// GPU job outside the serving namespace holds the node as much as a
-// predictor does.
-func holders(ctx context.Context, reader dynamic.Interface, node string) ([]string, error) {
-	pods, err := reader.Resource(detect.PodsGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + node})
-	if err != nil {
-		return nil, fmt.Errorf("list the pods on node %s: %w", node, err)
-	}
+// holders names the pods that hold a node among the pods on it: every pod
+// that is not finished, not a DaemonSet's (those run on every node of the
+// pool by design), not preemptible by design (a negative priority: the
+// pool's prewarm placeholder, which the first predictor evicts), and that
+// requests a GPU or is a KServe predictor's. The pods are read as the caller
+// across namespaces — a GPU job outside the serving namespace holds the node
+// as much as a predictor does.
+func holders(pods []unstructured.Unstructured, node string) []string {
 	out := []string{}
-	for i := range pods.Items {
-		if h, ok := holder(&pods.Items[i], node); ok {
+	for i := range pods {
+		if h, ok := holder(&pods[i], node); ok {
 			out = append(out, h)
 		}
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
+}
+
+// drainWaitsOn names the pods a node's drain waits on among the pods on it
+// (`namespace/name`): every pod not finished and not a DaemonSet's or a
+// static one — Karpenter evicts neither —, the ones being evicted included:
+// the drain waits until they are gone.
+func drainWaitsOn(pods []unstructured.Unstructured, node string) []string {
+	out := []string{}
+	for i := range pods {
+		pod := &pods[i]
+		if nestedString(pod, "spec", "nodeName") != node || finished(pod) || daemonSetPod(pod) || pod.GetAnnotations()[mirrorPodAnnotation] != "" {
+			continue
+		}
+		out = append(out, pod.GetNamespace()+"/"+pod.GetName())
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mirrorPodAnnotation marks a static pod's mirror on the apiserver: the
+// kubelet runs it from a manifest on the node, and no drain evicts it.
+const mirrorPodAnnotation = "kubernetes.io/config.mirror"
+
+// finished reports a pod that ran to its end, Succeeded or Failed.
+func finished(pod *unstructured.Unstructured) bool {
+	switch nestedString(pod, "status", "phase") {
+	case podSucceeded, podFailed:
+		return true
+	}
+	return false
+}
+
+// daemonSetPod reports a DaemonSet's pod.
+func daemonSetPod(pod *unstructured.Unstructured) bool {
+	for _, owner := range pod.GetOwnerReferences() {
+		if owner.Kind == kindDaemonSet {
+			return true
+		}
+	}
+	return false
 }
 
 // holder is the pod's name with what holds the node, when it does.
 func holder(pod *unstructured.Unstructured, node string) (string, bool) {
-	if nestedString(pod, "spec", "nodeName") != node {
+	if nestedString(pod, "spec", "nodeName") != node || finished(pod) || daemonSetPod(pod) {
 		return "", false
-	}
-	switch nestedString(pod, "status", "phase") {
-	case podSucceeded, podFailed:
-		return "", false
-	}
-	for _, owner := range pod.GetOwnerReferences() {
-		if owner.Kind == kindDaemonSet {
-			return "", false
-		}
 	}
 	if v, found, _ := unstructured.NestedFieldNoCopy(pod.Object, "spec", "priority"); found {
 		if priority, ok := number(v); ok && priority < 0 {
