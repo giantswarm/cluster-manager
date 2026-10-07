@@ -285,9 +285,11 @@ func SliceIngressNamespaces(s SliceSpec) ([]string, error) {
 // SliceChartVersion resolves the slice release's chart version: the spec's
 // explicit version when set (pinned), else the version the installation's
 // platform release runs (the floor of the range the slice follows) — refused below MinSliceChartVersion, the first chart whose
-// serving slice is the llm-d control plane alone, below
-// MinGatewayAPICRDsChartVersion where the slice composes the Gateway API
-// CRDs, and when the release has not deployed a chart yet. Flux records the chart's digest as the version's
+// serving slice is the llm-d control plane alone, and when the release has
+// not deployed a chart yet. Where the slice composes the Gateway API CRDs the
+// floor is at least MinGatewayAPICRDsChartVersion, the first released chart
+// with the component: a platform held on an older chart (a GitOps pin) still
+// gets the CRDs on its workload clusters. Flux records the chart's digest as the version's
 // build metadata (`4.27.2+b9d9972a5aca`); the version is the chart's tag, so
 // the metadata is dropped.
 func SliceChartVersion(s SliceSpec) (string, error) {
@@ -296,7 +298,7 @@ func SliceChartVersion(s SliceSpec) (string, error) {
 		return tag, err
 	}
 	if v, err := version.ParseSemantic(tag); err == nil && v.LessThan(version.MustParseSemantic(MinGatewayAPICRDsChartVersion)) {
-		return "", fmt.Errorf("the slice would follow the %s chart from %s, below %s, the first with the %s component: the cluster serves no Gateway API, and an older chart composes no CRDs for the models Gateway and its routes — upgrade the platform to %s or newer (or pin a newer slice chart) and re-run", SliceChart, tag, MinGatewayAPICRDsChartVersion, GatewayAPICRDsComponent, MinGatewayAPICRDsChartVersion)
+		return MinGatewayAPICRDsChartVersion, nil
 	}
 	return tag, nil
 }

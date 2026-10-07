@@ -319,7 +319,8 @@ func TestSliceChartVersion(t *testing.T) {
 		{"not deployed yet", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform"}}, "", "flux-giantswarm/agent-platform has not deployed a chart yet (no status.history)"},
 		{"not a semver", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "latest"}}, "", `runs agent-platform chart "latest", not a semantic version`},
 		{"override wins", SliceSpec{ChartVersion: "0.0.0-lab", Platform: PlatformInputs{ChartVersion: "4.25.0"}}, "0.0.0-lab", ""},
-		{"gateway api crds below their floor", SliceSpec{GatewayAPICRDs: true, Platform: platform()}, "", "the slice would follow the agent-platform chart from 4.85.0, below " + MinGatewayAPICRDsChartVersion + ", the first with the gateway-api-crds component"},
+		{"gateway api crds raise the floor", SliceSpec{GatewayAPICRDs: true, Platform: platform()}, MinGatewayAPICRDsChartVersion, ""},
+		{"gateway api crds above their floor", SliceSpec{GatewayAPICRDs: true, Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "4.120.1"}}, "4.120.1", ""},
 		{"gateway api crds at their floor", SliceSpec{GatewayAPICRDs: true, Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinGatewayAPICRDsChartVersion + "+1c7eb3256e07"}}, MinGatewayAPICRDsChartVersion, ""},
 		{"gateway api crds on a pin", SliceSpec{GatewayAPICRDs: true, ChartVersion: "0.0.0-lab", Platform: platform()}, "0.0.0-lab", ""},
 	}

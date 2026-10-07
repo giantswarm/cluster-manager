@@ -16,11 +16,12 @@ const (
 	// GatewayAPIVersion is the Gateway API bundle the component's chart
 	// line installs (gateway-api-crds 1.9.x).
 	GatewayAPIVersion = "v1.6.1"
-	// MinGatewayAPICRDsChartVersion is the first agent-platform chart with
-	// the component: an older one takes components.gateway-api-crds for a
-	// feature switch and renders no release, so the connectivity release
-	// fails on the missing kinds as before.
-	MinGatewayAPICRDsChartVersion = "4.117.0-rc.2"
+	// MinGatewayAPICRDsChartVersion is the first released agent-platform
+	// chart with the component, the floor of a slice that composes the CRDs:
+	// an older one takes components.gateway-api-crds for a feature switch and
+	// renders no release, so the connectivity release would fail on the
+	// missing kinds.
+	MinGatewayAPICRDsChartVersion = "4.117.0"
 )
 
 // GatewayAPICRDs are the CRDs the component installs: the standard channel
