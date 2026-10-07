@@ -615,6 +615,51 @@ func TestNodesStepOfARemovingPoolReadsTheClusterAlone(t *testing.T) {
 	assert.Equal(t, "1 node(s) ready (aws:///eu-central-1a/i-0a1b2c3d4e5f60190)", st.Message, "the cluster not readable: the MachinePool is all there is")
 }
 
+// TestNodesStepOfACreatingPoolReadsLaunching (giantswarm/cluster-manager#195):
+// a new pool's MachinePool carries its spec.replicas before Karpenter has
+// launched the first node, and the step took the count for a node the
+// cluster had lost — "still lists 1 gone (unknown)" for a healthy pool
+// minutes old. While no node of the pool was ever seen (no provider ID
+// listed, no replica counted) and no NodeClaim exists, the node is
+// launching; once the MachinePool listed a node, by provider ID or by its
+// count alone where the infrastructure is unreadable, a cluster without it
+// reads the gone case as before; a pool removed before its first node reads
+// 0 nodes, not gone.
+func TestNodesStepOfACreatingPoolReadsLaunching(t *testing.T) {
+	creating := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cluster.x-k8s.io/v1beta1", "kind": "MachinePool",
+		"metadata": map[string]any{"name": "wc1-gpu-l4", "namespace": "org-acme", "creationTimestamp": "2026-10-08T07:00:00Z"},
+		"spec":     map[string]any{"replicas": int64(1)},
+		"status":   map[string]any{"conditions": []any{condition("Ready", "False", "WaitingForInfrastructure", "", "2026-10-08T07:00:02Z")}},
+	}}
+	empty := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "infrastructure.cluster.x-k8s.io/v1alpha1", "kind": "KarpenterMachinePool",
+		"metadata": map[string]any{"name": "wc1-gpu-l4", "namespace": "org-acme"},
+		"spec":     map[string]any{},
+	}}
+
+	st := nodesStep(creating, empty, &poolLive{}, false, true, false, launchContext{})
+	assert.Equal(t, StepInProgress, st.State)
+	assert.Equal(t, "2026-10-08T07:00:02Z", st.Since, "since the MachinePool's Ready transition")
+	assert.Equal(t, "1 node(s) launching, no NodeClaim yet", st.Message, "replicas set, no node ever listed: the first node is launching, nothing is gone")
+	st = nodesStep(creating, nil, &poolLive{}, false, true, false, launchContext{})
+	assert.Equal(t, "1 node(s) launching, no NodeClaim yet", st.Message, "the infrastructure unreadable, no replica counted: launching all the same")
+
+	seen := creating.DeepCopy()
+	seen.Object["status"] = map[string]any{"replicas": int64(1), "readyReplicas": int64(1), "conditions": []any{condition("Ready", "True", "", "", "2026-10-08T07:04:00Z")}}
+	listed := empty.DeepCopy()
+	listed.Object["spec"] = map[string]any{"providerIDList": []any{"aws:///eu-central-1a/i-0a1b2c3d4e5f60195"}}
+	st = nodesStep(seen, listed, &poolLive{}, true, true, false, launchContext{})
+	assert.Equal(t, StepDone, st.State)
+	assert.Equal(t, "0 nodes on the cluster: the MachinePool still lists 1 gone (aws:///eu-central-1a/i-0a1b2c3d4e5f60195), its list follows within minutes", st.Message, "a node the MachinePool listed, no NodeClaim on the cluster: gone")
+	st = nodesStep(seen, nil, &poolLive{}, true, true, false, launchContext{})
+	assert.Equal(t, "0 nodes on the cluster: the MachinePool still lists 1 gone (unknown), its list follows within minutes", st.Message, "the infrastructure unreadable but a replica counted: gone, its id unknown")
+
+	st = nodesStep(creating, empty, &poolLive{}, false, true, true, launchContext{})
+	assert.Equal(t, StepDone, st.State)
+	assert.Equal(t, "0 nodes on the cluster", st.Message, "removed before its first node: nothing is gone")
+}
+
 // TestTerminationStageFollowsKarpentersConditions:
 // a terminating node says where its termination stands from its NodeClaim's
 // conditions — draining with the pods the drain waits on, drained with the
