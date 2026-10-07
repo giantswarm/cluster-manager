@@ -586,7 +586,7 @@ func TestCreateNodePoolBackendDocumentFollowsTheSizes(t *testing.T) {
 	narrow.Pool.Sizes = []string{"xlarge"}
 	out, err := svc.CreateNodePool(ctx, narrow)
 	require.NoError(t, err)
-	assert.Contains(t, backendDoc(out), "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n", "the one pool's shapes, in the pool's order")
+	assert.Contains(t, backendDoc(out), "gpuPool:\n      instances:\n      - computeCapability: \"8.9\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g6.xlarge\n        memoryGiB: 16\n        size: xlarge\n        usableMemoryGiB: 11.9\n        usableVcpu: 3\n        vcpu: 4\n", "the one pool's shapes, in the pool's order, each with its GPU's compute capability")
 	assert.NotContains(t, backendDoc(out), "g6.2xlarge", "the pool's sizes only")
 
 	drift, err := svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", true))
@@ -614,9 +614,9 @@ func TestCreateNodePoolBackendDocumentKeysEveryPool(t *testing.T) {
 	require.NoError(t, err)
 	doc := backendDoc(out)
 	assert.NotContains(t, doc, "gpuPool:", "several pools: no one-pool block")
-	assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "the other pool's shapes, read from its release")
+	assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - computeCapability: \"8.6\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "the other pool's shapes, read from its release, with the A10G's compute capability")
 	assert.Contains(t, doc, "instanceType: g5.4xlarge\n", "the chart's default sizes of a release that names none")
-	assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n          memoryGiB: 16\n          size: xlarge\n          usableMemoryGiB: 11.9\n          usableVcpu: 3\n          vcpu: 4\n    target:\n", "the new pool's shapes as composed, its one size")
+	assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - computeCapability: \"8.9\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n          memoryGiB: 16\n          size: xlarge\n          usableMemoryGiB: 11.9\n          usableVcpu: 3\n          vcpu: 4\n    target:\n", "the new pool's shapes as composed, its one size")
 	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: compose.BackendConfigMapName, Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 
 	drift, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
@@ -643,7 +643,7 @@ func TestDeleteNodePoolRewritesTheBackendForThePoolsLeft(t *testing.T) {
 	assert.False(t, dry.LastPool)
 	assert.Equal(t, []string{"would-update", "would-delete", "would-delete", "would-delete"}, actions(dry))
 	assert.Equal(t, ObjectAction{APIVersion: "v1", Kind: "ConfigMap", Name: compose.BackendConfigMapName, Namespace: "agent-platform", Action: "would-update", Changes: []string{"data.backend.yaml"}}, dry.Objects[0])
-	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the one pool left, in the one-pool form")
+	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - computeCapability: \"8.6\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the one pool left, in the one-pool form")
 	assert.NotContains(t, backendDoc(dry), "gpuPools")
 	assert.NotContains(t, backendDoc(dry), "g6.", "the deleted pool's shapes go")
 	assert.Contains(t, registeredBackend(t, l), "gpuPools:", "a dry run writes nothing")
