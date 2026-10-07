@@ -54,6 +54,39 @@ operator, the backend registration, the slice release; and the pool's own object
 HelmRelease the very last, so the re-run finds the pool and continues where the teardown
 stands. Every phase is timed in the log at debug (`--verbose`).
 
+### A workload cluster's prerequisites
+
+A GPU pool on a workload cluster needs two things of the cluster's values, which
+`create_node_pool` checks first — dry run included, before anything of the cluster is read — and
+refuses once, naming every one missing with the values to add:
+
+- **`global.connectivity.baseDomain`**, the installation's base domain, for the pool's bootstrap.
+  cluster-manager reads the cluster's effective values: its own (the HelmRelease's, or the App's
+  values ConfigMaps) over the installation's cluster values that every organization's namespace
+  carries (`cluster-app-installation-values`). A cluster made by `kubectl gs template cluster`
+  gets them through app-operator's catalog layer, which cluster-manager does not read; their copy in
+  the organization's namespace stands in for it. Neither carrying a base domain is the refusal.
+- **An apiserver that trusts the installation's identity provider**: cluster-manager reads the
+  cluster as you with the installation's Dex `id_token`, so the cluster's
+  `global.controlPlane.oidc` names the Dex issuer with the audience the installation's apiserver
+  accepts (`--cluster-oidc-client-id`) — the plain block, or with `structuredAuthentication.enabled`
+  one entry of its `issuers`. `kubectl gs template cluster` sets none. Checked when the server knows
+  its provider (Dex with `--cluster-oidc-client-id`); `create_cluster` composes it into every cluster
+  it makes. For a cluster made otherwise, add to its user values (`<name>-userconfig`), with the
+  issuer the refusal names:
+
+  ```yaml
+  global:
+    controlPlane:
+      oidc:
+        issuerUrl: https://dex.<installation base domain>
+        clientId: dex-k8s-authenticator
+        usernameClaim: email
+        groupsClaim: groups
+  ```
+
+  The change rolls the cluster's control plane (about 15 minutes); re-run once it is done.
+
 ## Delivery
 
 Giant Swarm installations enforce Flux multi-tenancy on every HelmRelease outside the platform's
