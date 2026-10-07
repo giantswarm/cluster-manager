@@ -286,7 +286,7 @@ func TestListClustersSliceReleaseChildren(t *testing.T) {
 		require.NotNil(t, serving.Readiness.Release)
 		return serving, serving.Readiness.Release
 	}
-	const pending = "HelmRelease org-acme/wc1-kserve-llmisvc-resources not Ready (Ready=False [Progressing] Running 'install' action with timeout of 10m0s)"
+	const pending = "HelmRelease org-acme/wc1-kserve-llmisvc-resources not Ready (Ready=Unknown [Progressing] Running 'install' action with timeout of 10m0s)"
 
 	t.Run("a child still installing", func(t *testing.T) {
 		serving, r := release(t, sliceLab(t, condition("True", "InstallSucceeded", "")))
