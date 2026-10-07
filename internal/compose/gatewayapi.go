@@ -20,7 +20,7 @@ const (
 	// the component: an older one takes components.gateway-api-crds for a
 	// feature switch and renders no release, so the connectivity release
 	// fails on the missing kinds as before.
-	MinGatewayAPICRDsChartVersion = "4.117.0"
+	MinGatewayAPICRDsChartVersion = "4.117.0-rc.2"
 )
 
 // GatewayAPICRDs are the CRDs the component installs: the standard channel
