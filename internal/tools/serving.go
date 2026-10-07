@@ -58,6 +58,19 @@ type SliceRelease struct {
 	// before anything is applied (judgeIssuance); nil when the platform's
 	// wildcard serves the host.
 	Certificate *detect.Issuance `json:"certificate,omitempty"`
+	// GatewayAPI is what the models Gateway and its routes are served
+	// through on the cluster: the CRDs the slice composes, or the ones found.
+	GatewayAPI GatewayAPICRDs `json:"gatewayAPI"`
+}
+
+// GatewayAPICRDs says where the slice's Gateway API CRDs come from
+// (giantswarm/cluster-manager#183): Composed by the slice's gateway-api-crds
+// component (Version is the bundle it installs), or found on the cluster
+// (Version as the CRDs' annotation names it) and left as they are.
+type GatewayAPICRDs struct {
+	Composed bool   `json:"composed"`
+	Version  string `json:"version,omitempty"`
+	Note     string `json:"note"`
 }
 
 // EnableModelServing creates the cluster's slice release with the serving
@@ -211,9 +224,21 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	if err := s.retireServingNamespace(td, t); err != nil {
 		return nil, err
 	}
+	if composesGatewayAPICRDs(hr) {
+		if err := s.retireGatewayAPICRDs(td, t); err != nil {
+			return nil, err
+		}
+	}
 	td.finish()
 	logApplied(ctx, "disable_model_serving", out, start)
 	return out, nil
+}
+
+// composesGatewayAPICRDs reports whether the slice release hr composes the
+// Gateway API CRDs, which its teardown then removes.
+func composesGatewayAPICRDs(hr *unstructured.Unstructured) bool {
+	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
+	return compose.GatewayAPICRDsOn(values)
 }
 
 // retireLeftNamespace is disable_model_serving where the slice release is
@@ -257,6 +282,12 @@ type sliceReads struct {
 	// state it; nil while there is no release (giantswarm/cluster-manager#83).
 	release string
 	cache   *detect.SliceCache
+	// gatewayAPI is the Gateway API the target serves, gatewayAPIErr why it
+	// cannot be told; gatewayAPIComposed says the slice release composes its
+	// CRDs already, so they stay composed whatever the target reads.
+	gatewayAPI         detect.GatewayAPI
+	gatewayAPIErr      error
+	gatewayAPIComposed bool
 	// removing says why the slice release is being torn down — it carries a
 	// deletion timestamp, or its OCIRepository is gone while it stands (the
 	// teardown deletes the source first); empty otherwise. A write then
@@ -283,8 +314,13 @@ func (s *Service) readSlice(ctx context.Context, dyn dynamic.Interface, t target
 			r.release = hr.GetNamespace() + "/" + hr.GetName()
 			r.cache = detect.SliceCacheOf(hr)
 			r.removing = sliceRemoving(gctx, dyn, hr)
+			r.gatewayAPIComposed = composesGatewayAPICRDs(hr)
 		}
 		return err
+	})
+	g.Go(func() error {
+		r.gatewayAPI, r.gatewayAPIErr = detect.ReadGatewayAPI(gctx, t.Reader)
+		return nil
 	})
 	g.Go(func() (err error) {
 		r.platform, err = s.platformInputs(gctx, dyn)
@@ -361,8 +397,11 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 	case !composesSlice(serving):
 		return serving, nil, nil, nil
 	}
-	var err error
-	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim, Runtime: runtime}
+	gatewayAPI, err := gatewayAPICRDsFor(r, t.Cluster)
+	if err != nil {
+		return serving, nil, nil, err
+	}
+	spec := compose.SliceSpec{ChartVersion: s.cfg.SliceChartVersion, OwnCluster: t.backend.OwnCluster, Platform: r.platform, Pool: pool, CertificateIssuer: s.cfg.CertificateIssuer, NoCache: !cache.on, CacheClaim: cache.claim, Runtime: runtime, GatewayAPICRDs: gatewayAPI.Composed}
 	if _, err = compose.SliceChartVersion(spec); err != nil {
 		return serving, nil, nil, &ErrRefused{Reason: err.Error()}
 	}
@@ -377,12 +416,32 @@ func (s *Service) sliceRelease(r sliceReads, t target, facts compose.Cluster, po
 	domain := compose.SliceDomain(facts, spec)
 	slice := &SliceRelease{
 		Name: objs[1].GetName(), Namespace: objs[1].GetNamespace(), ChartVersion: compose.ChartVersion(objs[0]),
-		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool, JWKS: jwks.URL(),
+		Domain: domain, ModelsHost: compose.ModelsHost(domain), GPUPool: pool, JWKS: jwks.URL(), GatewayAPI: gatewayAPI,
 	}
 	if issuer := compose.SliceIssuer(spec); issuer != "" {
 		slice.Certificate = &detect.Issuance{Issuer: issuer}
 	}
 	return serving, slice, objs, nil
+}
+
+// gatewayAPICRDsFor decides the slice's Gateway API CRDs from what was read
+// (giantswarm/cluster-manager#183): composed where the target serves no
+// Gateway kind, and kept composed once the slice composes them — the CRDs it
+// installed read as present afterwards; found CRDs are left as they are and
+// named, whatever their version, since composing over them would replace
+// them. A target whose Gateway CRD cannot be read is a refusal: the
+// connectivity release would otherwise fail its install on the missing kinds.
+func gatewayAPICRDsFor(r sliceReads, cluster string) (GatewayAPICRDs, error) {
+	switch {
+	case r.gatewayAPIComposed:
+		return GatewayAPICRDs{Composed: true, Version: compose.GatewayAPIVersion, Note: fmt.Sprintf("the slice's %s component installs the Gateway API %s CRDs (standard channel) on %s, before the connectivity release and agentgateway", compose.GatewayAPICRDsComponent, compose.GatewayAPIVersion, cluster)}, nil
+	case r.gatewayAPIErr != nil:
+		return GatewayAPICRDs{}, &ErrRefused{Reason: fmt.Sprintf("cannot tell whether %s serves the Gateway API (%v): the models Gateway and its routes need its CRDs, composed with the slice only where the cluster has none — make the CRD %s readable as you and re-run", cluster, r.gatewayAPIErr, detect.GatewayAPICRD)}
+	case !r.gatewayAPI.Served:
+		return GatewayAPICRDs{Composed: true, Version: compose.GatewayAPIVersion, Note: fmt.Sprintf("%s serves no Gateway API: the slice's %s component installs the Gateway API %s CRDs (standard channel), before the connectivity release and agentgateway", cluster, compose.GatewayAPICRDsComponent, compose.GatewayAPIVersion)}, nil
+	default:
+		return GatewayAPICRDs{Version: r.gatewayAPI.Version, Note: fmt.Sprintf("%s serves %s already: the slice composes no Gateway API CRDs and leaves them as they are", cluster, r.gatewayAPI)}, nil
+	}
 }
 
 // judgeIssuance judges, on the target cluster, whether the slice's

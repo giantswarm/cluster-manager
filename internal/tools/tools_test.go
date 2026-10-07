@@ -169,22 +169,42 @@ type lab struct {
 func newLab(t *testing.T, fixture string) *lab {
 	t.Helper()
 	l := &lab{installation: newFake(t, fixture, servingAPIs...), targets: map[string]dynamic.Interface{}, zones: &fakeZones{soa: map[string]bool{"acme.example.io.": true, "example.io.": true}}}
+	// The installation's own cluster runs the Gateway API as an app of its own.
+	l.add(t, l.installation, "targets/gateway-api.yaml")
 	l.target(t, wc1APIServer, "wc1.yaml", servingAPIs...)
 	l.target(t, wc2APIServer, "wc2.yaml")
 	return l
 }
 
 // target sets what the cluster at apiServer shows (a fixture under
-// testdata/targets, beside the fleet's ClusterIssuer of targets/issuer.yaml),
-// with the APIs it does not serve.
+// testdata/targets, beside the fleet's ClusterIssuer of targets/issuer.yaml
+// and the Gateway API of targets/gateway-api.yaml), with the APIs it does
+// not serve.
 func (l *lab) target(t *testing.T, apiServer, fixture string, absent ...schema.GroupVersionResource) *lab {
 	t.Helper()
 	dyn := newFake(t, filepath.Join("targets", fixture), absent...)
-	for _, obj := range loadFixtures(t, filepath.Join("targets", "issuer.yaml")) {
-		_, err := dyn.Resource(detect.ClusterIssuerGVR).Create(context.Background(), obj.(*unstructured.Unstructured), metav1.CreateOptions{})
-		require.NoError(t, err)
+	for _, shared := range []struct {
+		fixture string
+		gvr     schema.GroupVersionResource
+	}{{"issuer.yaml", detect.ClusterIssuerGVR}, {"gateway-api.yaml", detect.CRDGVR}} {
+		for _, obj := range loadFixtures(t, filepath.Join("targets", shared.fixture)) {
+			_, err := dyn.Resource(shared.gvr).Create(context.Background(), obj.(*unstructured.Unstructured), metav1.CreateOptions{})
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
+			require.NoError(t, err)
+		}
 	}
 	l.targets[apiServer] = dyn
+	return l
+}
+
+// withoutGatewayAPI takes the Gateway API away from the cluster at
+// apiServer: a workload cluster created with kubectl-gs.
+func (l *lab) withoutGatewayAPI(t *testing.T, apiServer string) *lab {
+	t.Helper()
+	err := l.targets[apiServer].Resource(detect.CRDGVR).Delete(context.Background(), detect.GatewayAPICRD, metav1.DeleteOptions{})
+	require.NoError(t, err)
 	return l
 }
 

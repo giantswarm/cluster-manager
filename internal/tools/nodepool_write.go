@@ -802,6 +802,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		if err := s.retireServingNamespace(td, t); err != nil {
 			return nil, err
 		}
+		if composesGatewayAPICRDs(slice) {
+			if err := s.retireGatewayAPICRDs(td, t); err != nil {
+				return nil, err
+			}
+		}
 	}
 	td.finish()
 	logApplied(ctx, "delete_node_pool", out, start)

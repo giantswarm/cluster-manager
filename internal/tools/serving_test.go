@@ -29,7 +29,7 @@ func TestEnableModelServingOwnCluster(t *testing.T) {
 	out, err := svc.EnableModelServing(context.Background(), serving("gazelle", true))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"would-create", "would-create", "would-create"}, actions(out), "slice source, release; backend")
-	assert.Equal(t, &SliceRelease{Name: "gazelle-agent-platform", Namespace: "org-giantswarm", ChartVersion: "4.85.0", Domain: "gazelle.example.io", ModelsHost: "models.gazelle.example.io", JWKS: "http://dex.giantswarm.svc.cluster.local:5556/keys"}, out.Slice, "the dry run names the JWKS source: the platform's Dex service")
+	assert.Equal(t, &SliceRelease{Name: "gazelle-agent-platform", Namespace: "org-giantswarm", ChartVersion: "4.85.0", Domain: "gazelle.example.io", ModelsHost: "models.gazelle.example.io", JWKS: "http://dex.giantswarm.svc.cluster.local:5556/keys", GatewayAPI: GatewayAPICRDs{Version: "v1.6.1", Note: "gazelle serves Gateway API v1.6.1 (standard channel) already: the slice composes no Gateway API CRDs and leaves them as they are"}}, out.Slice, "the dry run names the JWKS source: the platform's Dex service")
 	assert.Equal(t, compose.BackendTargetLocal, out.Backend.Target)
 	values, _, _ := unstructured.NestedMap(out.Manifests[1], "spec", "values")
 	jwksHost, _, _ := unstructured.NestedString(values, "modelServing", "modelsGateway", "jwtAuthentication", "jwks", "host")

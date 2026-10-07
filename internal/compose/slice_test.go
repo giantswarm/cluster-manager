@@ -110,7 +110,7 @@ func TestSliceGoldens(t *testing.T) {
 				assert.Equal(t, []string{"agent-platform", DefaultSubstrateNamespace}, ingress, "model-manager and the agentgateway data plane in the platform's namespace, the agents' egress gateway in the Substrate namespace")
 			}
 			for _, component := range ServingComponents {
-				if component == "agentgateway" {
+				if component == "agentgateway" || component == GatewayAPICRDsComponent {
 					continue // by the target's shape, not the profile's
 				}
 				on, _, _ := unstructured.NestedBool(values, "components", component, "enabled")
@@ -273,6 +273,30 @@ func TestOtherSliceOn(t *testing.T) {
 	assert.False(t, OtherSliceOn(values))
 	require.NoError(t, unstructured.SetNestedField(values, true, "components", "kagent", "enabled"))
 	assert.True(t, OtherSliceOn(values), "the runtime slice shares the release")
+	values, err = SliceValues(wc1(), SliceSpec{Platform: platform(), GatewayAPICRDs: true})
+	require.NoError(t, err)
+	assert.False(t, OtherSliceOn(values), "the Gateway API CRDs are the serving slice's: the release goes with the last pool")
+}
+
+// TestSliceGatewayAPICRDs: a slice for a cluster without the Gateway API
+// switches the meta chart's gateway-api-crds component on, the release's
+// only difference to the slice without it; GatewayAPICRDsOn reads it back
+// (giantswarm/cluster-manager#183).
+func TestSliceGatewayAPICRDs(t *testing.T) {
+	inputs := platform()
+	inputs.ChartVersion = MinGatewayAPICRDsChartVersion
+	without, err := Slice(wc1(), SliceSpec{Platform: inputs, Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer})
+	require.NoError(t, err)
+	with, err := Slice(wc1(), SliceSpec{Platform: inputs, Pool: "gpu-l4", CertificateIssuer: DefaultCertificateIssuer, GatewayAPICRDs: true})
+	require.NoError(t, err)
+	assertGolden(t, "slice-workload-gateway-api-crds", with)
+	values, _, _ := unstructured.NestedMap(with[1].Object, "spec", "values")
+	assert.True(t, GatewayAPICRDsOn(values), "the component is on")
+	before, _, _ := unstructured.NestedMap(without[1].Object, "spec", "values")
+	assert.False(t, GatewayAPICRDsOn(before), "off where the cluster serves the Gateway API")
+	unstructured.RemoveNestedField(values, "components", GatewayAPICRDsComponent)
+	assert.Equal(t, before, values, "nothing else differs")
+	assert.Equal(t, without[0].Object, with[0].Object, "the same chart source")
 }
 
 // TestSliceChartVersion: the version is the one the platform's release runs
@@ -295,6 +319,9 @@ func TestSliceChartVersion(t *testing.T) {
 		{"not deployed yet", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform"}}, "", "flux-giantswarm/agent-platform has not deployed a chart yet (no status.history)"},
 		{"not a semver", SliceSpec{Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: "latest"}}, "", `runs agent-platform chart "latest", not a semantic version`},
 		{"override wins", SliceSpec{ChartVersion: "0.0.0-lab", Platform: PlatformInputs{ChartVersion: "4.25.0"}}, "0.0.0-lab", ""},
+		{"gateway api crds below their floor", SliceSpec{GatewayAPICRDs: true, Platform: platform()}, "", "the slice would follow the agent-platform chart from 4.85.0, below " + MinGatewayAPICRDsChartVersion + ", the first with the gateway-api-crds component"},
+		{"gateway api crds at their floor", SliceSpec{GatewayAPICRDs: true, Platform: PlatformInputs{Release: "flux-giantswarm/agent-platform", ChartVersion: MinGatewayAPICRDsChartVersion + "+1c7eb3256e07"}}, MinGatewayAPICRDsChartVersion, ""},
+		{"gateway api crds on a pin", SliceSpec{GatewayAPICRDs: true, ChartVersion: "0.0.0-lab", Platform: platform()}, "0.0.0-lab", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
