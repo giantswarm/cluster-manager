@@ -17,22 +17,6 @@ import (
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
-// platformRuns makes the installation's platform release report chart
-// version as the one it runs (status.history[0].chartVersion).
-func (l *lab) platformRuns(t *testing.T, version string) *lab {
-	t.Helper()
-	res := l.installation.Resource(HelmReleaseGVR).Namespace("flux-giantswarm")
-	hr, err := res.Get(context.Background(), "agent-platform", metav1.GetOptions{})
-	require.NoError(t, err)
-	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
-	require.NotEmpty(t, history)
-	history[0].(map[string]any)["chartVersion"] = version
-	require.NoError(t, unstructured.SetNestedSlice(hr.Object, history, "status", "history"))
-	_, err = res.Update(context.Background(), hr, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	return l
-}
-
 func gatewayAPICRDsOn(t *testing.T, manifest map[string]any) bool {
 	t.Helper()
 	values, _, _ := unstructured.NestedMap(manifest, "spec", "values")
@@ -50,15 +34,10 @@ func TestSliceComposesGatewayAPICRDs(t *testing.T) {
 	ctx := context.Background()
 
 	l := newLab(t, "installation.yaml").withoutGatewayAPI(t, wc1APIServer)
-	_, err := l.service(Config{Installation: "gazelle"}).EnableModelServing(ctx, serving("wc1", true))
-	var refused *ErrRefused
-	require.ErrorAs(t, err, &refused)
-	assert.Contains(t, refused.Reason, "below "+compose.MinGatewayAPICRDsChartVersion+", the first with the gateway-api-crds component", "an older chart composes no CRDs: refused, never left to a failing connectivity release")
-
-	l.platformRuns(t, compose.MinGatewayAPICRDsChartVersion)
 	svc := l.service(Config{Installation: "gazelle"})
 	dry, err := svc.EnableModelServing(ctx, serving("wc1", true))
 	require.NoError(t, err)
+	assert.Equal(t, compose.MinGatewayAPICRDsChartVersion, dry.Slice.ChartVersion, "the platform runs an older chart (a GitOps pin): the slice follows the first chart with the component instead")
 	assert.True(t, gatewayAPICRDsOn(t, dry.Manifests[1]), "the dry run shows the component the create would switch on")
 	assert.Equal(t, GatewayAPICRDs{Composed: true, Version: compose.GatewayAPIVersion, Note: "wc1 serves no Gateway API: the slice's gateway-api-crds component installs the Gateway API v1.6.1 CRDs (standard channel), before the connectivity release and agentgateway"}, dry.Slice.GatewayAPI)
 
@@ -101,7 +80,7 @@ func TestSliceRefusesAnUnreadableGatewayAPI(t *testing.T) {
 func TestTeardownRemovesTheGatewayAPICRDs(t *testing.T) {
 	ctx := context.Background()
 	composed := func(t *testing.T) (*lab, *Service) {
-		l := newLab(t, "installation.yaml").withoutGatewayAPI(t, wc1APIServer).platformRuns(t, compose.MinGatewayAPICRDsChartVersion)
+		l := newLab(t, "installation.yaml").withoutGatewayAPI(t, wc1APIServer)
 		svc := l.service(Config{Installation: "gazelle"})
 		_, err := svc.EnableModelServing(ctx, serving("wc1", false))
 		require.NoError(t, err)
