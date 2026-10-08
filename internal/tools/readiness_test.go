@@ -32,7 +32,7 @@ func TestListClustersBackend(t *testing.T) {
 		cm := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "v1", "kind": "ConfigMap",
 			"metadata": map[string]any{
-				"name": compose.BackendConfigMapName, "namespace": "agent-platform",
+				"name": "model-backend-kserve-wc2", "namespace": "agent-platform",
 				"labels": map[string]any{compose.LabelManagedBy: compose.ManagedBy, compose.LabelCluster: "wc2"},
 			},
 		}}
@@ -40,7 +40,7 @@ func TestListClustersBackend(t *testing.T) {
 		require.NoError(t, err)
 
 		registered, notRegistered := true, false
-		assert.Equal(t, detect.BackendState{Registered: &registered, Namespace: "agent-platform", Name: compose.BackendConfigMapName},
+		assert.Equal(t, detect.BackendState{Registered: &registered, Backend: "kserve-wc2", Namespace: "agent-platform", Name: "model-backend-kserve-wc2"},
 			clusterNamed(t, l, "wc2").Serving.Readiness.Backend)
 		assert.Equal(t, detect.BackendState{Registered: &notRegistered}, clusterNamed(t, l, "wc1").Serving.Readiness.Backend,
 			"another cluster's document is not this cluster's registration")
@@ -49,12 +49,12 @@ func TestListClustersBackend(t *testing.T) {
 	t.Run("not readable", func(t *testing.T) {
 		l := newLab(t, "installation.yaml")
 		fakeInstallation(t, l).PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewForbidden(compose.ConfigMapGVR.GroupResource(), compose.BackendConfigMapName, errors.New("no RBAC on the namespace"))
+			return true, nil, apierrors.NewForbidden(compose.ConfigMapGVR.GroupResource(), "model-backend-kserve-wc2", errors.New("no RBAC on the namespace"))
 		})
 		got := clusterNamed(t, l, "wc2").Serving.Readiness.Backend
 		assert.Nil(t, got.Registered, "unknown, not false")
 		assert.Empty(t, got.Name)
-		assert.Contains(t, got.Error, "get ConfigMap agent-platform/"+compose.BackendConfigMapName)
+		assert.Contains(t, got.Error, "get ConfigMap agent-platform/model-backend-kserve-wc2")
 		assert.Contains(t, got.Error, "no RBAC on the namespace")
 	})
 }

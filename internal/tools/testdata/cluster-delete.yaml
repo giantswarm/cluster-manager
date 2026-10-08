@@ -177,7 +177,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: model-backend-kserve
+  name: model-backend-kserve-dev01
   namespace: agent-platform
   labels:
     app.kubernetes.io/managed-by: cluster-manager

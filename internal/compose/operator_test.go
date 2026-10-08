@@ -170,7 +170,7 @@ func TestKServeBackendGoldens(t *testing.T) {
 			cm, err := KServeBackend("agent-platform", tc.target, tc.pools)
 			require.NoError(t, err)
 			assertGolden(t, "backend-kserve-"+tc.name, []*unstructured.Unstructured{cm})
-			assert.Equal(t, BackendConfigMapName, cm.GetName())
+			assert.Equal(t, BackendConfigMapName(BackendName(tc.target.Cluster, tc.target.OwnCluster)), cm.GetName())
 			assert.Equal(t, "true", cm.GetLabels()[LabelBackend])
 			assert.Equal(t, ManagedBy, cm.GetLabels()[LabelBackendSource])
 			assert.Equal(t, tc.target.Cluster, cm.GetLabels()[LabelCluster])

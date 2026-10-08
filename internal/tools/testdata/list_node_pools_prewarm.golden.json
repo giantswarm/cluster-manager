@@ -2,6 +2,9 @@
   "cluster": "gazelle",
   "namespace": "org-giantswarm",
   "controlPlaneVersion": "v1.31.4",
+  "backend": {
+    "registered": false
+  },
   "nodePools": [
     {
       "name": "gazelle-gpu-l4",

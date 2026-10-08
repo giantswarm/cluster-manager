@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
+	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // Flux labels helm-controller puts on every object a HelmRelease applies.
@@ -37,8 +38,12 @@ type NodePools struct {
 	// ControlPlaneVersion is the control plane's Kubernetes version: the
 	// control plane object's spec.version, else the kubernetes component of
 	// the cluster's Release CR; empty when neither is readable.
-	ControlPlaneVersion string     `json:"controlPlaneVersion"`
-	NodePools           []NodePool `json:"nodePools"`
+	ControlPlaneVersion string `json:"controlPlaneVersion"`
+	// Backend is the cluster's kserve backend with model-manager: the name a
+	// model on the cluster's pools is checked and loaded through, and its
+	// document (giantswarm/cluster-manager#185).
+	Backend   detect.BackendState `json:"backend"`
+	NodePools []NodePool          `json:"nodePools"`
 }
 
 // NodePool is one MachinePool of a cluster. The pool's version and the
@@ -110,6 +115,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 		releases  map[string]*unstructured.Unstructured
 		t         target
 		infra     awsInfra
+		backend   detect.BackendState
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { cpVersion = controlPlaneVersion(gctx, dyn, c); return nil })
@@ -125,6 +131,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 	})
 	g.Go(func() (err error) { releases, err = poolReleases(gctx, dyn, c.GetNamespace(), c.GetName()); return err })
 	g.Go(func() error { t = s.target(gctx, dyn, c); return nil })
+	g.Go(func() error { backend = s.backendState(gctx, dyn, c.GetName()); return nil })
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
@@ -144,7 +151,7 @@ func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) 
 			entries[name] = entry{release: hr}
 		}
 	}
-	out := &NodePools{Cluster: c.GetName(), Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, NodePools: make([]NodePool, 0, len(entries))}
+	out := &NodePools{Cluster: c.GetName(), Namespace: c.GetNamespace(), ControlPlaneVersion: cpVersion, Backend: backend, NodePools: make([]NodePool, 0, len(entries))}
 	var mu sync.Mutex
 	g, gctx = errgroup.WithContext(ctx)
 	for name, e := range entries {

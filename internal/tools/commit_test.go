@@ -13,7 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
@@ -108,7 +107,7 @@ func TestCreateNodePoolCommit(t *testing.T) {
 
 	var backend bool
 	for _, o := range out.Objects {
-		if o.Kind == "ConfigMap" && o.Name == compose.BackendConfigMapName {
+		if o.Kind == "ConfigMap" && o.Name == wc1Backend {
 			backend = o.Action == actionCreate
 		}
 		assert.NotEqual(t, "HelmRelease", o.Kind, "no release is applied live")

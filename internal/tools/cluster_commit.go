@@ -152,12 +152,12 @@ func (s *Service) commitDeleteCluster(ctx context.Context, dyn dynamic.Interface
 		Repository: place.Repository.String(), Branch: place.Branch, Path: place.Directory().Path(),
 		Kustomization: place.Owner.Namespace + "/" + place.Owner.Name, Prune: built.Prune,
 	}, remote: remote}
-	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, in.Name)
+	registered, err := backendsOf(ctx, dyn, s.cfg.ModelManagerNamespace, in.Name)
 	if err != nil {
 		return err
 	}
-	if registered {
-		plans, err := planDeletes(ctx, dyn, []objectRef{{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName}})
+	if len(registered) > 0 {
+		plans, err := planDeletes(ctx, dyn, backendRefs(s.cfg.ModelManagerNamespace, registered))
 		if err != nil {
 			return err
 		}

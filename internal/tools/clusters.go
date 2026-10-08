@@ -244,17 +244,21 @@ func clusterAdminsOf(ctx context.Context, dyn dynamic.Interface, c *unstructured
 	return &admins, ""
 }
 
-// backendState says whether model-manager's kserve backend document is
-// registered for the cluster, and where it is; a read failure is answered
-// as such, with registered unknown.
+// backendState says whether the cluster's kserve backend document is
+// registered with model-manager, under which backend name and where; a read
+// failure is answered as such, with registered unknown. A workload cluster
+// still registered under the shared `kserve` name by a cluster-manager from
+// before one backend per cluster is answered with that name until a write
+// re-registers it as its own.
 func (s *Service) backendState(ctx context.Context, dyn dynamic.Interface, cluster string) detect.BackendState {
-	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
+	names, err := backendsOf(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
 	if err != nil {
 		return detect.BackendState{Error: err.Error()}
 	}
+	registered := len(names) > 0
 	state := detect.BackendState{Registered: &registered}
 	if registered {
-		state.Namespace, state.Name = s.cfg.ModelManagerNamespace, compose.BackendConfigMapName
+		state.Namespace, state.Name, state.Backend = s.cfg.ModelManagerNamespace, names[0], compose.BackendOfConfigMap(names[0])
 	}
 	return state
 }

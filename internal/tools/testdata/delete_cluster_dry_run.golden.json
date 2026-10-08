@@ -7,7 +7,7 @@
     {
       "apiVersion": "v1",
       "kind": "ConfigMap",
-      "name": "model-backend-kserve",
+      "name": "model-backend-kserve-dev01",
       "namespace": "agent-platform",
       "action": "would-delete"
     },

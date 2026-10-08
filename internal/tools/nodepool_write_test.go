@@ -617,7 +617,7 @@ func TestCreateNodePoolBackendDocumentKeysEveryPool(t *testing.T) {
 	assert.Contains(t, doc, "gpuPools:\n      wc1-gpu-a10g:\n        instances:\n        - computeCapability: \"8.6\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g5.xlarge\n", "the other pool's shapes, read from its release, with the A10G's compute capability")
 	assert.Contains(t, doc, "instanceType: g5.4xlarge\n", "the chart's default sizes of a release that names none")
 	assert.Contains(t, doc, "      wc1-gpu-l4:\n        instances:\n        - computeCapability: \"8.9\"\n          gpuMemoryGiB: 24\n          gpus: 1\n          instanceType: g6.xlarge\n          memoryGiB: 16\n          size: xlarge\n          usableMemoryGiB: 11.9\n          usableVcpu: 3\n          vcpu: 4\n    target:\n", "the new pool's shapes as composed, its one size")
-	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: compose.BackendConfigMapName, Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
+	assert.Equal(t, &BackendRegistration{Kind: "kserve", Backend: "kserve-wc1", Namespace: "agent-platform", Name: "model-backend-kserve-wc1", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 
 	drift, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
 	require.NoError(t, err)
@@ -642,7 +642,7 @@ func TestDeleteNodePoolRewritesTheBackendForThePoolsLeft(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, dry.LastPool)
 	assert.Equal(t, []string{"would-update", "would-delete", "would-delete", "would-delete"}, actions(dry))
-	assert.Equal(t, ObjectAction{APIVersion: "v1", Kind: "ConfigMap", Name: compose.BackendConfigMapName, Namespace: "agent-platform", Action: "would-update", Changes: []string{"data.backend.yaml"}}, dry.Objects[0])
+	assert.Equal(t, ObjectAction{APIVersion: "v1", Kind: "ConfigMap", Name: wc1Backend, Namespace: "agent-platform", Action: "would-update", Changes: []string{"data.backend.yaml"}}, dry.Objects[0])
 	assert.Contains(t, backendDoc(dry), "gpuPool:\n      instances:\n      - computeCapability: \"8.6\"\n        gpuMemoryGiB: 24\n        gpus: 1\n        instanceType: g5.xlarge\n", "the one pool left, in the one-pool form")
 	assert.NotContains(t, backendDoc(dry), "gpuPools")
 	assert.NotContains(t, backendDoc(dry), "g6.", "the deleted pool's shapes go")
@@ -651,7 +651,7 @@ func TestDeleteNodePoolRewritesTheBackendForThePoolsLeft(t *testing.T) {
 	out, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-l4", Mode: ModeApply})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"update", "delete", "delete", "delete"}, actions(out))
-	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: compose.BackendConfigMapName, Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
+	assert.Equal(t, &BackendRegistration{Kind: "kserve", Backend: "kserve-wc1", Namespace: "agent-platform", Name: "model-backend-kserve-wc1", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 	assert.Equal(t, backendDoc(dry), registeredBackend(t, l), "the document on the installation is the one the dry run showed")
 
 	one, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", true))
@@ -662,7 +662,7 @@ func TestDeleteNodePoolRewritesTheBackendForThePoolsLeft(t *testing.T) {
 // registeredBackend is the kserve backend document on the installation.
 func registeredBackend(t *testing.T, l *lab) string {
 	t.Helper()
-	cm, err := l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Get(context.Background(), compose.BackendConfigMapName, metav1.GetOptions{})
+	cm, err := l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Get(context.Background(), wc1Backend, metav1.GetOptions{})
 	require.NoError(t, err)
 	doc, _, _ := unstructured.NestedString(cm.Object, "data", "backend.yaml")
 	return doc
@@ -681,10 +681,11 @@ func backendDoc(out *WriteResult) string {
 	return ""
 }
 
-// backendAction is the kserve backend document's entry among the answer's objects.
+// backendAction is the cluster's kserve backend document's entry among the
+// answer's objects.
 func backendAction(out *WriteResult) ObjectAction {
 	for _, o := range out.Objects {
-		if o.Kind == "ConfigMap" && o.Name == compose.BackendConfigMapName {
+		if o.Kind == "ConfigMap" && o.Name == "model-backend-kserve-"+out.Cluster {
 			return o
 		}
 	}

@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/giantswarm/cluster-manager/internal/compose"
 )
 
 const (
@@ -188,7 +186,7 @@ func TestDeleteClusterCommit(t *testing.T) {
 	log := recordDeletes(t, l)
 	got, err := svc.DeleteCluster(asPerson(context.Background()), dev01DeleteCommit())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"configmaps agent-platform/" + compose.BackendConfigMapName}, log.seen())
+	assert.Equal(t, []string{"configmaps agent-platform/model-backend-kserve-dev01"}, log.seen())
 	prs := fake.PullRequests()
 	require.Len(t, prs, 1)
 	assert.Equal(t, "cluster-manager/remove-cluster-dev01", prs[0].Head)
@@ -275,7 +273,7 @@ func TestDeleteClusterAppliesAMergedRemoval(t *testing.T) {
 	log := recordDeletes(t, l)
 	got, err := svc.DeleteCluster(ctx, dev01Delete())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"configmaps agent-platform/" + compose.BackendConfigMapName, "kustomizations default/gazelle-clusters-dev01"}, log.seen())
+	assert.Equal(t, []string{"configmaps agent-platform/model-backend-kserve-dev01", "kustomizations default/gazelle-clusters-dev01"}, log.seen())
 	assert.Contains(t, got.WithCluster, "org-acme/dev01-gpu")
 }
 

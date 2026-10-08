@@ -523,6 +523,7 @@
   },
   "backend": {
     "kind": "kserve",
+    "backend": "kserve",
     "namespace": "agent-platform",
     "name": "model-backend-kserve",
     "target": "local"

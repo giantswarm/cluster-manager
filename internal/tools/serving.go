@@ -144,7 +144,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	existing, err := existingBackend(ctx, dyn, s.cfg.ModelManagerNamespace)
+	existing, err := existingBackend(ctx, dyn, s.cfg.ModelManagerNamespace, target.backendConfigMap())
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{},
 		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin, s.cacheFacts(ctx, c.GetName(), infra.region, reads, slice, pin)),
 		CacheClaim: pin.claim, CacheClaims: claims.claims,
-		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
+		Backend: registration(backend, backendTargetName(target.backend)),
 	}
 	if err := s.reclaimServingNamespace(ctx, target, in.DryRun, out); err != nil {
 		return nil, err
@@ -165,6 +165,9 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 		return nil, err
 	}
 	if err := applyAll(ctx, dyn, append(objs, backend), in.DryRun, out, s.budget(ctx, start)); err != nil {
+		return nil, err
+	}
+	if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
 		return nil, err
 	}
 	logApplied(ctx, "enable_model_serving", out, start)
@@ -702,17 +705,15 @@ func joinModels(models []detect.ServedModel) string {
 	return strings.Join(names, ", ")
 }
 
-// sliceRemovals names the slice release's objects and, when registered for
-// the cluster, the backend document.
+// sliceRemovals names the slice release's objects and the backend documents
+// registered for the cluster (backendsOf) — that cluster's only, every other
+// cluster's backend stays.
 func (s *Service) sliceRemovals(ctx context.Context, dyn dynamic.Interface, ns, cluster string) ([]objectRef, error) {
-	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
+	registered, err := backendsOf(ctx, dyn, s.cfg.ModelManagerNamespace, cluster)
 	if err != nil {
 		return nil, err
 	}
-	var targets []objectRef
-	if registered {
-		targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
-	}
+	targets := backendRefs(s.cfg.ModelManagerNamespace, registered)
 	name := compose.SliceReleaseName(cluster)
 	return append(targets, objectRef{compose.OCIRepositoryGVR, ns, name}, objectRef{HelmReleaseGVR, ns, name}), nil
 }

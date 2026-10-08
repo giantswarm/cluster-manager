@@ -2,6 +2,9 @@
   "cluster": "wc1",
   "namespace": "org-acme",
   "controlPlaneVersion": "v1.31.4",
+  "backend": {
+    "registered": false
+  },
   "nodePools": [
     {
       "name": "wc1-def00",

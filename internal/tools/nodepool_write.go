@@ -263,12 +263,22 @@ type WriteResult struct {
 
 // BackendRegistration is the backend document create_node_pool writes.
 type BackendRegistration struct {
-	Kind      string `json:"kind"`
+	Kind string `json:"kind"`
+	// Backend is the backend's name with model-manager — `kserve` for the
+	// installation's own cluster, `kserve-<cluster>` for a workload cluster —,
+	// the backend a model on the cluster is checked and loaded through.
+	Backend   string `json:"backend"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	// Target is the cluster the backend reaches: `local` for the
 	// installation's own cluster, else the cluster and its apiserver.
 	Target string `json:"target"`
+}
+
+// registration is the answer's account of the backend document doc, which
+// reaches target (backendTargetName; empty where the answer does not say).
+func registration(doc *unstructured.Unstructured, target string) *BackendRegistration {
+	return &BackendRegistration{Kind: compose.BackendKindKServe, Backend: compose.BackendOfConfigMap(doc.GetName()), Namespace: doc.GetNamespace(), Name: doc.GetName(), Target: target}
 }
 
 // ObjectAction is what happened to one object.
@@ -419,7 +429,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		ChartVersion: compose.ChartVersion(objs[0]), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
-		Backend: &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.GetNamespace(), Name: backend.GetName(), Target: backendTargetName(target.backend)},
+		Backend: registration(backend, backendTargetName(target.backend)),
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
 		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: claims, Cache: s.cacheSettingFor(slice, r.cache, pin, cacheWords),
 		PrefetchImages: r.prefetch.images, PrefetchNote: r.prefetch.note,
@@ -440,6 +450,9 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start); err != nil {
 			return nil, err
 		}
+		if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
+			return nil, err
+		}
 		logApplied(ctx, "create_node_pool", out, start)
 		return out, nil
 	}
@@ -458,6 +471,9 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start)); err != nil {
 		return nil, err
 	}
+	if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
+		return nil, err
+	}
 	logApplied(ctx, "create_node_pool", out, start)
 	return out, nil
 }
@@ -473,8 +489,8 @@ type poolReads struct {
 	pools    []string
 	operator operatorReads
 	slice    sliceReads
-	// backend is model-manager's kserve backend document as it exists on
-	// the installation, nil for none.
+	// backend is the document under the cluster's backend name as it exists
+	// on the installation, nil for none.
 	backend  *unstructured.Unstructured
 	fit      *PresetFit
 	warnings []string
@@ -527,7 +543,7 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	})
 	g.Go(func() (err error) {
 		defer timed(gctx, "registered backend")()
-		r.backend, err = existingBackend(gctx, dyn, s.cfg.ModelManagerNamespace)
+		r.backend, err = existingBackend(gctx, dyn, s.cfg.ModelManagerNamespace, t.backendConfigMap())
 		return err
 	})
 	g.Go(func() error {
@@ -620,23 +636,41 @@ func (s *Service) operatorRelease(r operatorReads, t target, facts compose.Clust
 	return operator, row.Name, compose.Operator(facts, row, pools, compose.OperatorOptions{DCGMExporter: s.cfg.OperatorDCGMExporter}), nil
 }
 
-// existingBackend is model-manager's kserve backend document as it exists on
-// the installation; nil when none is registered.
-func existingBackend(ctx context.Context, dyn dynamic.Interface, ns string) (*unstructured.Unstructured, error) {
-	cm, err := dyn.Resource(compose.ConfigMapGVR).Namespace(ns).Get(ctx, compose.BackendConfigMapName, metav1.GetOptions{})
+// sharedBackendConfigMap is the ConfigMap of the backend named `kserve`: the
+// installation's own cluster's, and — registered by a cluster-manager from
+// before one backend per cluster — a workload cluster's.
+var sharedBackendConfigMap = compose.BackendConfigMapName(compose.BackendKindKServe)
+
+// backendConfigMap is the ConfigMap of the target's own backend document.
+func (t target) backendConfigMap() string {
+	return compose.BackendConfigMapName(compose.BackendName(t.backend.Cluster, t.backend.OwnCluster))
+}
+
+// existingBackend is model-manager's backend document in the ConfigMap name
+// as it exists on the installation; nil when there is none.
+func existingBackend(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
+	cm, err := dyn.Resource(compose.ConfigMapGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", ns, compose.BackendConfigMapName, err)
+		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", ns, name, err)
 	}
 	return cm, nil
 }
 
+// registeredFor reports whether cm is a backend document cluster-manager
+// registered for cluster.
+func registeredFor(cm *unstructured.Unstructured, cluster string) bool {
+	return cm != nil && compose.OwnedBy(cm) && cm.GetLabels()[compose.LabelCluster] == cluster
+}
+
 // backendDocument renders the kserve backend document for the target — with
 // the shapes of the cluster's GPU pools by release name (backendPools) — and
-// refuses when model-manager's one kserve document (existing, nil for none)
-// is registered for another cluster.
+// refuses when the document under the target's backend name (existing, nil
+// for none) is registered for another cluster: only the shared `kserve`
+// name, which a cluster-manager from before one backend per cluster
+// registered for a workload cluster.
 func (s *Service) backendDocument(t target, pools map[string][]compose.InstanceShape, existing *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if t.backendErr != nil {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the kserve backend of %s cannot be registered with model-manager: %v", t.Cluster, t.backendErr)}
@@ -649,9 +683,33 @@ func (s *Service) backendDocument(t target, pools map[string][]compose.InstanceS
 		return backend, nil
 	}
 	if other := existing.GetLabels()[compose.LabelCluster]; compose.OwnedBy(existing) && other != t.Cluster {
-		return nil, &ErrRefused{Reason: fmt.Sprintf("model-manager's kserve backend (ConfigMap %s/%s) is registered for cluster %s: model-manager takes one kserve backend per installation — delete that cluster's last GPU pool first, which removes the registration, then re-run", backend.GetNamespace(), backend.GetName(), other)}
+		return nil, &ErrRefused{Reason: fmt.Sprintf("model-manager's backend %s (ConfigMap %s/%s) is registered for cluster %s, from before cluster-manager registered one backend per cluster: re-run create_node_pool for one of %s's pools, which registers its backend as %s and frees the name, then re-run", compose.BackendOfConfigMap(backend.GetName()), backend.GetNamespace(), backend.GetName(), other, other, compose.BackendName(other, false))}
 	}
 	return backend, nil
+}
+
+// retireSharedBackend removes the shared `kserve` document a cluster-manager
+// from before one backend per cluster registered for the cluster, once the
+// cluster's own document (written, a ConfigMap name) replaced it — so
+// model-manager never holds two backends for one cluster. Nothing goes when
+// the write was cut short (out.Partial): the shared document stays until the
+// re-run lands its replacement.
+func retireSharedBackend(ctx context.Context, dyn dynamic.Interface, ns, cluster, written string, dryRun bool, out *WriteResult) error {
+	if written == sharedBackendConfigMap || out.Partial {
+		return nil
+	}
+	cm, err := existingBackend(ctx, dyn, ns, sharedBackendConfigMap)
+	if err != nil || !registeredFor(cm, cluster) {
+		return err
+	}
+	act, err := deleteIfOwned(ctx, dyn, compose.ConfigMapGVR, ns, sharedBackendConfigMap, dryRun)
+	if err != nil {
+		return err
+	}
+	if act != nil {
+		out.Objects = append(out.Objects, *act)
+	}
+	return nil
 }
 
 // budget is when an apply that started at start must have answered: the
@@ -796,8 +854,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, err
 	}
 	if backend != nil {
-		out.Backend = &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.obj.GetNamespace(), Name: backend.obj.GetName(), Target: backendTargetName(t.backend)}
+		out.Backend = registration(backend.obj, backendTargetName(t.backend))
 		if err := td.apply(*backend); err != nil {
+			return nil, err
+		}
+		if err := retireSharedBackend(ctx, dyn, backend.obj.GetNamespace(), c.GetName(), backend.obj.GetName(), in.DryRun, out); err != nil {
 			return nil, err
 		}
 	}
@@ -895,14 +956,15 @@ func (s *Service) removalTargets(ctx context.Context, dyn dynamic.Interface, c *
 	return targets, slice, kept, last, nil
 }
 
-// remainingBackend plans the re-write of the kserve backend document for
-// the cluster's pools that remain once pool goes (backendPools): nil when
-// model-manager's document is not the one cluster-manager registered for the
-// cluster — a delete never registers one. Refused, before any write, when
+// remainingBackend plans the re-write of the cluster's kserve backend
+// document for the cluster's pools that remain once pool goes
+// (backendPools), under the cluster's own backend name: nil when
+// cluster-manager registered no document for the cluster — a delete never
+// registers one. Refused, before any write, when
 // the document cannot be rendered for the target.
 func (s *Service) remainingBackend(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, pool string) (*applyPlan, error) {
-	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, c.GetName())
-	if err != nil || !registered {
+	registered, err := backendsOf(ctx, dyn, s.cfg.ModelManagerNamespace, c.GetName())
+	if err != nil || len(registered) == 0 {
 		return nil, err
 	}
 	releases, err := ownPools(ctx, dyn, c.GetNamespace(), c.GetName())
@@ -973,18 +1035,32 @@ func lastPool(ctx context.Context, dyn dynamic.Interface, ns, cluster, release s
 	return true, nil
 }
 
-// backendRegisteredFor reports whether model-manager's kserve backend
-// document is the one cluster-manager wrote for cluster; another cluster's
-// document is left alone.
-func backendRegisteredFor(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (bool, error) {
-	cm, err := dyn.Resource(compose.ConfigMapGVR).Namespace(ns).Get(ctx, compose.BackendConfigMapName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return false, nil
+// backendsOf names the ConfigMaps of the kserve backend documents
+// cluster-manager registered for cluster: its own (`kserve-<cluster>`), and
+// the shared `kserve` one when it is the cluster's — the installation's own
+// cluster's, or a workload cluster's from before one backend per cluster.
+// Another cluster's documents are left alone.
+func backendsOf(ctx context.Context, dyn dynamic.Interface, ns, cluster string) ([]string, error) {
+	var names []string
+	for _, name := range []string{compose.BackendConfigMapName(compose.BackendName(cluster, false)), sharedBackendConfigMap} {
+		cm, err := existingBackend(ctx, dyn, ns, name)
+		if err != nil {
+			return nil, err
+		}
+		if registeredFor(cm, cluster) {
+			names = append(names, name)
+		}
 	}
-	if err != nil {
-		return false, fmt.Errorf("get ConfigMap %s/%s: %w", ns, compose.BackendConfigMapName, err)
+	return names, nil
+}
+
+// backendRefs are the backend documents' ConfigMaps to delete.
+func backendRefs(ns string, names []string) []objectRef {
+	refs := make([]objectRef, 0, len(names))
+	for _, name := range names {
+		refs = append(refs, objectRef{compose.ConfigMapGVR, ns, name})
 	}
-	return compose.OwnedBy(cm) && cm.GetLabels()[compose.LabelCluster] == cluster, nil
+	return refs
 }
 
 // checkMode refuses a mode the tool or this server does not offer. Commit

@@ -116,8 +116,11 @@ func (s *Service) commitDelete(ctx context.Context, dyn dynamic.Interface, c *un
 		return err
 	}
 	if backend != nil {
-		out.Backend = &BackendRegistration{Kind: compose.BackendKindKServe, Namespace: backend.obj.GetNamespace(), Name: backend.obj.GetName()}
+		out.Backend = registration(backend.obj, "")
 		if err := applyAll(ctx, dyn, []*unstructured.Unstructured{backend.obj}, in.DryRun, out, s.budget(ctx, start)); err != nil {
+			return err
+		}
+		if err := retireSharedBackend(ctx, dyn, backend.obj.GetNamespace(), c.GetName(), backend.obj.GetName(), in.DryRun, out); err != nil {
 			return err
 		}
 	}
