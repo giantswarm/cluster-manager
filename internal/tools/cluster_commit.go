@@ -161,7 +161,7 @@ func (s *Service) commitDeleteCluster(ctx context.Context, dyn dynamic.Interface
 		if err != nil {
 			return err
 		}
-		td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+		td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, 0))
 		if err := td.deleteAll(plans); err != nil {
 			return err
 		}

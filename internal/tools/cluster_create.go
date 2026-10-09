@@ -324,12 +324,12 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	if in.Mode == ModeCommit {
 		err = s.commitCreateCluster(ctx, dyn, spec, objs, in.DryRun, out)
 	} else {
-		err = applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start))
+		err = applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start, 0))
 	}
 	if err != nil {
 		return nil, err
 	}
-	logApplied(ctx, "create_cluster", out, start)
+	logApplied(ctx, "create_cluster", out, start, 0)
 	return out, nil
 }
 

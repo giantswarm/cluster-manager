@@ -164,13 +164,13 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err := healStrandedConfigs(ctx, target, in.DryRun, out); err != nil {
 		return nil, err
 	}
-	if err := applyAll(ctx, dyn, append(objs, backend), in.DryRun, out, s.budget(ctx, start)); err != nil {
+	if err := applyAll(ctx, dyn, append(objs, backend), in.DryRun, out, s.budget(ctx, start, target.warmup)); err != nil {
 		return nil, err
 	}
 	if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
 		return nil, err
 	}
-	logApplied(ctx, "enable_model_serving", out, start)
+	logApplied(ctx, "enable_model_serving", out, start, target.warmup)
 	return out, nil
 }
 
@@ -224,7 +224,7 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	if err != nil {
 		return nil, err
 	}
-	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, t.warmup))
 	if err := s.servingTeardown(td, t, in.Force); err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 		}
 	}
 	td.finish()
-	logApplied(ctx, "disable_model_serving", out, start)
+	logApplied(ctx, "disable_model_serving", out, start, t.warmup)
 	return out, nil
 }
 

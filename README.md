@@ -42,8 +42,9 @@ An apply answers within the aggregator's deadline for a tool call: everything it
 once and concurrently before anything is composed, the objects are planned together (every
 refusal before the first write) and land one after the other — `create_node_pool`: pool, slice,
 the slice's backend registration, operator, the objects that do not exist yet before the updates.
-A write there is no budget left for (`--apply-budget`, default 8 s; the request's own deadline when
-earlier) is not started: the answer comes back with `partial: true`, the objects not reached as
+A write there is no budget left for (`--apply-budget`, default 8 s, counted from the call's start
+without the warm-up of the workload cluster's client — its first answer, the connection a call after a
+start opens cold —; the request's own deadline when earlier) is not started: the answer comes back with `partial: true`, the objects not reached as
 `pending` and `nextStep` naming the re-run, which writes them first. The deletes take the same
 budget: `delete_node_pool`'s last pool and `disable_model_serving` remove the serving slice in
 order — the llm-d controller's child release; its well-known `LLMInferenceServiceConfig`s once no

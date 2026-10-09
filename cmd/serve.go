@@ -16,7 +16,6 @@ import (
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/api"
 	"github.com/giantswarm/cluster-manager/internal/compose"
@@ -167,12 +166,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		k := clients.For(ctx)
 		return tools.Clients{Dynamic: k.Dynamic, Discovery: k.Discovery}
 	}
-	targetsFor := func(ctx context.Context, apiServer string, ca []byte) (dynamic.Interface, error) {
+	targetsFor := func(ctx context.Context, apiServer string, ca []byte) (tools.Clients, error) {
 		target, err := clients.ForTarget(ctx, apiServer, ca)
 		if err != nil {
-			return nil, err
+			return tools.Clients{}, err
 		}
-		return target.Dynamic, nil
+		return tools.Clients{Dynamic: target.Dynamic, Discovery: target.Discovery}, nil
 	}
 	toolsCfg := tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget}
 	if toolsCfg.ClusterOIDC, err = o.clusterOIDC(); err != nil {

@@ -1,10 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,6 +342,30 @@ func TestDeleteNodePool(t *testing.T) {
 
 	_, err = svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc2", Name: "gpu-l4", Mode: ModeApply, Force: true})
 	assertRefused(t, err, "was not created by cluster-manager")
+}
+
+// TestDeleteNodePoolWarmsTheClusterOutsideTheBudget
+// (giantswarm/cluster-manager#207): the first call after a start reaches the
+// workload cluster over a cold connection, which alone takes longer than the
+// whole write budget. The warm-up is the target's, not the budget's: the
+// pool's objects are written in the same call, and the call's log line names
+// the warm-up apart from the call's duration.
+func TestDeleteNodePoolWarmsTheClusterOutsideTheBudget(t *testing.T) {
+	const cold = 2 * time.Second
+	budget := writeReserve + 700*time.Millisecond
+	require.Greater(t, cold, budget, "the warm-up alone exceeds the budget")
+	lab := newLab(t, "installation.yaml").coldFor(wc1APIServer, cold)
+	svc := lab.service(Config{Installation: "gazelle", ApplyBudget: budget})
+	var logs bytes.Buffer
+	defer slog.SetDefault(slog.Default())
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	out, err := svc.DeleteNodePool(context.Background(), DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply})
+	require.NoError(t, err)
+	assert.False(t, out.Partial, "the writes had the whole budget after the warm-up")
+	assert.Equal(t, []string{"delete", "delete", "delete", "delete"}, actions(out))
+	assert.Empty(t, poolClaims(t, lab, "wc1-gpu-a10g"))
+	assert.Regexp(t, `msg="delete_node_pool done" .* written=4 partial=false duration=2[.\d]*s warmup=2[.\d]*s`, logs.String())
 }
 
 // TestDeleteNodePoolIgnoresTheMachinePoolsLingeringProviderIDs

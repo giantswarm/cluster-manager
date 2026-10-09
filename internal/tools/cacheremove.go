@@ -104,7 +104,7 @@ func (s *Service) RemoveModelCache(ctx context.Context, in RemoveModelCacheInput
 		return nil, heldRefusal(cluster, held)
 	}
 	out := &WriteResult{Cluster: cluster, Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}, CacheClaims: read.claims, RemovedClaims: selected}
-	budget := s.budget(ctx, start)
+	budget := s.budget(ctx, start, t.warmup)
 	if sliceOff {
 		if err := s.sliceWithoutCache(ctx, dyn, c, t, reads, in.DryRun, out, budget); err != nil {
 			return nil, err
@@ -122,7 +122,7 @@ func (s *Service) RemoveModelCache(ctx context.Context, in RemoveModelCacheInput
 	}
 	td.finish()
 	out.Cache = &CacheSetting{Note: removalNote(cluster, reads, sliceOff, selected)}
-	logApplied(ctx, "remove_model_cache", out, start)
+	logApplied(ctx, "remove_model_cache", out, start, t.warmup)
 	return out, nil
 }
 

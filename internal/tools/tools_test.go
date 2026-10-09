@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -165,6 +167,10 @@ const (
 type lab struct {
 	installation dynamic.Interface
 	targets      map[string]dynamic.Interface
+	// discoveries answers a cluster's version — the warm-up of its client
+	// (Service.target) —, per apiserver; a cluster without one answers at once.
+	discoveries map[string]*discoveryfake.FakeDiscovery
+	mu          sync.Mutex // discoveries: list_clusters reads its clusters at once
 	// zones is the DNS the targets' ClusterIssuer discovers its DNS-01
 	// zone in: every cluster's base domain its own zone.
 	zones *fakeZones
@@ -228,6 +234,33 @@ func (z *fakeZones) QuerySOA(_ context.Context, fqdn string) (dnsmessage.RCode, 
 	return dnsmessage.RCodeNameError, nil, nil
 }
 
+// discovery is the discovery of the cluster at apiServer.
+func (l *lab) discovery(apiServer string) *discoveryfake.FakeDiscovery {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.discoveries == nil {
+		l.discoveries = map[string]*discoveryfake.FakeDiscovery{}
+	}
+	d, ok := l.discoveries[apiServer]
+	if !ok {
+		d = &discoveryfake.FakeDiscovery{Fake: &k8stesting.Fake{}}
+		l.discoveries[apiServer] = d
+	}
+	return d
+}
+
+// coldFor makes the cluster at apiServer take d to answer its first
+// request — the version its client is warmed with —, the way a cold
+// connection does after a start; every later request answers at once.
+func (l *lab) coldFor(apiServer string, d time.Duration) *lab {
+	var once sync.Once
+	l.discovery(apiServer).PrependReactor("get", "version", func(k8stesting.Action) (bool, runtime.Object, error) {
+		once.Do(func() { time.Sleep(d) })
+		return false, nil, nil
+	})
+	return l
+}
+
 // unreachable makes the cluster at apiServer unreadable as the caller.
 func (l *lab) unreachable(apiServer string) *lab {
 	delete(l.targets, apiServer)
@@ -251,12 +284,12 @@ func (l *lab) service(cfg Config, opts ...Option) *Service {
 	}
 	return New(
 		func(context.Context) Clients { return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)} },
-		func(_ context.Context, apiServer string, _ []byte) (dynamic.Interface, error) {
+		func(_ context.Context, apiServer string, _ []byte) (Clients, error) {
 			dyn, ok := l.targets[apiServer]
 			if !ok {
-				return nil, errors.New("connection refused")
+				return Clients{}, errors.New("connection refused")
 			}
-			return dyn, nil
+			return Clients{Dynamic: dyn, Discovery: l.discovery(apiServer)}, nil
 		},
 		cfg,
 		append([]Option{WithSOAQuerier(l.zones)}, opts...)...,

@@ -197,12 +197,12 @@ func (s *Service) retireSliceLeftovers(ctx context.Context, dyn dynamic.Interfac
 		return nil, nil
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: mode, DryRun: dryRun, Objects: []ObjectAction{}}
-	td := newTeardown(ctx, dyn, dryRun, out, s.budget(ctx, start))
+	td := newTeardown(ctx, dyn, dryRun, out, s.budget(ctx, start, t.warmup))
 	if err := s.retireLeftSlice(td, t); err != nil {
 		return nil, err
 	}
 	td.finish()
-	logApplied(ctx, tool, out, start)
+	logApplied(ctx, tool, out, start, t.warmup)
 	return out, nil
 }
 
