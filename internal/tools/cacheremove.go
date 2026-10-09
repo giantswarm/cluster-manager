@@ -270,7 +270,7 @@ func (s *Service) sliceWithoutCache(ctx context.Context, dyn dynamic.Interface, 
 	if err != nil {
 		return err
 	}
-	out.Serving, out.Slice = serving, slice
+	out.Serving, out.Slice = &serving, slice
 	return applyAll(ctx, dyn, objs, dryRun, out, budget)
 }
 

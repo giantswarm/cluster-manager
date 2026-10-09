@@ -76,12 +76,6 @@
       "action": "would-delete"
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
-  "serving": {
-    "status": ""
-  },
   "lastPool": true,
   "warnings": [
     "3 LLMInferenceServiceConfig(s) in agent-platform on wc1 would be removed by cluster-manager with serving.kserve.io/llmisvcconfig-finalizer taken off once the llmisvc controller is gone (its webhook denies every delete while it runs; nothing clears the finalizer once it is gone): kserve-config-llm-decode-worker-data-parallel, kserve-config-llm-scheduler, kserve-config-llm-template"

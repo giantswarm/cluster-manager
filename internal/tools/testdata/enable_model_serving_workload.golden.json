@@ -216,9 +216,6 @@
       }
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
   "serving": {
     "status": "absent"
   },

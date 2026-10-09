@@ -213,7 +213,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	ctx := context.Background()
 	out, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
 	require.NoError(t, err)
-	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.GPUOperator)
+	assert.Equal(t, &detect.Component{Status: detect.StatusAbsent}, out.GPUOperator)
 	assert.Equal(t, compose.RowFlatcar.Name, out.OperatorRow)
 	assert.Equal(t, []string{"create", "create", "create", "create", "create", "create", "create", "create"}, actions(out), "pool source, Secret, release; slice source, release; backend; operator source, release")
 
@@ -228,7 +228,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 
 	slice := out.Manifests[4]
 	assert.Equal(t, "wc1-agent-platform", slice["metadata"].(map[string]any)["name"])
-	assert.Equal(t, detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
+	assert.Equal(t, &detect.Component{Status: detect.StatusAbsent}, out.Serving, "nothing served on wc1: the slice is composed")
 	assert.Equal(t, &SliceRelease{Name: "wc1-agent-platform", Namespace: "org-acme", ChartVersion: "4.85.0", Domain: "wc1.acme.example.io", ModelsHost: "models.wc1.acme.example.io", JWKS: "https://dex.gazelle.example.io/keys", Certificate: &detect.Issuance{Issuer: compose.DefaultCertificateIssuer, Solver: detect.SolverDNS01, Zone: "acme.example.io."}, GatewayAPI: GatewayAPICRDs{Version: "v1.6.1", Note: "wc1 serves Gateway API v1.6.1 (standard channel) already: the slice composes no Gateway API CRDs and leaves them as they are"}}, out.Slice, "wc1 has two pools now: the predictors are placed by their GPU request alone")
 	target, _, _ := unstructured.NestedString(slice, "spec", "values", "gitops", "target", "kubeConfig", "secretRef", "name")
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")

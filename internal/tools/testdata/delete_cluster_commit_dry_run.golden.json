@@ -12,12 +12,6 @@
       "action": "would-delete"
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
-  "serving": {
-    "status": ""
-  },
   "withCluster": [
     "org-acme/dev01-agent-platform",
     "org-acme/dev01-cert-exporter",

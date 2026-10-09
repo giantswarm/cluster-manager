@@ -154,7 +154,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	}
 	out := &WriteResult{
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{},
-		Serving: serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin, s.cacheFacts(ctx, c.GetName(), infra.region, reads, slice, pin)),
+		Serving: &serving, Slice: slice, Cache: s.cacheSettingFor(slice, claims, pin, s.cacheFacts(ctx, c.GetName(), infra.region, reads, slice, pin)),
 		CacheClaim: pin.claim, CacheClaims: claims.claims,
 		Backend: registration(backend, backendTargetName(target.backend)),
 	}
