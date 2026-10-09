@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
@@ -29,6 +30,10 @@ const (
 	// Gateway API project stamps on every CRD of its bundle.
 	gatewayAPIBundleVersion = GatewayAPIGroup + "/bundle-version"
 	gatewayAPIChannel       = GatewayAPIGroup + "/channel"
+	// AgentgatewayControllerName is the controller of the GatewayClass the
+	// agentgateway controller creates for itself at startup: an object of no
+	// release, which outlives the controller's uninstall.
+	AgentgatewayControllerName = "agentgateway.dev/agentgateway"
 )
 
 // GatewayAPI is the Gateway API as the target serves it: whether its Gateway
@@ -73,8 +78,10 @@ func ReadGatewayAPI(ctx context.Context, reader dynamic.Interface) (GatewayAPI, 
 // ForeignGatewayAPIObjects names the objects of the Gateway API kinds crds on
 // the target that none of the slice's child releases rendered — a release
 // of the installation's namespace whose name starts with `<cluster>-`
-// (Flux stamps its labels on every object of a release): removing the CRDs
-// would take them along. A kind the target does not serve has none.
+// (Flux stamps its labels on every object of a release) — nor the slice's
+// agentgateway created for itself (the GatewayClass of
+// AgentgatewayControllerName): removing the CRDs would take them along. A
+// kind the target does not serve has none.
 func ForeignGatewayAPIObjects(ctx context.Context, reader dynamic.Interface, crds []string, namespace, cluster string) ([]string, error) {
 	var foreign []string
 	for _, name := range crds {
@@ -93,6 +100,12 @@ func ForeignGatewayAPIObjects(ctx context.Context, reader dynamic.Interface, crd
 		for _, o := range list.Items {
 			labels := o.GetLabels()
 			if labels[LabelFluxReleaseNamespace] == namespace && strings.HasPrefix(labels[LabelFluxReleaseName], cluster+"-") {
+				continue
+			}
+			if controller, _, _ := unstructured.NestedString(o.Object, "spec", "controllerName"); o.GetKind() == "GatewayClass" && controller == AgentgatewayControllerName {
+				// The slice's agentgateway made it, not a release
+				// (giantswarm/cluster-manager#203); a Gateway of the class
+				// someone else made is named on its own.
 				continue
 			}
 			ref := o.GetName()

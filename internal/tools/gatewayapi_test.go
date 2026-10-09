@@ -11,12 +11,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
 	"github.com/giantswarm/cluster-manager/internal/detect"
 )
+
+var gatewayClassGVR = schema.GroupVersionResource{Group: detect.GatewayAPIGroup, Version: "v1", Resource: "gatewayclasses"}
 
 func gatewayAPICRDsOn(t *testing.T, manifest map[string]any) bool {
 	t.Helper()
@@ -90,6 +93,10 @@ func TestTeardownRemovesTheGatewayAPICRDs(t *testing.T) {
 	}
 
 	l, svc := composed(t)
+	// The GatewayClass agentgateway's controller created for itself at
+	// startup — of no release, it outlives the uninstall — is the slice's
+	// (giantswarm/cluster-manager#203).
+	l.add(t, l.targets[wc1APIServer], "targets/agentgateway-class.yaml")
 	out, err := svc.DisableModelServing(ctx, serving("wc1", false))
 	require.NoError(t, err)
 	var deleted []string
