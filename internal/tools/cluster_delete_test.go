@@ -87,7 +87,7 @@ func TestDeleteClusterAppliesThenRemovesLeftovers(t *testing.T) {
 	got, err := svc.DeleteCluster(ctx, dev01Delete())
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"configmaps agent-platform/model-backend-kserve",
+		"configmaps agent-platform/model-backend-kserve-dev01",
 		"helmreleases org-acme/dev01",
 		"ocirepositories org-acme/dev01",
 		"configmaps org-acme/dev01-values",

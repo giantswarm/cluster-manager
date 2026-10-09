@@ -4,7 +4,7 @@ data:
     apiVersion: agent-platform.giantswarm.io/v1alpha1
     kind: ModelBackend
     metadata:
-      name: kserve
+      name: kserve-wc1
     spec:
       kind: kserve
       kserve:
@@ -47,5 +47,5 @@ metadata:
     agent-platform.giantswarm.io/model-backend-source: cluster-manager
     app.kubernetes.io/managed-by: cluster-manager
     giantswarm.io/cluster: wc1
-  name: model-backend-kserve
+  name: model-backend-kserve-wc1
   namespace: agent-platform

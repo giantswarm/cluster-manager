@@ -85,7 +85,7 @@ func wc1PoolWrites() []string {
 		"create HelmRelease wc1-gpu-l4",
 		"create OCIRepository " + compose.SliceReleaseName("wc1"),
 		"create HelmRelease " + compose.SliceReleaseName("wc1"),
-		"create ConfigMap " + compose.BackendConfigMapName,
+		"create ConfigMap " + wc1Backend,
 		"create OCIRepository " + compose.OperatorReleaseName("wc1"),
 		"create HelmRelease " + compose.OperatorReleaseName("wc1"),
 	}
@@ -109,13 +109,13 @@ func TestCreateNodePoolWriteOrder(t *testing.T) {
 
 	// The backend registration is gone and the pool grows: the missing
 	// object is written before the update.
-	require.NoError(t, l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Delete(ctx, compose.BackendConfigMapName, metav1.DeleteOptions{}))
+	require.NoError(t, l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Delete(ctx, wc1Backend, metav1.DeleteOptions{}))
 	bigger := l4("wc1", "gpu-l4", false)
 	bigger.Pool.MaxGPUs = 8
 	log.reset()
 	again, err := svc.CreateNodePool(ctx, bigger)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"create ConfigMap " + compose.BackendConfigMapName, "update HelmRelease wc1-gpu-l4"}, log.seen(), "what is missing first, then the updates")
+	assert.Equal(t, []string{"create ConfigMap " + wc1Backend, "update HelmRelease wc1-gpu-l4"}, log.seen(), "what is missing first, then the updates")
 	assert.Equal(t, []string{"unchanged", "unchanged", "update", "unchanged", "unchanged", "create", "unchanged", "unchanged"}, actions(again), "the answer keeps the composed order")
 	assert.False(t, again.Partial)
 }
@@ -206,7 +206,7 @@ func TestCreateNodePoolFailedWriteLeavesTheBackendRegistered(t *testing.T) {
 	assert.Equal(t, wc1PoolWrites()[:6], log.seen(), "six writes landed before the failure")
 	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, compose.SliceReleaseName("wc1"), metav1.GetOptions{})
 	require.NoError(t, err, "the slice's HelmRelease landed")
-	_, err = l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Get(ctx, compose.BackendConfigMapName, metav1.GetOptions{})
+	_, err = l.installation.Resource(ConfigMapGVR).Namespace("agent-platform").Get(ctx, wc1Backend, metav1.GetOptions{})
 	require.NoError(t, err, "its backend registration right after it: model-manager knows the slice")
 
 	fail.Store(false)

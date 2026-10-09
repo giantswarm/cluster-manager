@@ -31,6 +31,9 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files from the current output")
 
+// wc1Backend is the ConfigMap of the workload cluster wc1's kserve backend.
+const wc1Backend = "model-backend-kserve-wc1"
+
 // cacheOn is the cache argument the fixtures were written with: on. Without
 // it a first slice serves without a cache (TestCreateNodePoolCacheDefault).
 func cacheOn() *bool {

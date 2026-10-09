@@ -186,9 +186,13 @@ type Count struct {
 // tri-state: true or false when the document was read, omitted with Error
 // set when it could not be read — never a bare false for a failed read.
 type BackendState struct {
-	Registered *bool  `json:"registered,omitempty"`
-	Namespace  string `json:"namespace,omitempty"`
-	Name       string `json:"name,omitempty"`
+	Registered *bool `json:"registered,omitempty"`
+	// Backend is the backend's name with model-manager (`kserve` for the
+	// installation's own cluster, `kserve-<cluster>` for a workload
+	// cluster); Namespace and Name are its document's ConfigMap.
+	Backend   string `json:"backend,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 	// Error is the read failure; whether the document exists is unknown.
 	Error string `json:"error,omitempty"`
 }

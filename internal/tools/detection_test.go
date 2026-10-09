@@ -234,7 +234,7 @@ func TestCreateNodePoolComposesTheOperator(t *testing.T) {
 	assert.Equal(t, "wc1-kubeconfig", target, "the target knob: the components install into the workload cluster")
 
 	backend := out.Manifests[5]
-	assert.Equal(t, &BackendRegistration{Kind: "kserve", Namespace: "agent-platform", Name: "model-backend-kserve", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
+	assert.Equal(t, &BackendRegistration{Kind: "kserve", Backend: "kserve-wc1", Namespace: "agent-platform", Name: "model-backend-kserve-wc1", Target: "wc1 (" + wc1APIServer + ")"}, out.Backend)
 	doc, _, _ := unstructured.NestedString(backend, "data", "backend.yaml")
 	assert.Contains(t, doc, "apiServer: "+wc1APIServer)
 	assert.Contains(t, doc, "-----BEGIN CERTIFICATE-----", "the CA from the kubeconfig's cluster section")
@@ -288,15 +288,6 @@ func TestCreateNodePoolRefusesBeforeWriting(t *testing.T) {
 		assertNothingLanded(t, l, "wc1-gpu-l4")
 	})
 
-	t.Run("backend registered for another cluster", func(t *testing.T) {
-		l := newLab(t, "installation.yaml")
-		svc := l.service(Config{Installation: "gazelle"})
-		_, err := svc.CreateNodePool(ctx, l4("wc1", "gpu-l4", false))
-		require.NoError(t, err)
-		_, err = svc.CreateNodePool(ctx, l4("wc2", "gpu-l4b", false))
-		assertRefused(t, err, "is registered for cluster wc1")
-		assertNothingLanded(t, l, "wc2-gpu-l4b")
-	})
 }
 
 // TestDeleteLastPoolRemovesOperatorAndBackend: with pools gpu-a10g (fixture)
@@ -323,7 +314,7 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 	}
 	assert.Equal(t, []string{
 		"HelmRelease org-acme/wc1-gpu-operator", "OCIRepository org-acme/wc1-gpu-operator",
-		"ConfigMap agent-platform/model-backend-kserve",
+		"ConfigMap agent-platform/model-backend-kserve-wc1",
 		"OCIRepository org-acme/wc1-agent-platform", "HelmRelease org-acme/wc1-agent-platform",
 		"OCIRepository org-acme/wc1-gpu-a10g", "HelmRelease org-acme/wc1-gpu-a10g",
 	}, names, "the operator, the backend registration, the slice, and the pool last — its release the very last, the re-run's anchor")

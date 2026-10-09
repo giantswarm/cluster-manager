@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -13,10 +14,11 @@ import (
 // namespace, found by label, carrying a ModelBackend document.
 const (
 	// BackendKindKServe is the backend cluster-manager registers: the
-	// serving cluster's KServe.
+	// serving cluster's KServe. It is also the backend's name for the
+	// installation's own cluster (BackendName).
 	BackendKindKServe = "kserve"
-	// BackendConfigMapName names the one document per kind.
-	BackendConfigMapName = "model-backend-" + BackendKindKServe
+	// BackendConfigMapPrefix prefixes a backend's name to its ConfigMap's.
+	BackendConfigMapPrefix = "model-backend-"
 	// BackendDocumentKey is the ConfigMap key holding the document.
 	BackendDocumentKey = "backend.yaml"
 	// LabelBackend is the selector model-manager watches.
@@ -30,6 +32,29 @@ const (
 	// runs on: the installation's own cluster needs no apiserver or CA.
 	BackendTargetLocal = "local"
 )
+
+// BackendName is the name the cluster's kserve backend is registered under
+// with model-manager, one backend per serving cluster
+// (giantswarm/cluster-manager#185): `kserve` for the installation's own
+// cluster, `kserve-<cluster>` for a workload cluster, so pools on two
+// workload clusters of one installation serve through a backend each.
+func BackendName(cluster string, ownCluster bool) string {
+	if ownCluster {
+		return BackendKindKServe
+	}
+	return BackendKindKServe + "-" + cluster
+}
+
+// BackendConfigMapName is the ConfigMap holding the document of the backend
+// named name: `model-backend-<name>`.
+func BackendConfigMapName(name string) string {
+	return BackendConfigMapPrefix + name
+}
+
+// BackendOfConfigMap is the backend name a document's ConfigMap carries.
+func BackendOfConfigMap(configMap string) string {
+	return strings.TrimPrefix(configMap, BackendConfigMapPrefix)
+}
 
 // ConfigMapGVR is the backend document's resource.
 var ConfigMapGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
@@ -94,9 +119,10 @@ func documentShapes(shapes []InstanceShape) []documentShape {
 	return out
 }
 
-// KServeBackend renders the kserve backend document into model-manager's
-// namespace, labelled with the cluster it registers so the last pool's
-// deletion finds it. pools are the instance shapes of the cluster's GPU pools
+// KServeBackend renders the cluster's kserve backend document into
+// model-manager's namespace under the cluster's backend name (BackendName),
+// labelled with the cluster it registers so the last pool's deletion finds
+// it. pools are the instance shapes of the cluster's GPU pools
 // by release name (the value of the node label giantswarm.io/machine-pool):
 // what model-manager's fit check judges a model against while a pool has no
 // node, and load_model refuses what no size hosts (model-manager 0.23.7,
@@ -136,10 +162,11 @@ func KServeBackend(namespace string, t BackendTarget, pools map[string][]Instanc
 		}
 		kserve["gpuPools"] = keyed
 	}
+	name := BackendName(t.Cluster, t.OwnCluster)
 	doc := map[string]any{
 		"apiVersion":  BackendAPIVersion,
 		"kind":        BackendKind,
-		fieldMetadata: map[string]any{"name": BackendKindKServe},
+		fieldMetadata: map[string]any{"name": name},
 		"spec": map[string]any{
 			"kind":   BackendKindKServe,
 			"source": ManagedBy,
@@ -151,7 +178,7 @@ func KServeBackend(namespace string, t BackendTarget, pools map[string][]Instanc
 		return nil, fmt.Errorf("encode backend document: %w", err)
 	}
 	metadata := map[string]any{
-		"name":      BackendConfigMapName,
+		"name":      BackendConfigMapName(name),
 		"namespace": namespace,
 		"labels": map[string]any{
 			LabelBackend:       "true",

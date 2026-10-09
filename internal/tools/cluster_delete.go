@@ -127,14 +127,11 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if hr.GetDeletionTimestamp() == nil && !slices.Contains(hr.GetFinalizers(), fluxFinalizer) {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s carries no %s: helm-controller has not reconciled it since its last write, and deleting it now removes it without uninstalling the cluster — its Cluster and cloud resources would stay; re-run once helm-controller has reconciled it (within its interval, or at once with `flux reconcile helmrelease -n %s %s`)", ns, in.Name, fluxFinalizer, ns, in.Name)}
 	}
-	var targets []objectRef
-	registered, err := backendRegisteredFor(ctx, dyn, s.cfg.ModelManagerNamespace, in.Name)
+	registered, err := backendsOf(ctx, dyn, s.cfg.ModelManagerNamespace, in.Name)
 	if err != nil {
 		return nil, err
 	}
-	if registered {
-		targets = append(targets, objectRef{compose.ConfigMapGVR, s.cfg.ModelManagerNamespace, compose.BackendConfigMapName})
-	}
+	targets := backendRefs(s.cfg.ModelManagerNamespace, registered)
 	if merged == nil {
 		targets = append(targets,
 			objectRef{HelmReleaseGVR, ns, in.Name},
