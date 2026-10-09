@@ -156,7 +156,7 @@ func TestDeleteClusterRemovesOrphanSliceChildren(t *testing.T) {
 	for _, gone := range []struct {
 		gvr  schema.GroupVersionResource
 		name string
-	}{{HelmReleaseGVR, "dev01"}, {ClusterGVR, "dev01"}, {HelmReleaseGVR, "dev01-cert-exporter"}, {compose.OCIRepositoryGVR, "dev01-cert-exporter"}, {HelmReleaseGVR, "dev01-gpu"}, {HelmReleaseGVR, "dev01-gpu-operator"}, {HelmReleaseGVR, "dev01-agent-platform"}} {
+	}{{HelmReleaseGVR, "dev01"}, {ClusterGVR, "dev01"}, {HelmReleaseGVR, "dev01-cert-exporter"}, {compose.OCIRepositoryGVR, "dev01-cert-exporter"}, {HelmReleaseGVR, "dev01-gpu"}, {HelmReleaseGVR, "dev01-gpu-operator"}, {HelmReleaseGVR, "dev01-agent-platform"}, {compose.OCIRepositoryGVR, "dev01"}, {ConfigMapGVR, "dev01-values"}} {
 		require.NoError(t, l.installation.Resource(gone.gvr).Namespace("org-acme").Delete(ctx, gone.name, metav1.DeleteOptions{}))
 	}
 	releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
