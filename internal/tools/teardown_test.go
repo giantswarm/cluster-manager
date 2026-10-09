@@ -137,7 +137,12 @@ func fluxUninstallsController(t *testing.T, l *lab, look int32) {
 // renders them (owned through Flux's labels, not cluster-manager's).
 func servingLab(t *testing.T, target string) (*lab, *Service) {
 	t.Helper()
-	l := newLab(t, "installation.yaml").target(t, wc1APIServer, target).finalizing(t, wc1APIServer)
+	return servingLabOf(t, newLab(t, "installation.yaml").target(t, wc1APIServer, target).finalizing(t, wc1APIServer))
+}
+
+// servingLabOf is servingLab on a lab prepared by the caller.
+func servingLabOf(t *testing.T, l *lab) (*lab, *Service) {
+	t.Helper()
 	svc := l.service(Config{Installation: "gazelle"})
 	ctx := context.Background()
 	_, err := svc.EnableModelServing(ctx, serving("wc1", false))
