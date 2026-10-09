@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -19,12 +21,12 @@ import (
 // kubeconfigSecretKey is the key CAPI writes the kubeconfig under.
 const kubeconfigSecretKey = "value"
 
-// TargetClientsFor returns the dynamic client a call uses to read a
-// workload cluster: its apiserver and CA from the cluster's kubeconfig
-// Secret, the identity the caller's own forwarded token — never the
-// kubeconfig's credentials (the plan's caller-only rule). An error means the
-// target cannot be read as the caller; detection then reports unknown.
-type TargetClientsFor func(ctx context.Context, apiServer string, caBundle []byte) (dynamic.Interface, error)
+// TargetClientsFor returns the clients a call uses to read a workload
+// cluster: its apiserver and CA from the cluster's kubeconfig Secret, the
+// identity the caller's own forwarded token — never the kubeconfig's
+// credentials (the plan's caller-only rule). An error means the target cannot
+// be read as the caller; detection then reports unknown.
+type TargetClientsFor func(ctx context.Context, apiServer string, caBundle []byte) (Clients, error)
 
 // target is a cluster as the detection and the backend registration reach
 // it: the installation's own cluster is read through the installation's
@@ -36,10 +38,22 @@ type target struct {
 	// backendErr says why the backend cannot be registered (no kubeconfig
 	// Secret, no cluster section in it).
 	backendErr error
+	// warmup is how long reaching the workload cluster took: its kubeconfig
+	// Secret, the client and the first answer of its apiserver — connection,
+	// TLS and the caller's token accepted. A write call's budget does not
+	// count it (Service.budget), and its log line names it apart.
+	warmup time.Duration
 }
 
-// target resolves a Cluster to its detection target and backend target.
+// target resolves a Cluster to its detection target and backend target. A
+// workload cluster's client is warmed before the target is handed out: one
+// version request, so the reads after it go over an established connection
+// and the time a cold one takes is the target's warmup rather than the
+// reads' (giantswarm/cluster-manager#207). The warm-up is not cut short: a
+// connection abandoned half-way would leave the next call as cold; the
+// request's deadline and client-go's dial and TLS timeouts bound it.
 func (s *Service) target(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured) target {
+	start := time.Now()
 	t := target{
 		Target:  detect.Target{Cluster: c.GetName(), Namespace: c.GetNamespace(), SliceNamespace: compose.SliceWorkloadNamespace, Installation: dyn},
 		backend: compose.BackendTarget{Cluster: c.GetName(), Organization: organization(c), ServingNamespace: s.cfg.ServingNamespace, DiscoveryNamespace: compose.SliceWorkloadNamespace},
@@ -62,13 +76,26 @@ func (s *Service) target(ctx context.Context, dyn dynamic.Interface, c *unstruct
 		t.Reason = "reading workload clusters is not configured on this server"
 		return t
 	}
-	reader, err := s.targets(ctx, apiServer, ca)
+	k, err := s.targets(ctx, apiServer, ca)
+	if err == nil {
+		err = warm(ctx, k.Discovery)
+	}
+	t.warmup = time.Since(start)
 	if err != nil {
 		t.Reason = fmt.Sprintf("cluster %s not readable as you through %s: %v", c.GetName(), apiServer, err)
 		return t
 	}
-	t.Reader = reader
+	t.Reader = k.Dynamic
 	return t
+}
+
+// warm asks a workload cluster's apiserver for its version: the request
+// every later read of the call finds its connection open from.
+func warm(ctx context.Context, disc discovery.DiscoveryInterface) error {
+	if _, err := discovery.ToDiscoveryInterfaceWithContext(disc).ServerVersionWithContext(ctx); err != nil {
+		return fmt.Errorf("get version: %w", err)
+	}
+	return nil
 }
 
 // ownCluster reports whether c is the installation's own cluster.

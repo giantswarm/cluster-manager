@@ -448,13 +448,13 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	}
 	if in.Mode == ModeCommit {
 		releases := append(append(objs, sliceObjs...), operatorObjs...)
-		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start); err != nil {
+		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start, target.warmup); err != nil {
 			return nil, err
 		}
 		if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
 			return nil, err
 		}
-		logApplied(ctx, "create_node_pool", out, start)
+		logApplied(ctx, "create_node_pool", out, start, target.warmup)
 		return out, nil
 	}
 	// A pool that used to carry credentials and no longer does: the stale
@@ -469,13 +469,13 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	objs = append(objs, sliceObjs...)
 	objs = append(objs, backend)
 	objs = append(objs, operatorObjs...)
-	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start)); err != nil {
+	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start, target.warmup)); err != nil {
 		return nil, err
 	}
 	if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
 		return nil, err
 	}
-	logApplied(ctx, "create_node_pool", out, start)
+	logApplied(ctx, "create_node_pool", out, start, target.warmup)
 	return out, nil
 }
 
@@ -715,9 +715,12 @@ func retireSharedBackend(ctx context.Context, dyn dynamic.Interface, ns, cluster
 
 // budget is when an apply that started at start must have answered: the
 // request's own deadline when the caller set one, else the configured apply
-// budget from the start.
-func (s *Service) budget(ctx context.Context, start time.Time) time.Time {
-	b := start.Add(s.cfg.applyBudget())
+// budget from the start, not counting the warm-up of the workload cluster's
+// client (target.warmup): a cold client — the first call after a start —
+// would otherwise spend the budget the writes need on reaching the cluster
+// (giantswarm/cluster-manager#207).
+func (s *Service) budget(ctx context.Context, start time.Time, warmup time.Duration) time.Time {
+	b := start.Add(warmup + s.cfg.applyBudget())
 	if d, ok := ctx.Deadline(); ok && d.Before(b) {
 		b = d
 	}
@@ -734,15 +737,17 @@ func timed(ctx context.Context, phase string, attrs ...any) func() {
 	}
 }
 
-// logApplied is the one line per write call: what landed, in how long.
-func logApplied(ctx context.Context, tool string, out *WriteResult, start time.Time) {
+// logApplied is the one line per write call: what landed, in how long —
+// duration the whole call, warmup the part of it spent reaching the workload
+// cluster (target.warmup), the rest the reads and writes.
+func logApplied(ctx context.Context, tool string, out *WriteResult, start time.Time, warmup time.Duration) {
 	written := 0
 	for _, o := range out.Objects {
 		if o.Action == actionCreate || o.Action == actionUpdate || o.Action == actionDelete {
 			written++
 		}
 	}
-	slog.InfoContext(ctx, tool+" done", "cluster", out.Cluster, "pool", out.Pool, "dryRun", out.DryRun, "objects", len(out.Objects), "written", written, "partial", out.Partial, "duration", time.Since(start).Round(time.Millisecond))
+	slog.InfoContext(ctx, tool+" done", "cluster", out.Cluster, "pool", out.Pool, "dryRun", out.DryRun, "objects", len(out.Objects), "written", written, "partial", out.Partial, "duration", time.Since(start).Round(time.Millisecond), "warmup", warmup.Round(time.Millisecond))
 }
 
 // backendTargetName is the target as the backend document names it.
@@ -830,10 +835,10 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 				return nil, err
 			}
 		}
-		if err := s.commitDelete(ctx, dyn, c, in, targets, backend, last, out, start); err != nil {
+		if err := s.commitDelete(ctx, dyn, c, in, targets, backend, last, out, start, t.warmup); err != nil {
 			return nil, err
 		}
-		logApplied(ctx, "delete_node_pool", out, start)
+		logApplied(ctx, "delete_node_pool", out, start, t.warmup)
 		return out, nil
 	}
 	if ks, err := inGit(ctx, dyn, hr); err != nil {
@@ -851,7 +856,7 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			return nil, err
 		}
 	}
-	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, t.warmup))
 	if err := td.deleteNodeClaims(t.Reader, idle); err != nil {
 		return nil, err
 	}
@@ -898,7 +903,7 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		}
 	}
 	td.finish()
-	logApplied(ctx, "delete_node_pool", out, start)
+	logApplied(ctx, "delete_node_pool", out, start, t.warmup)
 	return out, nil
 }
 

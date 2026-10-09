@@ -95,14 +95,14 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 		if err := s.commitDeleteCluster(ctx, dyn, cluster, hr, in, out, start); err != nil {
 			return nil, err
 		}
-		logApplied(ctx, "delete_cluster", out, start)
+		logApplied(ctx, "delete_cluster", out, start, 0)
 		return out, nil
 	}
 	if hr == nil {
 		if err := s.deleteLeftovers(ctx, dyn, cluster, in, out, start); err != nil {
 			return nil, err
 		}
-		logApplied(ctx, "delete_cluster", out, start)
+		logApplied(ctx, "delete_cluster", out, start, 0)
 		return out, nil
 	}
 	if !compose.OwnedBy(hr) {
@@ -152,10 +152,13 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if out.WithCluster, err = clusterReleases(ctx, dyn, ns, in.Name); err != nil {
 		return nil, err
 	}
+	var warmup time.Duration
 	if cluster != nil {
-		out.Models, out.ModelsNote = servedModels(ctx, s.target(ctx, dyn, cluster))
+		t := s.target(ctx, dyn, cluster)
+		out.Models, out.ModelsNote = servedModels(ctx, t)
+		warmup = t.warmup
 	}
-	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, warmup))
 	if err := td.deleteAll(plans); err != nil {
 		return nil, err
 	}
@@ -163,7 +166,7 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if !out.Partial {
 		out.NextStep = fmt.Sprintf("helm-controller uninstalls the cluster — a small one is gone in about five minutes, list_clusters lists it until then —; re-run delete_cluster with the same arguments afterwards: it removes what the uninstall left in %s (a default app whose install was still running)", ns)
 	}
-	logApplied(ctx, "delete_cluster", out, start)
+	logApplied(ctx, "delete_cluster", out, start, warmup)
 	return out, nil
 }
 
@@ -202,7 +205,7 @@ func (s *Service) deleteLeftovers(ctx context.Context, dyn dynamic.Interface, cl
 	if len(plans) == 0 && len(out.Warnings) == 0 {
 		return &ErrNotFound{What: fmt.Sprintf("cluster %s/%s (nothing of it is left)", ns, in.Name), NotFound: &NotFound{Cluster: in.Name, Namespace: ns, NothingLeft: true}}
 	}
-	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, 0))
 	if err := td.deleteAll(plans); err != nil {
 		return err
 	}

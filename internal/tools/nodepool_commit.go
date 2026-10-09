@@ -49,7 +49,7 @@ func (pc *poolCommit) fileOf(kind, name string) string {
 // pool's (and, where composed, the operator's and the slice's) files, the
 // stale credentials file of a pool that no longer carries credentials
 // removed, the backend document written live.
-func (s *Service) commitCreate(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in CreateNodePoolInput, releases, live []*unstructured.Unstructured, out *WriteResult, start time.Time) error {
+func (s *Service) commitCreate(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in CreateNodePoolInput, releases, live []*unstructured.Unstructured, out *WriteResult, start time.Time, warmup time.Duration) error {
 	pc, err := s.newPoolCommit(ctx, dyn, c)
 	if err != nil {
 		return err
@@ -69,7 +69,7 @@ func (s *Service) commitCreate(ctx context.Context, dyn dynamic.Interface, c *un
 	for _, obj := range releases {
 		out.Manifests = append(out.Manifests, redacted(obj))
 	}
-	if err := applyAll(ctx, dyn, live, in.DryRun, out, s.budget(ctx, start)); err != nil {
+	if err := applyAll(ctx, dyn, live, in.DryRun, out, s.budget(ctx, start, warmup)); err != nil {
 		return err
 	}
 	title := fmt.Sprintf("feat(%s): add GPU node pool %s", c.GetName(), in.Pool.Name)
@@ -87,7 +87,7 @@ func (s *Service) commitCreate(ctx context.Context, dyn dynamic.Interface, c *un
 // every release the live removal would delete (removalTargets), the backend
 // document re-written or removed live. A pool that is not in the repository
 // was landed in apply mode and is removed in apply mode.
-func (s *Service) commitDelete(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in DeleteNodePoolInput, targets []objectRef, backend *applyPlan, last bool, out *WriteResult, start time.Time) error {
+func (s *Service) commitDelete(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in DeleteNodePoolInput, targets []objectRef, backend *applyPlan, last bool, out *WriteResult, start time.Time, warmup time.Duration) error {
 	pc, err := s.newPoolCommit(ctx, dyn, c)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (s *Service) commitDelete(ctx context.Context, dyn dynamic.Interface, c *un
 	}
 	if backend != nil {
 		out.Backend = registration(backend.obj, "")
-		if err := applyAll(ctx, dyn, []*unstructured.Unstructured{backend.obj}, in.DryRun, out, s.budget(ctx, start)); err != nil {
+		if err := applyAll(ctx, dyn, []*unstructured.Unstructured{backend.obj}, in.DryRun, out, s.budget(ctx, start, warmup)); err != nil {
 			return err
 		}
 		if err := retireSharedBackend(ctx, dyn, backend.obj.GetNamespace(), c.GetName(), backend.obj.GetName(), in.DryRun, out); err != nil {
