@@ -83,6 +83,7 @@ func (s *Service) retireServingNamespace(td *teardown, t target) error {
 	if ts := ns.GetDeletionTimestamp(); ts != nil {
 		act.Action = actionTerminating
 		td.out.Objects = append(td.out.Objects, act)
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("the serving namespace %s on %s is Terminating since %s: Kubernetes removes what is left in it, and once it is gone nothing of the slice is found", ns.GetName(), t.Cluster, ts.UTC().Format(time.RFC3339)))
 		return nil
 	}
 	owner := connectivityRelease(t.Cluster)
@@ -134,10 +135,12 @@ func (s *Service) retireServingNamespace(td *teardown, t target) error {
 // left is removed or marked retired (retireServingNamespace), and the
 // Gateway API CRDs it composed — marked so before it went
 // (markGatewayAPICRDs) — are removed (retireGatewayAPICRDs). While a slice
-// release of that name stands, whoever's, both are its and nothing happens.
+// release of that name stands, whoever's, both are its and nothing happens;
+// one being deleted is leaving, and both steps wait for its children
+// themselves (giantswarm/cluster-manager#202).
 func (s *Service) retireLeftSlice(td *teardown, t target) error {
-	gone, err := sliceReleaseGone(td.ctx, td.dyn, t.Namespace, t.Cluster)
-	if err != nil || !gone {
+	leaving, err := sliceReleaseLeaving(td.ctx, td.dyn, t.Namespace, t.Cluster)
+	if err != nil || !leaving {
 		return err
 	}
 	if err := s.retireServingNamespace(td, t); err != nil {
@@ -150,30 +153,37 @@ func (s *Service) retireLeftSlice(td *teardown, t target) error {
 	return s.retireGatewayAPICRDs(td, t)
 }
 
-// sliceReleaseGone reports whether no slice release of the cluster's name
-// exists on the installation, cluster-manager's or anyone's.
-func sliceReleaseGone(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (bool, error) {
+// sliceReleaseLeaving reports whether no slice release of the cluster's name
+// stands on the installation, cluster-manager's or anyone's: none exists, or
+// it is being deleted (helm-controller still uninstalling it).
+func sliceReleaseLeaving(ctx context.Context, dyn dynamic.Interface, ns, cluster string) (bool, error) {
 	name := compose.SliceReleaseName(cluster)
-	_, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("get HelmRelease %s/%s: %w", ns, name, err)
 	}
-	return false, nil
+	return hr.GetDeletionTimestamp() != nil, nil
 }
 
 // retireSliceLeftovers is a teardown call that finds the cluster's slice
-// release gone already — disable_model_serving, or delete_node_pool of a
-// pool removed since (giantswarm/cluster-manager#191, #203): the serving
-// namespace and the Gateway API CRDs the slice left are retired
-// (retireLeftSlice). The answer is nil when nothing of the slice's is left,
-// or the cluster cannot be read as the caller: the tool's not found.
+// release gone already, or being deleted — disable_model_serving, or
+// delete_node_pool of a pool removed since (giantswarm/cluster-manager#191,
+// #202, #203): the serving namespace and the Gateway API CRDs the slice left
+// are retired (retireLeftSlice), a namespace being deleted answered with that
+// phase. The answer is nil when a slice release stands, nothing of the
+// slice's is left, or the cluster cannot be read as the caller: the tool's
+// not found.
 func (s *Service) retireSliceLeftovers(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, tool, mode string, dryRun bool, start time.Time) (*WriteResult, error) {
 	t := s.target(ctx, dyn, c)
 	if t.Reader == nil {
 		return nil, nil
+	}
+	leaving, err := sliceReleaseLeaving(ctx, dyn, t.Namespace, t.Cluster)
+	if err != nil || !leaving {
+		return nil, err
 	}
 	ns, err := s.servingNamespaceOf(ctx, t)
 	if err != nil {
@@ -183,7 +193,7 @@ func (s *Service) retireSliceLeftovers(ctx context.Context, dyn dynamic.Interfac
 	if err != nil {
 		return nil, err
 	}
-	if (ns == nil || ns.GetDeletionTimestamp() != nil) && !marked {
+	if ns == nil && !marked {
 		return nil, nil
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: mode, DryRun: dryRun, Objects: []ObjectAction{}}

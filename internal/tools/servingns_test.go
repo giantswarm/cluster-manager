@@ -217,6 +217,77 @@ func TestDeleteNodePoolRetiresTheNamespaceOnceTheSliceIsGone(t *testing.T) {
 	assert.Nil(t, servingNamespaceOnWC1(t, l))
 }
 
+// TestForcedDeleteNodePoolRemovesTheNamespaceWhileTheSliceStillGoes
+// (giantswarm/cluster-manager#202): the forced delete of the last pool is
+// cut while the connectivity release is still being uninstalled, the
+// namespace pending; by the re-run the pool's release is gone and the slice
+// release still terminates. A slice release being deleted is leaving: the
+// re-run removes the namespace instead of answering nothing, the next one
+// answers it Terminating, and once it is gone nothing is found. No answer
+// carries an empty serving detection.
+func TestForcedDeleteNodePoolRemovesTheNamespaceWhileTheSliceStillGoes(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	servingNamespace(t, l, false, false)
+	finalizingResource(t, fakeInstallation(t, l), HelmReleaseGVR)
+	finalizingResource(t, fakeTarget(t, l, wc1APIServer), NamespaceGVR)
+	ctx := context.Background()
+	target := l.targets[wc1APIServer].Resource(NamespaceGVR)
+	ns := servingNamespaceOnWC1(t, l)
+	ns.SetFinalizers([]string{"kubernetes"})
+	_, err := target.Update(ctx, ns, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	connectivity := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": map[string]any{"name": "wc1-agent-platform-connectivity", "namespace": "org-acme"}}}
+	_, err = l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Create(ctx, connectivity, metav1.CreateOptions{})
+	require.NoError(t, err)
+	del := DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true}
+
+	short, cancel := context.WithTimeout(ctx, writeReserve+300*time.Millisecond)
+	defer cancel()
+	cut, err := svc.DeleteNodePool(short, del)
+	require.NoError(t, err)
+	assert.True(t, cut.Partial)
+	assert.Equal(t, "pending Namespace /model-serving", lastObject(cut))
+	assert.Nil(t, cut.Serving, "a delete detects no serving layer and answers none")
+
+	// Flux finishes the pool's uninstall and the connectivity child's; the
+	// slice release is still being uninstalled.
+	for _, name := range []string{"wc1-gpu-a10g", "wc1-agent-platform-connectivity"} {
+		require.NoError(t, fakeInstallation(t, l).Tracker().Delete(HelmReleaseGVR, "org-acme", name))
+	}
+	slice, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(ctx, "wc1-agent-platform", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, slice.GetDeletionTimestamp(), "the slice release terminates under helm-controller's finalizer")
+
+	again, err := svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err, "the pool is gone, the namespace the leaving slice left is still the call's")
+	assert.Equal(t, []string{"delete Namespace /model-serving"}, objectNames(again))
+	assert.Nil(t, again.Serving)
+	require.NotNil(t, servingNamespaceOnWC1(t, l).GetDeletionTimestamp(), "Kubernetes empties the namespace before it goes")
+
+	terminating, err := svc.DeleteNodePool(ctx, del)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"terminating Namespace /model-serving"}, objectNames(terminating))
+	assert.Contains(t, terminating.Warnings[len(terminating.Warnings)-1], "the serving namespace model-serving on wc1 is Terminating since")
+
+	require.NoError(t, fakeTarget(t, l, wc1APIServer).Tracker().Delete(NamespaceGVR, "", "model-serving"))
+	_, err = svc.DeleteNodePool(ctx, del)
+	var notFound *ErrNotFound
+	require.ErrorAs(t, err, &notFound, "the namespace is absent: nothing of the pool or its slice is left")
+}
+
+// TestDeleteNodePoolLeavesTheNamespaceOfAStandingSlice: a removed pool's
+// re-run while the slice release stands — another pool's, or someone
+// else's — leaves the namespace to it and finds the pool not found, never an
+// empty answer.
+func TestDeleteNodePoolLeavesTheNamespaceOfAStandingSlice(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	servingNamespace(t, l, false, false)
+	_, err := svc.DeleteNodePool(context.Background(), DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-gone", Mode: ModeApply})
+	var notFound *ErrNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.NotNil(t, servingNamespaceOnWC1(t, l))
+}
+
 // TestEnableModelServingTakesBackARetiredNamespace: the slice composed again
 // takes the retired mark off (Helm adopts the namespace as it stands), and a
 // namespace being deleted is a refusal before anything lands.

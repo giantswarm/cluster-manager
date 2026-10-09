@@ -202,9 +202,6 @@
       }
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
   "serving": {
     "status": "present",
     "provider": "cluster-manager",

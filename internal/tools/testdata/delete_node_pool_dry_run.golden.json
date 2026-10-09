@@ -34,11 +34,5 @@
       "action": "would-delete"
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
-  "serving": {
-    "status": ""
-  },
   "lastPool": true
 }

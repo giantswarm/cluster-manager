@@ -92,12 +92,6 @@
       }
     }
   ],
-  "gpuOperator": {
-    "status": ""
-  },
-  "serving": {
-    "status": ""
-  },
   "oidc": {
     "source": "none",
     "note": "the cluster trusts no identity provider: this server knows no audience the installation's apiserver accepts, so calls to the cluster as you are refused as Unauthorized — pass global.controlPlane.oidc in values to name one"

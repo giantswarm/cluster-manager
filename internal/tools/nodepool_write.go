@@ -179,16 +179,17 @@ type WriteResult struct {
 	// GPUOperator is the operator detected on the cluster before the write
 	// (create): present with its provider — nothing is composed —, or
 	// absent, in which case OperatorRow names the configuration table's row
-	// the `<cluster>-gpu-operator` release was composed from.
-	GPUOperator detect.Component `json:"gpuOperator,omitempty"`
-	OperatorRow string           `json:"operatorRow,omitempty"`
+	// the `<cluster>-gpu-operator` release was composed from. A delete
+	// detects nothing and answers neither.
+	GPUOperator *detect.Component `json:"gpuOperator,omitempty"`
+	OperatorRow string            `json:"operatorRow,omitempty"`
 	// Serving is the serving layer detected on the cluster before the write
 	// (create, enable): present with its provider — nothing is composed —,
 	// or absent or cluster-manager's own, in which case Slice describes the
 	// `<cluster>-agent-platform` release composed (created or updated in
-	// place).
-	Serving detect.Component `json:"serving,omitempty"`
-	Slice   *SliceRelease    `json:"slice,omitempty"`
+	// place); not part of a delete's answer (giantswarm/cluster-manager#202).
+	Serving *detect.Component `json:"serving,omitempty"`
+	Slice   *SliceRelease     `json:"slice,omitempty"`
 	// Backend is the kserve backend registered with model-manager (create;
 	// on the delete of a pool that is not the last, the document re-written
 	// for the pools that remain).
@@ -428,7 +429,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Pool.Name, Mode: in.Mode, DryRun: in.DryRun,
 		ChartVersion: compose.ChartVersion(objs[0]), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
-		GPUOperator: operator, OperatorRow: row, Serving: serving, Slice: slice,
+		GPUOperator: &operator, OperatorRow: row, Serving: &serving, Slice: slice,
 		Backend: registration(backend, backendTargetName(target.backend)),
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
 		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: claims, Cache: s.cacheSettingFor(slice, r.cache, pin, cacheWords),
