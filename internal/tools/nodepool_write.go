@@ -766,10 +766,11 @@ func backendTargetName(t compose.BackendTarget) string {
 // operator, the backend registration, the slice release, and the pool's own
 // objects last, its HelmRelease the very last: the re-run finds the pool and
 // continues where the teardown stands (giantswarm/cluster-manager#28, #37).
-// After them the serving namespace the slice left (retireServingNamespace),
-// a step that depends on no pool: the re-run retires it once the slice
-// release is gone, and once the pool itself is (deleteRemovedPool;
-// giantswarm/cluster-manager#191).
+// After them the serving namespace the slice left (retireServingNamespace)
+// and the Gateway API CRDs it composed (retireGatewayAPICRDs), steps that
+// depend on no pool: the re-run retires them once the slice release is
+// gone, and once the pool itself is (deleteRemovedPool;
+// giantswarm/cluster-manager#191, #203).
 // With a pool that is not the last, the kserve backend document
 // cluster-manager registered for the cluster is re-written for the pools
 // that remain, right after the idle nodes: the one pool's form for the one
@@ -866,6 +867,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		if err := s.servingTeardown(td, t, in.Force); err != nil {
 			return nil, err
 		}
+		if composesGatewayAPICRDs(slice) {
+			if err := s.markGatewayAPICRDs(td, t); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := td.deleteAll(plans); err != nil {
 		return nil, err
@@ -882,10 +888,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		}
 	case last && kept == "":
 		// The slice release went before this call — a re-run after a cut
-		// while its uninstall still ran —: the serving namespace it left is
-		// this teardown's to retire, whether or not the pool's release still
-		// stands (giantswarm/cluster-manager#191).
-		if err := s.retireLeftServingNamespace(td, t); err != nil {
+		// while its uninstall still ran —: the serving namespace and the
+		// Gateway API CRDs it left are this teardown's to retire, whether or
+		// not the pool's release still stands (giantswarm/cluster-manager#191,
+		// #203).
+		if err := s.retireLeftSlice(td, t); err != nil {
 			return nil, err
 		}
 	}
@@ -895,8 +902,8 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 }
 
 // deleteRemovedPool is delete_node_pool where the pool's release is gone
-// already: a re-run after the removal retires the serving namespace the
-// slice left — a teardown cut before that step, or one from before the step
+// already: a re-run after the removal retires the serving namespace and the
+// Gateway API CRDs the slice left — a teardown cut before that step, or one from before the step
 // existed, has no pool left to be re-run on (giantswarm/cluster-manager#191).
 // With nothing left, or in mode commit (the namespace is retired live), the
 // pool is not found.
@@ -905,7 +912,7 @@ func (s *Service) deleteRemovedPool(ctx context.Context, dyn dynamic.Interface, 
 	if in.Mode == ModeCommit {
 		return nil, notFound
 	}
-	out, err := s.retireLeftNamespace(ctx, dyn, c, "delete_node_pool", in.Mode, in.DryRun, start)
+	out, err := s.retireSliceLeftovers(ctx, dyn, c, "delete_node_pool", in.Mode, in.DryRun, start)
 	if err != nil {
 		return nil, err
 	}

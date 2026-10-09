@@ -195,8 +195,9 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	hr, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		// The slice is gone already: what it left is the serving namespace
-		// (retireLeftNamespace), else nothing of it is found.
-		out, err := s.retireLeftNamespace(ctx, dyn, c, "disable_model_serving", in.Mode, in.DryRun, start)
+		// and the Gateway API CRDs it composed (retireSliceLeftovers), else
+		// nothing of it is found.
+		out, err := s.retireSliceLeftovers(ctx, dyn, c, "disable_model_serving", in.Mode, in.DryRun, start)
 		if err != nil || out != nil {
 			return out, err
 		}
@@ -226,6 +227,11 @@ func (s *Service) DisableModelServing(ctx context.Context, in ModelServingInput)
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start))
 	if err := s.servingTeardown(td, t, in.Force); err != nil {
 		return nil, err
+	}
+	if composesGatewayAPICRDs(hr) {
+		if err := s.markGatewayAPICRDs(td, t); err != nil {
+			return nil, err
+		}
 	}
 	if err := td.deleteAll(plans); err != nil {
 		return nil, err
