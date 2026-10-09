@@ -180,6 +180,9 @@ func (td *teardown) finish() {
 type deletePlan struct {
 	res dynamic.ResourceInterface
 	act ObjectAction
+	// orphan marks a HelmRelease whose target cluster is gone: suspended
+	// before its delete (deleteOrphan).
+	orphan bool
 }
 
 // planDeletes reads every target concurrently and decides — every refusal
@@ -221,9 +224,67 @@ func planDeletes(ctx context.Context, dyn dynamic.Interface, targets []objectRef
 // deleteAll removes the planned objects in order within the budget.
 func (td *teardown) deleteAll(plans []deletePlan) error {
 	for _, p := range plans {
+		if p.orphan {
+			if err := td.suspend(p); err != nil {
+				return err
+			}
+		}
 		if err := td.delete(p.res, p.act); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// suspend suspends a HelmRelease whose target cluster is gone, ahead of its
+// delete: helm-controller would keep finalizers.fluxcd.io on it, retrying an
+// uninstall that cannot reach the cluster — or, the kubeconfig Secret gone,
+// skipping it only at its next retry, minutes apart on a growing backoff.
+// For a suspended release being deleted, helm-controller skips the uninstall
+// and takes its finalizer off; the delete, or the change to a release
+// deleted already, has it reconcile at once. The finalizer stays
+// helm-controller's to remove.
+func (td *teardown) suspend(p deletePlan) error {
+	if !td.fits() || td.dryRun {
+		return nil
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}},"spec":{"suspend":true}}`, requestedAtAnnotation, time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := p.res.Patch(td.ctx, p.act.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{FieldManager: compose.ManagedBy}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("suspend HelmRelease %s: %w", p.act.String(), err)
+	}
+	return nil
+}
+
+// awaitOrphans waits within the budget for the orphan releases deleteAll
+// suspended and deleted to be gone, and names them: removed, or still
+// terminating for the re-run.
+func (td *teardown) awaitOrphans(plans []deletePlan, secret string) error {
+	var gone, left []string
+	for _, p := range plans {
+		if !p.orphan {
+			continue
+		}
+		ok, err := td.waitGone(p.res, p.act.Name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			gone = append(gone, p.act.String())
+		} else {
+			left = append(left, p.act.String())
+		}
+	}
+	switch {
+	case len(left) == 0 || td.out.Partial:
+		// Nothing left, or the cut's pending objects name the re-run.
+	case td.dryRun:
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) install into the cluster through %s, which is gone: they would be suspended and deleted, so helm-controller skips their uninstall and takes %s off: %s", len(left), secret, fluxFinalizer, strings.Join(left, ", ")))
+	default:
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) installing into the gone cluster through %s were suspended and deleted, and helm-controller has not taken %s off them yet: %s", len(left), secret, fluxFinalizer, strings.Join(left, ", ")))
+		td.out.NextStep = "re-run delete_cluster with the same arguments once helm-controller has removed the suspended releases: it answers that nothing of the cluster is left"
+	}
+	if len(gone) > 0 {
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) installing into the gone cluster through %s were suspended and deleted, and helm-controller removed them without an uninstall: %s", len(gone), secret, strings.Join(gone, ", ")))
 	}
 	return nil
 }

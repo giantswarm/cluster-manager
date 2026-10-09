@@ -142,6 +142,84 @@ func TestDeleteClusterAppliesThenRemovesLeftovers(t *testing.T) {
 	assert.Equal(t, &NotFound{Cluster: "dev01", Namespace: "org-acme", NothingLeft: true}, notFound.NotFound, "a caller reads the complete removal without parsing prose")
 }
 
+// TestDeleteClusterRemovesOrphanSliceChildren: a slice child whose uninstall
+// failed while the cluster stood carries Flux's labels of the slice release
+// only, no cluster label, and stays with helm-controller's finalizer once the
+// cluster is gone. The second pass finds it through the cluster's kubeconfig
+// Secret, suspends it — helm-controller then skips the uninstall and takes
+// its finalizer off — and deletes it; a dry run names it and writes nothing.
+// A release of another cluster, or one installing into the installation, is
+// not touched.
+func TestDeleteClusterRemovesOrphanSliceChildren(t *testing.T) {
+	l, svc := deleteLab(t)
+	ctx := context.Background()
+	for _, gone := range []struct {
+		gvr  schema.GroupVersionResource
+		name string
+	}{{HelmReleaseGVR, "dev01"}, {ClusterGVR, "dev01"}, {HelmReleaseGVR, "dev01-cert-exporter"}, {compose.OCIRepositoryGVR, "dev01-cert-exporter"}, {HelmReleaseGVR, "dev01-gpu"}, {HelmReleaseGVR, "dev01-gpu-operator"}, {HelmReleaseGVR, "dev01-agent-platform"}, {compose.OCIRepositoryGVR, "dev01"}, {ConfigMapGVR, "dev01-values"}} {
+		require.NoError(t, l.installation.Resource(gone.gvr).Namespace("org-acme").Delete(ctx, gone.name, metav1.DeleteOptions{}))
+	}
+	releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	child := func(name, secret string) *unstructured.Unstructured {
+		hr := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+			"metadata": map[string]any{
+				"name": name, "namespace": "org-acme", "finalizers": []any{fluxFinalizer},
+				"labels": map[string]any{compose.LabelManagedBy: helmManagedBy, labelFluxName: "dev01-agent-platform", labelFluxNamespace: "org-acme"},
+			},
+			"spec": map[string]any{"releaseName": "kserve-runtime-configs"},
+		}}
+		if secret != "" {
+			require.NoError(t, unstructured.SetNestedField(hr.Object, secret, "spec", "kubeConfig", "secretRef", "name"))
+		}
+		return hr
+	}
+	for _, hr := range []*unstructured.Unstructured{
+		child("dev01-kserve-runtime-configs", "dev01-kubeconfig"),
+		child("dev01-kserve-llmisvc-resources", "dev01-kubeconfig"),
+		child("dev02-kserve-runtime-configs", "dev02-kubeconfig"),
+		child("dev01-local", ""),
+	} {
+		_, err := releases.Create(ctx, hr, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+	var suspended []string
+	fakeInstallation(t, l).PrependReactor("patch", "helmreleases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		p, _ := a.(k8stesting.PatchAction)
+		if string(p.GetPatch()) != "" && assert.Contains(t, string(p.GetPatch()), `"suspend":true`) {
+			suspended = append(suspended, p.GetName())
+		}
+		return false, nil, nil
+	})
+	log := recordDeletes(t, l)
+
+	in := dev01Delete()
+	in.DryRun = true
+	dry, err := svc.DeleteCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"would-delete", "would-delete"}, actions(dry))
+	require.Len(t, dry.Warnings, 1)
+	assert.Contains(t, dry.Warnings[0], "2 HelmRelease(s) install into the cluster through dev01-kubeconfig, which is gone: they would be suspended and deleted")
+	assert.Empty(t, log.seen())
+	assert.Empty(t, suspended)
+
+	got, err := svc.DeleteCluster(ctx, dev01Delete())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev01-kserve-llmisvc-resources", "dev01-kserve-runtime-configs"}, suspended, "suspended before the delete")
+	assert.Equal(t, []string{"helmreleases org-acme/dev01-kserve-llmisvc-resources", "helmreleases org-acme/dev01-kserve-runtime-configs"}, log.seen())
+	assert.False(t, got.Partial)
+	require.Len(t, got.Warnings, 1)
+	assert.Contains(t, got.Warnings[0], "2 HelmRelease(s) installing into the gone cluster through dev01-kubeconfig were suspended and deleted, and helm-controller removed them without an uninstall")
+	for _, kept := range []string{"dev02-kserve-runtime-configs", "dev01-local"} {
+		_, err := releases.Get(ctx, kept, metav1.GetOptions{})
+		require.NoError(t, err, "%s is not the gone cluster's", kept)
+	}
+
+	_, err = svc.DeleteCluster(ctx, dev01Delete())
+	var notFound *ErrNotFound
+	require.True(t, errors.As(err, &notFound), "nothing of the cluster is left: %v", err)
+}
+
 // TestDeleteClusterRefusals: every refusal names its reason and the way out,
 // and comes before any write.
 func TestDeleteClusterRefusals(t *testing.T) {

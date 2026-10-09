@@ -52,8 +52,11 @@ type DeleteClusterInput struct {
 // same call removes what the uninstall left in the organization's namespace
 // (giantswarm/cluster-manager#132's proof): the HelmReleases and
 // OCIRepositories of the cluster rendered by Helm or by cluster-manager — a
-// default app whose install was still running when the cluster went — and
-// cluster-manager's own source and values. While the Cluster is still being
+// default app whose install was still running when the cluster went —, the
+// HelmReleases installing into the cluster through its kubeconfig Secret — a
+// serving-slice child whose uninstall failed, suspended before its delete
+// (giantswarm/cluster-manager#210) — and cluster-manager's own source and
+// values. While the Cluster is still being
 // removed it writes nothing and says so.
 //
 // Mode commit opens the removal pull request in the repository that owns the
@@ -195,6 +198,11 @@ func (s *Service) deleteLeftovers(ctx context.Context, dyn dynamic.Interface, cl
 		}
 		plans = append(plans, found...)
 	}
+	targeting, err := releasesTargeting(ctx, dyn, ns, in.Name, plans, out)
+	if err != nil {
+		return err
+	}
+	plans = append(plans, targeting...)
 	values, err := getOptional(ctx, dyn, ConfigMapGVR, ns, compose.ClusterValuesName(in.Name))
 	if err != nil {
 		return err
@@ -207,6 +215,9 @@ func (s *Service) deleteLeftovers(ctx context.Context, dyn dynamic.Interface, cl
 	}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, 0))
 	if err := td.deleteAll(plans); err != nil {
+		return err
+	}
+	if err := td.awaitOrphans(plans, compose.KubeconfigSecretName(in.Name)); err != nil {
 		return err
 	}
 	td.finish()
@@ -229,19 +240,77 @@ func leftovers(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersi
 		if obj.GetName() != cluster && !strings.HasPrefix(obj.GetName(), cluster+"-") {
 			continue
 		}
-		if m := obj.GetLabels()[compose.LabelManagedBy]; m != compose.ManagedBy && m != helmManagedBy {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("%s %s/%s %s and is left: remove it by the means that created it", obj.GetKind(), ns, obj.GetName(), ownerDescription(obj)))
-			continue
-		}
-		if ks, err := inGit(ctx, dyn, obj); err != nil {
+		p, err := planLeftover(ctx, dyn, res, obj, cluster, out)
+		if err != nil {
 			return nil, err
-		} else if ks != "" {
-			return nil, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s is in git: Flux Kustomization %s applies it, so a live delete would be undone — remove it from that repository", obj.GetKind(), ns, obj.GetName(), ks)}
 		}
-		plans = append(plans, deletePlan{res: res, act: actionOf(obj)})
+		if p != nil {
+			plans = append(plans, *p)
+		}
 	}
 	sort.Slice(plans, func(i, j int) bool { return plans[i].act.Name < plans[j].act.Name })
 	return plans, nil
+}
+
+// releasesTargeting plans the delete of the HelmReleases in ns that install
+// into the cluster through its kubeconfig Secret but carry no cluster label,
+// so leftovers does not find them: the serving slice's children, which the
+// meta chart renders with Flux's labels of the slice release only. A child
+// whose uninstall failed while the cluster still stood — deleted with the
+// slice release while its install was running — is left behind with
+// helm-controller's finalizer once the cluster is gone
+// (giantswarm/cluster-manager#210). Planned are those not planned already.
+func releasesTargeting(ctx context.Context, dyn dynamic.Interface, ns, cluster string, planned []deletePlan, out *WriteResult) ([]deletePlan, error) {
+	res := dyn.Resource(HelmReleaseGVR).Namespace(ns)
+	list, err := res.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list helmreleases in %s: %w", ns, err)
+	}
+	secret := compose.KubeconfigSecretName(cluster)
+	var plans []deletePlan
+	for i := range list.Items {
+		obj := &list.Items[i]
+		if kubeconfigSecretOf(obj) != secret || slices.ContainsFunc(planned, func(p deletePlan) bool { return p.act.Kind == obj.GetKind() && p.act.Name == obj.GetName() }) {
+			continue
+		}
+		p, err := planLeftover(ctx, dyn, res, obj, cluster, out)
+		if err != nil {
+			return nil, err
+		}
+		if p != nil {
+			plans = append(plans, *p)
+		}
+	}
+	sort.Slice(plans, func(i, j int) bool { return plans[i].act.Name < plans[j].act.Name })
+	return plans, nil
+}
+
+// planLeftover plans the delete of one object the cluster's removal left, or
+// says why not: another owner's object is named in the answer's warnings and
+// left (nil plan); one a Kustomization applies is a refusal. A HelmRelease
+// that installs into the cluster through its kubeconfig Secret is an orphan:
+// its target is gone (deleteLeftovers runs only once the Cluster is).
+func planLeftover(ctx context.Context, dyn dynamic.Interface, res dynamic.ResourceInterface, obj *unstructured.Unstructured, cluster string, out *WriteResult) (*deletePlan, error) {
+	ns := obj.GetNamespace()
+	if m := obj.GetLabels()[compose.LabelManagedBy]; m != compose.ManagedBy && m != helmManagedBy {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("%s %s/%s %s and is left: remove it by the means that created it", obj.GetKind(), ns, obj.GetName(), ownerDescription(obj)))
+		return nil, nil
+	}
+	if ks, err := inGit(ctx, dyn, obj); err != nil {
+		return nil, err
+	} else if ks != "" {
+		return nil, &ErrRefused{Reason: fmt.Sprintf("%s %s/%s is in git: Flux Kustomization %s applies it, so a live delete would be undone — remove it from that repository", obj.GetKind(), ns, obj.GetName(), ks)}
+	}
+	orphan := obj.GetKind() == "HelmRelease" && kubeconfigSecretOf(obj) == compose.KubeconfigSecretName(cluster)
+	return &deletePlan{res: res, act: actionOf(obj), orphan: orphan}, nil
+}
+
+// kubeconfigSecretOf is the Secret a HelmRelease installs through
+// (spec.kubeConfig.secretRef.name); empty for one that installs into the
+// installation itself.
+func kubeconfigSecretOf(hr *unstructured.Unstructured) string {
+	name, _, _ := unstructured.NestedString(hr.Object, "spec", "kubeConfig", "secretRef", "name")
+	return name
 }
 
 // clusterReleases names the HelmReleases that go with the cluster's release:
