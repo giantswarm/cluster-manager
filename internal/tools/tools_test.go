@@ -104,6 +104,7 @@ var listKinds = map[schema.GroupVersionResource]string{
 	detect.NodeClaimGVR:             "NodeClaimList",
 	detect.EventsGVR:                "EventList",
 	detect.GatewayGVR:               "GatewayList",
+	gatewayClassGVR:                 "GatewayClassList",
 	detect.CertificateGVR:           "CertificateList",
 	detect.ChallengeGVR:             "ChallengeList",
 	detect.MutatingWebhookGVR:       "MutatingWebhookConfigurationList",
