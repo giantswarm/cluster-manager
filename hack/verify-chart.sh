@@ -80,4 +80,20 @@ got=$(helm template t "$CHART" "${dex[@]}" --set 'muster.mcpServer.auth.required
 grep -qF -- '- --cluster-oidc-client-id=kubernetes' <<<"$got" || fail "created clusters: createdClusters.oidc.clientID does not win"
 if helm template t "$CHART" "${dex[@]}" | grep -q -- '--cluster-oidc-'; then fail "created clusters: an OIDC client id rendered without an audience"; fi
 
+# The tmp emptyDir at /tmp satisfies Kyverno's require-emptydir-requests-and-
+# limits policy by default: the container requests and limits ephemeral-storage
+# and the volume carries a sizeLimit; an empty tmpVolume.sizeLimit renders the
+# bare emptyDir, the container fields alone still satisfying the rule.
+got=$(helm template t "$CHART" --show-only templates/deployment.yaml)
+for want in \
+  '^              ephemeral-storage: 32Mi$' \
+  '^              ephemeral-storage: 128Mi$' \
+  '^            sizeLimit: 128Mi$'; do
+  grep -q -- "$want" <<<"$got" || fail "default render: no '$want' for the tmp emptyDir"
+done
+got=$(helm template t "$CHART" --show-only templates/deployment.yaml --set tmpVolume.sizeLimit=)
+grep -q -- '^          emptyDir: {}$' <<<"$got" || fail "tmpVolume.sizeLimit empty: the tmp volume is not a bare emptyDir"
+if grep -q -- 'sizeLimit' <<<"$got"; then fail "tmpVolume.sizeLimit empty: a sizeLimit rendered"; fi
+grep -q -- '^              ephemeral-storage: 128Mi$' <<<"$got" || fail "tmpVolume.sizeLimit empty: the container's ephemeral-storage limit is gone"
+
 echo "verify-chart: ok"
