@@ -63,19 +63,31 @@ type ReleasesResult struct {
 	// Providers are the provider lines create_cluster offers.
 	Providers []string  `json:"providers"`
 	Releases  []Release `json:"releases"`
+	// Note explains an empty list on an installation that does not serve
+	// the Release CRD; empty otherwise.
+	Note string `json:"note,omitempty"`
 }
+
+// releaseCRDAbsentNote is the answer on an installation without the Release
+// CRD: no release, and so no new cluster, can exist there.
+var releaseCRDAbsentNote = fmt.Sprintf("the Release CRD (%s) is not served on this installation: it has no releases", ReleaseGVR.GroupResource())
 
 // ListReleases lists the installation's Release CRs, of one provider line
 // when provider is given, newest first, each with its state, Kubernetes
 // version, the cluster chart it pins and its release chart, whose tag is
 // checked in the registry (one tag list per provider line). Read as the
-// caller.
+// caller. An installation without the Release CRD answers an empty list
+// with the note saying why.
 func (s *Service) ListReleases(ctx context.Context, provider string) (*ReleasesResult, error) {
+	out := &ReleasesResult{Providers: compose.Providers(), Releases: []Release{}}
 	list, err := s.clients(ctx).Dynamic.Resource(ReleaseGVR).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		out.Note = releaseCRDAbsentNote
+		return out, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
 	}
-	out := &ReleasesResult{Providers: compose.Providers(), Releases: []Release{}}
 	for i := range list.Items {
 		r, ok := releaseOf(&list.Items[i])
 		if !ok || (provider != "" && r.Provider != provider) {
@@ -435,6 +447,9 @@ func tenantBound(ctx context.Context, dyn dynamic.Interface, ns, serviceAccount 
 // active, or pins no cluster chart, is refused.
 func resolveRelease(ctx context.Context, dyn dynamic.Interface, provider, version string) (*Release, error) {
 	list, err := dyn.Resource(ReleaseGVR).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, &ErrRefused{Reason: releaseCRDAbsentNote}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
 	}

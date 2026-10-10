@@ -59,6 +59,7 @@ func TestListReleases(t *testing.T) {
 	_, svc := releasesService(t)
 	got, err := svc.ListReleases(context.Background(), "")
 	require.NoError(t, err)
+	assert.Empty(t, got.Note)
 	assertGolden(t, "list_releases", got)
 
 	aws, err := svc.ListReleases(context.Background(), "aws")
@@ -81,6 +82,33 @@ func TestListReleasesWithoutRegistry(t *testing.T) {
 		assert.Contains(t, r.ReleaseChart.Note, "reads no registry", r.Name)
 		assert.False(t, r.Offered, r.Name)
 	}
+}
+
+// withoutReleaseCRD makes the installation answer a list of Release CRs as an
+// apiserver without the CRD does: NotFound.
+func withoutReleaseCRD(l *lab) {
+	l.installation.(*dynamicfake.FakeDynamicClient).PrependReactor("list", ReleaseGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(ReleaseGVR.GroupResource(), "")
+	})
+}
+
+// TestListReleasesWithoutReleaseCRD: an installation without the Release CRD
+// answers an empty list with the note naming the CRD, never the apiserver's
+// bare NotFound; create_cluster refuses with the same reason.
+func TestListReleasesWithoutReleaseCRD(t *testing.T) {
+	l, svc := releasesService(t)
+	withoutReleaseCRD(l)
+	for _, provider := range []string{"", "aws"} {
+		got, err := svc.ListReleases(context.Background(), provider)
+		require.NoError(t, err)
+		assert.Empty(t, got.Releases)
+		assert.NotNil(t, got.Releases, "an empty list, not null")
+		assert.Equal(t, compose.Providers(), got.Providers)
+		assert.Equal(t, "the Release CRD (releases.release.giantswarm.io) is not served on this installation: it has no releases", got.Note)
+	}
+
+	_, err := svc.CreateCluster(context.Background(), dev01())
+	assertRefused(t, err, "the Release CRD (releases.release.giantswarm.io) is not served")
 }
 
 // TestCreateClusterDryRun (golden): the newest active release (36.0.0, not
