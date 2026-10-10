@@ -3,8 +3,7 @@
 [![CircleCI](https://dl.circleci.com/status-badge/img/gh/giantswarm/cluster-manager/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/giantswarm/cluster-manager/tree/main)
 
 The Agent Platform's MCP-only cluster write surface: node pools first
-([bumblebee-plans#46](https://github.com/giantswarm/bumblebee-plans/pull/46),
-[giantswarm/giantswarm#37637](https://github.com/giantswarm/giantswarm/issues/37637),
+([giantswarm/giantswarm#37637](https://github.com/giantswarm/giantswarm/issues/37637),
 epic [giantswarm/giantswarm#37639](https://github.com/giantswarm/giantswarm/issues/37639)).
 
 cluster-manager is the third sibling of `cluster-manager` and `agent-manager`: a Go MCP server
