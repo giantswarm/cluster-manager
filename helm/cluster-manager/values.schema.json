@@ -508,7 +508,7 @@
         },
         "resources": {
             "type": "object",
-            "description": "Container resources.",
+            "description": "Container resources. ephemeral-storage covers the `tmp` emptyDir mounted at /tmp, which holds only the Go runtime's scratch files.",
             "additionalProperties": false,
             "properties": {
                 "limits": {
@@ -516,6 +516,9 @@
                     "additionalProperties": false,
                     "properties": {
                         "cpu": {
+                            "type": "string"
+                        },
+                        "ephemeral-storage": {
                             "type": "string"
                         },
                         "memory": {
@@ -528,6 +531,9 @@
                     "additionalProperties": false,
                     "properties": {
                         "cpu": {
+                            "type": "string"
+                        },
+                        "ephemeral-storage": {
                             "type": "string"
                         },
                         "memory": {
@@ -656,6 +662,16 @@
         },
         "subscriptionID": {
             "type": "string"
+        },
+        "tmpVolume": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "sizeLimit": {
+                    "type": "string",
+                    "description": "Size limit of the `tmp` emptyDir mounted at /tmp; the kubelet evicts the pod when the volume grows past it. Empty sets no limit."
+                }
+            }
         },
         "tolerations": {
             "type": "array",

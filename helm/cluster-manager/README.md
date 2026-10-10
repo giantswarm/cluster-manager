@@ -87,7 +87,8 @@ from the platform identity contract (`global.identity`, `global.domain`).
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context. |
 | service.type | string | `"ClusterIP"` | Service type. |
 | service.port | int | `8080` | Service port (container listens on 8080). |
-| resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Container resources. |
+| resources | object | `{"limits":{"cpu":"500m","ephemeral-storage":"128Mi","memory":"256Mi"},"requests":{"cpu":"50m","ephemeral-storage":"32Mi","memory":"64Mi"}}` | Container resources. ephemeral-storage covers the `tmp` emptyDir mounted at /tmp, which holds only the Go runtime's scratch files. |
+| tmpVolume.sizeLimit | string | `"128Mi"` | Size limit of the `tmp` emptyDir mounted at /tmp; the kubelet evicts the pod when the volume grows past it. Empty sets no limit. |
 | logging.verbose | bool | `false` | Enable debug logging. |
 | observability.otel.endpoint | string | `""` | OTLP collector the server exports its traces to (`OTEL_EXPORTER_OTLP_ENDPOINT`), e.g. `http://otlp-gateway.kube-system.svc:4317` for gRPC. Empty exports nothing; the W3C propagator still honours an inbound `traceparent`. |
 | observability.otel.protocol | string | `"grpc"` | OTLP protocol: `grpc` or `http/protobuf` (`OTEL_EXPORTER_OTLP_PROTOCOL`). |
