@@ -506,6 +506,11 @@
             "type": "integer",
             "description": "Number of replicas. The server holds no state; more than one is fine."
         },
+        "revisionHistoryLimit": {
+            "type": "integer",
+            "description": "Old ReplicaSets the Deployment keeps. Kubernetes defaults to 10; fewer keeps stale pod templates out of the PolicyReport.",
+            "minimum": 0
+        },
         "resources": {
             "type": "object",
             "description": "Container resources. ephemeral-storage covers the `tmp` emptyDir mounted at /tmp, which holds only the Go runtime's scratch files.",
