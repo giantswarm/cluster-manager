@@ -47,8 +47,8 @@ type NodePools struct {
 }
 
 // NodePool is one MachinePool of a cluster. The pool's version and the
-// control plane's are two fields; no "stale" or "edge" verdict is drawn
-// (bumblebee-plans#46 round 4, Q6c).
+// control plane's are two fields; no "stale" or "edge" verdict is drawn:
+// the skew policy's edge is a constant, not a controller fact.
 type NodePool struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`

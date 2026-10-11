@@ -17,8 +17,7 @@ import (
 )
 
 // Cluster is one cluster of the installation as list_clusters reports it:
-// what neither the portal's Clusters pages nor the Cluster API tools show
-// (bumblebee-plans#46 D2).
+// what neither the portal's Clusters pages nor the Cluster API tools show.
 type Cluster struct {
 	Name         string `json:"name"`
 	Namespace    string `json:"namespace"`

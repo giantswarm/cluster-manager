@@ -1,7 +1,7 @@
 // Package compose renders the objects cluster-manager writes: the pool
 // release of the `gpu-node-pool` chart (a HelmRelease plus its own
 // OCIRepository in `org-<org>`), the `<cluster>-gpu-operator` release and the
-// `<cluster>-agent-platform` slice release (bumblebee-plans#46 D2–D4). The
+// `<cluster>-agent-platform` slice release. The
 // renderers arrive with the write tools (giantswarm/giantswarm#37637, stage
 // 2b); this stage fixes the names and labels the read tools already select
 // by, so the two sides agree from the first release.

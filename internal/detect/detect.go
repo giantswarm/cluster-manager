@@ -4,7 +4,7 @@
 // human by hand (a HelmRelease/App, a ClusterPolicy, GPU node labels). A
 // chart-provided component always wins: cluster-manager never re-creates
 // what the platform's release provides, and never edits it — the handover
-// is the human deleting cluster-manager's release (bumblebee-plans#46 D3).
+// is the human deleting cluster-manager's release.
 //
 // Detection reads the target cluster through its own apiserver as the
 // caller (the kubeconfig Secret is not used for reading), and the

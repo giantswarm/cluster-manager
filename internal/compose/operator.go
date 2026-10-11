@@ -71,8 +71,8 @@ const (
 	flatcarOSImage = "Flatcar"
 )
 
-// OperatorRow is one row of the operator's configuration table
-// (bumblebee-plans#46 D3): which of driver and toolkit the operator deploys.
+// OperatorRow is one row of the operator's configuration table: which of
+// driver and toolkit the operator deploys.
 type OperatorRow struct {
 	// Name is the row as the tools report it.
 	Name string

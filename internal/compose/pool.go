@@ -24,7 +24,7 @@ const (
 	// when a pool needs a newer chart. A chart patch or minor that changes the
 	// bootstrap rolls a pool's nodes — the chart consolidates only empty nodes
 	// (0.7.7), so a node serving a model is not replaced under it
-	// (bumblebee-plans#46 D3). 0.7.0 keeps a pool node's /var/lib
+	// (the pool owns its lifecycle). 0.7.0 keeps a pool node's /var/lib
 	// on its NVMe instance store (the chart's default `pool.volumes.libSource:
 	// instance-store`; cluster-manager writes no volumes block): every size
 	// of the curated families has one (the shape table's stores), so no
@@ -89,7 +89,7 @@ var machineImageFlatcar = regexp.MustCompile(`^flatcar-[a-z]+-(\d+\.\d+\.\d+)-`)
 
 // Cluster is what the pool release needs to know about the cluster it joins:
 // its identity, its current release's pins, and the credential-free snapshot
-// of its bootstrap settings (bumblebee-plans#46 D3).
+// of its bootstrap settings (the pool carries its own bootstrap).
 type Cluster struct {
 	Name         string
 	Namespace    string
