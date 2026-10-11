@@ -1,6 +1,7 @@
 // Package server assembles the single HTTP listener: health endpoints and the
 // MCP streamable-HTTP endpoint (optionally behind OAuth). cluster-manager has
-// no REST API: MCP is its only surface (bumblebee-plans#46 D2).
+// no REST API: MCP is its only surface, the rule every platform manager
+// follows.
 package server
 
 import (

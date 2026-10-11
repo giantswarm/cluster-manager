@@ -1,6 +1,6 @@
 // Package api registers cluster-manager's MCP tools. MCP is the only surface:
 // agents call the tools through muster, and so does the Dev Portal, as the
-// signed-in person (bumblebee-plans#46 D2).
+// signed-in person.
 package api
 
 import (

@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// The slice release's chart and its source (bumblebee-plans#46 D4).
+// The slice release's chart and its source (giantswarm/agent-platform#326).
 const (
 	// SliceChart is the chart of the `<cluster>-agent-platform` release: the
 	// agent-platform meta chart, the cluster's one release of it with the
