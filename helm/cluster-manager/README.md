@@ -26,6 +26,7 @@ from the platform identity contract (`global.identity`, `global.domain`).
 |-----|------|---------|-------------|
 | global | object | `{}` | Platform-wide values a parent chart (the `agent-platform` meta chart) shares with every component; Helm forwards them to this chart. `oauth.*` reads the identity contract as its defaults: `global.identity.issuerUrl`, `global.identity.clientId`, `global.identity.existingSecret`, `global.identity.ca.secretName` / `.key`, and `global.domain` for the OAuth base URL. Empty here; a chart installed on its own sets `oauth.*` directly. |
 | replicaCount | int | `1` | Number of replicas. The server holds no state; more than one is fine. |
+| revisionHistoryLimit | int | `3` | Old ReplicaSets the Deployment keeps. Kubernetes defaults to 10; fewer keeps stale pod templates out of the PolicyReport. |
 | image.registry | string | `"gsoci.azurecr.io"` | Image registry. |
 | image.repository | string | `"giantswarm/cluster-manager"` | Image repository. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |

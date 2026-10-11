@@ -543,6 +543,10 @@
                 }
             }
         },
+        "revisionHistoryLimit": {
+            "type": "integer",
+            "description": "Old ReplicaSets the Deployment keeps. Kubernetes defaults to 10; fewer keeps stale pod templates out of the PolicyReport."
+        },
         "securityContext": {
             "type": "object",
             "description": "Container security context.",

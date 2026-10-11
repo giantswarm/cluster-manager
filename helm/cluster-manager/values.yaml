@@ -11,6 +11,9 @@ global: {}  # @schema type: object; additionalProperties: true
 # -- Number of replicas. The server holds no state; more than one is fine.
 replicaCount: 1
 
+# -- Old ReplicaSets the Deployment keeps. Kubernetes defaults to 10; fewer keeps stale pod templates out of the PolicyReport.
+revisionHistoryLimit: 3
+
 image:
   # -- Image registry.
   registry: gsoci.azurecr.io
