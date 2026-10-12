@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP endpoint refuses a request body larger than 1 MiB before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#236](https://github.com/giantswarm/cluster-manager/issues/236))
+
 ### Added
 
 - The chart's Deployment sets `revisionHistoryLimit` (giantswarm/cluster-manager#227), new value `revisionHistoryLimit`, default 3 instead of Kubernetes' 10, so old ReplicaSets with a stale pod template drop out of the PolicyReport after a rollout.
