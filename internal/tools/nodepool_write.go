@@ -128,9 +128,31 @@ type CreateNodePoolInput struct {
 	// (cacheChoice). Pool.Zones are the zones the caller named: one zone,
 	// whose claim the slice mounts, judged against the claims as read
 	// (zonePinFor).
-	Cache  *bool
-	Mode   string
-	DryRun bool
+	Cache *bool
+	// NoServing creates a plain GPU pool: no slice is composed or updated,
+	// no backend registered, and nothing only serving needs is read — the
+	// ClusterIssuer, the serving runtime, the presets
+	// (giantswarm/cluster-manager#238).
+	NoServing bool
+	Mode      string
+	DryRun    bool
+}
+
+// plainPoolRefusal refuses a plain pool (CreateNodePoolInput.NoServing)
+// where it would not stay one: with the cache asked for, or where
+// cluster-manager serves on the cluster already — its slice serves from
+// every GPU pool, and its backend document names them all.
+func plainPoolRefusal(in CreateNodePoolInput, serving detect.Component, backend *unstructured.Unstructured) error {
+	if !in.NoServing {
+		return nil
+	}
+	if in.Cache != nil && *in.Cache {
+		return &ErrRefused{Reason: "serving false with cache true: the model cache is the serving slice's, and a plain pool composes none — leave cache out"}
+	}
+	if (serving.Present() && serving.Provider == detect.ProviderClusterManager) || registeredFor(backend, in.Cluster) {
+		return &ErrRefused{Reason: fmt.Sprintf("serving false: cluster-manager serves on %s already, and its serving slice serves from every GPU pool of the cluster — leave serving out, or switch serving off with disable_model_serving first", in.Cluster)}
+	}
+	return nil
 }
 
 // cacheChoice is the model cache setting a write composes: the caller's where
@@ -325,7 +347,9 @@ func (a ObjectAction) String() string {
 // zone of the one claim bound in the serving namespace
 // (compose.PoolSpec.Zones; zonePinFor), and the answer says so; with cache
 // false the slice serves without a claim and no zone follows from one
-// (giantswarm/cluster-manager#59, #65, #71).
+// (giantswarm/cluster-manager#59, #65, #71). With NoServing it is a plain
+// pool: the pool and the operator only, nothing of serving composed, read or
+// judged (giantswarm/cluster-manager#238).
 // LLMInferenceServiceConfigs a serving layer that went left terminating in
 // the release namespace are healed before the slice lands
 // (giantswarm/cluster-manager#28). Every refusal comes before any write.
@@ -370,6 +394,9 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if newer, err := versionNewer(facts.KubernetesVersion, strings.TrimPrefix(r.cpVersion, "v")); err == nil && newer {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("the cluster's release pins Kubernetes %s but its control plane runs %s: a pool is never newer than the control plane — finish the cluster's upgrade first, then re-run", facts.KubernetesVersion, r.cpVersion)}
 	}
+	if err := plainPoolRefusal(in, r.slice.serving, r.backend); err != nil {
+		return nil, err
+	}
 	cache := cacheChoice(in.Cache, r.slice.cache)
 	if err := r.aws.checkZones(in.Pool.Zones, target.Cluster); err != nil {
 		return nil, err
@@ -394,31 +421,46 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	if err != nil {
 		return nil, err
 	}
-	pinned := onlyOf(r.pools)
-	serving, slice, sliceObjs, err := s.sliceRelease(r.slice, target, facts, pinned, pin.sliceCache(), r.runtime)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.judgeIssuance(ctx, target, slice); err != nil {
-		return nil, err
+	// A plain pool composes nothing of serving and judges none of its
+	// prerequisites, the ClusterIssuer among them.
+	serving := r.slice.serving
+	var slice *SliceRelease
+	var sliceObjs []*unstructured.Unstructured
+	if !in.NoServing {
+		serving, slice, sliceObjs, err = s.sliceRelease(r.slice, target, facts, onlyOf(r.pools), pin.sliceCache(), r.runtime)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.judgeIssuance(ctx, dyn, c, target, slice); err != nil {
+			var refused *ErrRefused
+			if errors.As(err, &refused) {
+				refused.Reason += "; a pool that serves no models needs no certificate: serving false creates it without the slice"
+			}
+			return nil, err
+		}
 	}
 	// Only an explicit cache false is refused there: left out, the serving
 	// layer's setting stands.
-	if slice == nil && in.Cache != nil && !*in.Cache {
+	if slice == nil && !in.NoServing && in.Cache != nil && !*in.Cache {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("cache false: serving on %s is provided by %s (%s), not composed by cluster-manager — the model cache is that serving layer's setting, not this pool's; leave cache out, or change the setting where that layer is configured", target.Cluster, providerDescription(serving.Provider), strings.Join(serving.Evidence, "; "))}
 	}
 	// The backend document names every pool's sizes, this one's as composed:
 	// the one pool's, the pool the predictors are pinned to, or each of
 	// several by release name, so model-manager judges a load against the
 	// pool it lands on, one with no node yet included
-	// (giantswarm/cluster-manager#89).
-	pools, err := backendPools(target.Cluster, r.releases, in.Pool.Name, shapes)
-	if err != nil {
-		return nil, err
-	}
-	backend, err := s.backendDocument(target, pools, r.backend)
-	if err != nil {
-		return nil, err
+	// (giantswarm/cluster-manager#89). A plain pool registers none.
+	var backends []*unstructured.Unstructured
+	var registered *BackendRegistration
+	if !in.NoServing {
+		pools, err := backendPools(target.Cluster, r.releases, in.Pool.Name, shapes)
+		if err != nil {
+			return nil, err
+		}
+		backend, err := s.backendDocument(target, pools, r.backend)
+		if err != nil {
+			return nil, err
+		}
+		backends, registered = append(backends, backend), registration(backend, backendTargetName(target.backend))
 	}
 	// The claims priced in the cluster's region, and the cache block's
 	// figures for the claim the slice mounts — as read, or as the chart
@@ -430,7 +472,7 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		ChartVersion: compose.ChartVersion(objs[0]), KubernetesVersion: facts.KubernetesVersion,
 		ControlPlaneVersion: r.cpVersion, MachineImage: facts.MachineImage, Objects: []ObjectAction{},
 		GPUOperator: &operator, OperatorRow: row, Serving: &serving, Slice: slice,
-		Backend: registration(backend, backendTargetName(target.backend)),
+		Backend: registered,
 		Sizes:   compose.Priced(shapes, r.aws.region), PresetFit: r.fit, Warnings: pin.warnings(r.warnings),
 		Zones: pin.zones, ZonesNote: pin.note, CacheClaim: pin.claim, CacheClaims: claims, Cache: s.cacheSettingFor(slice, r.cache, pin, cacheWords),
 		PrefetchImages: r.prefetch.images, PrefetchNote: r.prefetch.note,
@@ -448,10 +490,10 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 	}
 	if in.Mode == ModeCommit {
 		releases := append(append(objs, sliceObjs...), operatorObjs...)
-		if err := s.commitCreate(ctx, dyn, c, in, releases, []*unstructured.Unstructured{backend}, out, start, target.warmup); err != nil {
+		if err := s.commitCreate(ctx, dyn, c, in, releases, backends, out, start, target.warmup); err != nil {
 			return nil, err
 		}
-		if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
+		if err := retireSharedBackends(ctx, dyn, c.GetName(), backends, in.DryRun, out); err != nil {
 			return nil, err
 		}
 		logApplied(ctx, "create_node_pool", out, start, target.warmup)
@@ -467,12 +509,12 @@ func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*
 		}
 	}
 	objs = append(objs, sliceObjs...)
-	objs = append(objs, backend)
+	objs = append(objs, backends...)
 	objs = append(objs, operatorObjs...)
 	if err := applyAll(ctx, dyn, objs, in.DryRun, out, s.budget(ctx, start, target.warmup)); err != nil {
 		return nil, err
 	}
-	if err := retireSharedBackend(ctx, dyn, backend.GetNamespace(), c.GetName(), backend.GetName(), in.DryRun, out); err != nil {
+	if err := retireSharedBackends(ctx, dyn, c.GetName(), backends, in.DryRun, out); err != nil {
 		return nil, err
 	}
 	logApplied(ctx, "create_node_pool", out, start, target.warmup)
@@ -539,6 +581,10 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	})
 	g.Go(func() (err error) {
 		defer timed(gctx, "serving detection and platform inputs")()
+		if in.NoServing {
+			r.slice = sliceReads{serving: detect.Serving(gctx, t.Target)}
+			return nil
+		}
 		r.slice, err = s.readSlice(gctx, dyn, t)
 		return err
 	})
@@ -548,6 +594,9 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 		return err
 	})
 	g.Go(func() error {
+		if in.NoServing {
+			return nil
+		}
 		defer timed(gctx, "preset fit")()
 		r.fit, r.warnings = s.presetFit(gctx, t, in.Pool.Name, shapes)
 		return nil
@@ -564,6 +613,10 @@ func (s *Service) readPool(ctx context.Context, dyn dynamic.Interface, t target,
 	})
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+	// A plain pool's nodes serve nothing: no runtime, no pre-pull.
+	if in.NoServing {
+		return r, nil
 	}
 	// The runtime set and the pre-pull's source depend on who provides
 	// serving, known only now.
@@ -709,6 +762,17 @@ func retireSharedBackend(ctx context.Context, dyn dynamic.Interface, ns, cluster
 	}
 	if act != nil {
 		out.Objects = append(out.Objects, *act)
+	}
+	return nil
+}
+
+// retireSharedBackends is retireSharedBackend for each backend document
+// written: none for a plain pool.
+func retireSharedBackends(ctx context.Context, dyn dynamic.Interface, cluster string, written []*unstructured.Unstructured, dryRun bool, out *WriteResult) error {
+	for _, doc := range written {
+		if err := retireSharedBackend(ctx, dyn, doc.GetNamespace(), cluster, doc.GetName(), dryRun, out); err != nil {
+			return err
+		}
 	}
 	return nil
 }

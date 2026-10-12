@@ -132,7 +132,7 @@ func (s *Service) EnableModelServing(ctx context.Context, in ModelServingInput) 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.judgeIssuance(ctx, target, slice); err != nil {
+	if err := s.judgeIssuance(ctx, dyn, c, target, slice); err != nil {
 		return nil, err
 	}
 	if slice == nil {
@@ -438,8 +438,10 @@ func gatewayAPICRDsFor(r sliceReads, cluster string) (GatewayAPICRDs, error) {
 // (giantswarm/cluster-manager#110). One that cannot is a refusal naming the
 // cause, the dry run's included: a slice applied over it reports Programmed
 // while every client fails the TLS handshake. Nothing to judge without a
-// slice or where the platform's wildcard serves the host.
-func (s *Service) judgeIssuance(ctx context.Context, t target, slice *SliceRelease) error {
+// slice or where the platform's wildcard serves the host. The issuer is read
+// as the caller: a forbidden read is refused naming the missing right and who
+// holds it on the cluster c (issuerForbidden).
+func (s *Service) judgeIssuance(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, t target, slice *SliceRelease) error {
 	if slice == nil || slice.Certificate == nil {
 		return nil
 	}
@@ -451,11 +453,35 @@ func (s *Service) judgeIssuance(ctx context.Context, t target, slice *SliceRelea
 		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether ClusterIssuer %s on %s can issue the certificate of %s: cluster-manager runs without a DNS resolver", issuer, t.Cluster, host)}
 	}
 	issuance, err := detect.JudgeIssuance(ctx, t.Reader, s.zones, issuer, host)
+	if apierrors.IsForbidden(err) {
+		return issuerForbidden(ctx, dyn, c, issuer, host)
+	}
 	if err != nil {
 		return &ErrRefused{Reason: fmt.Sprintf("the models host %s on %s would get no certificate: %v", host, t.Cluster, err)}
 	}
 	slice.Certificate = &issuance
 	return nil
+}
+
+// issuerForbidden is the refusal of a ClusterIssuer the caller may not read
+// on the cluster c: the right missing — get on clusterissuers.cert-manager.io
+// at cluster scope, which a namespaced binding or the view role does not
+// grant —, and the groups and users the cluster binds as cluster-admin
+// where create_cluster made it.
+func issuerForbidden(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, issuer, host string) error {
+	grant := "a ClusterRoleBinding on the cluster to a role with that right (cluster-admin has it)"
+	admins, _ := clusterAdminsOf(ctx, dyn, c)
+	if admins != nil && !admins.Empty() {
+		var who []string
+		for _, g := range admins.Groups {
+			who = append(who, "group "+g)
+		}
+		for _, u := range admins.Users {
+			who = append(who, "user "+u)
+		}
+		grant = fmt.Sprintf("the cluster binds cluster-admin, which has it, to %s", strings.Join(who, ", "))
+	}
+	return &ErrRefused{Reason: fmt.Sprintf("you may not read ClusterIssuer %s on %s: the serving slice's models host %s gets its certificate from it, and cluster-manager judges the issuer as you before composing the slice — missing: get on clusterissuers.cert-manager.io at cluster scope; %s — re-run once you hold it", issuer, c.GetName(), host, grant)}
 }
 
 // sliceReleaseOf reads the cluster's releases of the agent-platform chart:
