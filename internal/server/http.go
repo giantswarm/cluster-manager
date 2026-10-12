@@ -65,9 +65,10 @@ func New(cfg Config, mcpSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, er
 	}
 
 	if cfg.MCPEnabled && mcpSrv != nil {
-		mux.Handle(cfg.MCPPath, s.guard(mcpserver.NewStreamableHTTPServer(mcpSrv,
-			mcpserver.WithEndpointPath(cfg.MCPPath),
-		)))
+		// mcp-go reads a POST body whole before validating it
+		// (CVE-2026-108859): the bound keeps that read small.
+		mcpHandler := mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath))
+		mux.Handle(cfg.MCPPath, http.MaxBytesHandler(s.guard(mcpHandler), maxMCPBodyBytes))
 	}
 
 	s.http = &http.Server{
@@ -82,6 +83,9 @@ func New(cfg Config, mcpSrv *mcpserver.MCPServer, log *slog.Logger) (*Server, er
 
 // traced leaves the probes out of the traces: the kubelet calls them every
 // few seconds and they carry no caller.
+// maxMCPBodyBytes bounds an MCP request body.
+const maxMCPBodyBytes = 1 << 20
+
 func traced(r *http.Request) bool {
 	return r.URL.Path != "/healthz" && r.URL.Path != "/readyz"
 }
