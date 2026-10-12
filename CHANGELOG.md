@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `create_node_pool` takes `serving` (default `true`). `serving: false` creates a plain GPU pool: no serving slice, no backend registration, and no read of the slice's `ClusterIssuer` or other serving-only prerequisites, so a person without a cluster-scope read of `clusterissuers.cert-manager.io` on the workload cluster can create it. Where the slice is composed, a forbidden issuer read is refused naming the missing right and the subjects the cluster binds as cluster-admin, instead of the raw API error. ([#238](https://github.com/giantswarm/cluster-manager/issues/238))
 - The MCP endpoint refuses a request body larger than 1 MiB before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#236](https://github.com/giantswarm/cluster-manager/issues/236))
 
 ### Added
