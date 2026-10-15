@@ -74,6 +74,7 @@ from the platform identity contract (`global.identity`, `global.domain`).
 | github.authorizationServer.grantScope | string | `"subject"` | `subject`: the grant belongs to the person, not to one login session. |
 | muster.mcpServer.enabled | bool | `false` | Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`. |
 | muster.mcpServer.name | string | `"cluster-manager"` | MCPServer CR name (drives the tool prefix). |
+| muster.mcpServer.displayName | string | `"Cluster Manager"` | Human-friendly name the Dev Portal shows for this server, rendered as the `ui.giantswarm.io/display-name` annotation. Empty renders none. |
 | muster.mcpServer.autoStart | bool | `true` | Start the server connection when muster initializes. |
 | muster.mcpServer.description | string | `"Clusters and GPU node pools of this installation (list, and the node-pool writes as the person) for the Agent Platform"` | Human-readable description shown by muster. |
 | muster.mcpServer.labels | object | `{}` | Extra labels on the MCPServer CR. |
