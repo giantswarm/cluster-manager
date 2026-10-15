@@ -80,6 +80,16 @@ got=$(helm template t "$CHART" "${dex[@]}" --set 'muster.mcpServer.auth.required
 grep -qF -- '- --cluster-oidc-client-id=kubernetes' <<<"$got" || fail "created clusters: createdClusters.oidc.clientID does not win"
 if helm template t "$CHART" "${dex[@]}" | grep -q -- '--cluster-oidc-'; then fail "created clusters: an OIDC client id rendered without an audience"; fi
 
+# The MCPServer CR carries the display name the Dev Portal shows;
+# muster.mcpServer.displayName replaces it and empty renders no annotation.
+mcpserver() { helm template t "$CHART" --show-only templates/mcpserver.yaml --set muster.mcpServer.enabled=true "$@"; }
+got=$(mcpserver)
+grep -q -- '^    ui.giantswarm.io/display-name: "Cluster Manager"$' <<<"$got" || fail "the MCPServer lacks ui.giantswarm.io/display-name: Cluster Manager"
+got=$(mcpserver --set muster.mcpServer.displayName=Clusters)
+grep -q -- '^    ui.giantswarm.io/display-name: "Clusters"$' <<<"$got" || fail "muster.mcpServer.displayName does not set the display name"
+got=$(mcpserver --set muster.mcpServer.displayName=)
+if grep -q -- 'annotations:' <<<"$got"; then fail "an empty muster.mcpServer.displayName renders annotations"; fi
+
 # The tmp emptyDir at /tmp satisfies Kyverno's require-emptydir-requests-and-
 # limits policy by default: the container requests and limits ephemeral-storage
 # and the volume carries a sizeLimit; an empty tmpVolume.sizeLimit renders the
