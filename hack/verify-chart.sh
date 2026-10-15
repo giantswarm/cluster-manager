@@ -84,11 +84,11 @@ if helm template t "$CHART" "${dex[@]}" | grep -q -- '--cluster-oidc-'; then fai
 # muster.mcpServer.displayName replaces it and empty renders no annotation.
 mcpserver() { helm template t "$CHART" --show-only templates/mcpserver.yaml --set muster.mcpServer.enabled=true "$@"; }
 got=$(mcpserver)
-grep -q -- '^    ui.giantswarm.io/display-name: "Cluster Manager"$' <<<"$got" || fail "the MCPServer lacks ui.giantswarm.io/display-name: Cluster Manager"
-got=$(mcpserver --set muster.mcpServer.displayName=Clusters)
-grep -q -- '^    ui.giantswarm.io/display-name: "Clusters"$' <<<"$got" || fail "muster.mcpServer.displayName does not set the display name"
+grep -qxF -- '    ui.giantswarm.io/display-name: "Cluster Manager"' <<<"$got" || fail "the MCPServer lacks ui.giantswarm.io/display-name: Cluster Manager"
+got=$(mcpserver --set-string 'muster.mcpServer.displayName=Clusters: all of them')
+grep -qxF -- '    ui.giantswarm.io/display-name: "Clusters: all of them"' <<<"$got" || fail "muster.mcpServer.displayName does not set the display name"
 got=$(mcpserver --set muster.mcpServer.displayName=)
-if grep -q -- 'annotations:' <<<"$got"; then fail "an empty muster.mcpServer.displayName renders annotations"; fi
+if grep -qF -- 'ui.giantswarm.io/display-name' <<<"$got"; then fail "an empty muster.mcpServer.displayName renders the display name"; fi
 
 # The tmp emptyDir at /tmp satisfies Kyverno's require-emptydir-requests-and-
 # limits policy by default: the container requests and limits ephemeral-storage
