@@ -21,7 +21,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Create a workload cluster in an organization from a Giant Swarm release, as you or, in mode commit, as a pull request.
 
-Composes the release chart's HelmRelease, OCIRepository and <name>-values ConfigMap in org-<organization>, checked against the release chart's schema before any write. The cluster trusts the installation's identity provider, and binds you and the organization's admins as cluster-admin; values with their own global.controlPlane.oidc or bindings win whole. Each refusal says why and the way out. A re-run with the same arguments changes nothing; create_node_pool adds GPU pools.
+Composes the release chart's HelmRelease, OCIRepository and <name>-values ConfigMap in org-<organization>, checked against the release chart's schema before any write. The cluster trusts the installation's identity provider, and binds you and the organization's admins as cluster-admin; values with their own global.controlPlane.oidc or bindings win whole. A re-run with the same arguments changes nothing; create_node_pool adds GPU pools.
 ```
 
 ```json
@@ -90,7 +90,7 @@ Composes the release chart's HelmRelease, OCIRepository and <name>-values Config
 ```text
 Create or update a GPU node pool for a cluster, with the GPU operator and the model serving slice it needs.
 
-A second call with the same name is the update; dryRun shows the difference. Composes the gpu-node-pool release from the cluster's current release and, where missing, the <cluster>-gpu-operator release and the cluster's one serving slice (<cluster>-agent-platform), and registers the cluster's kserve backend with model-manager. The answer lists each size with what it leaves a predictor, its local disk and on-demand price, and the smallest size that hosts each serving preset (presetFit).
+A second call with the same name is the update; dryRun shows the difference. Composes the gpu-node-pool release from the cluster's current release, the <cluster>-gpu-operator release where none runs, and the cluster's one serving slice (<cluster>-agent-platform), shared by every pool and updated on every call; registers the cluster's kserve backend with model-manager. The answer prices each size and names the smallest hosting each serving preset (presetFit).
 ```
 
 ```json
@@ -167,7 +167,7 @@ A second call with the same name is the update; dryRun shows the difference. Com
       "type": "array"
     },
     "zones": {
-      "description": "Availability zones the pool's nodes may launch in, of the cluster's node subnets (list_clusters zones); with cache on, the pool follows its cache",
+      "description": "Availability zones of the cluster's node subnets (list_clusters zones). With cache on, every pool's predictors then mount the named zone's claim",
       "items": {
         "type": "string"
       },
@@ -187,7 +187,7 @@ A second call with the same name is the update; dryRun shows the difference. Com
 ```text
 Delete a workload cluster create_cluster created, with its GPU pools and serving, in two calls with the same arguments.
 
-The first call removes its model backend registration, HelmRelease, OCIRepository and values, without waiting for the uninstall; the answer names what goes with it, the models served and nextStep. Once list_clusters no longer lists it, the second call removes what the uninstall left, and then answers not found with notFound.nothingLeft. Refused with the way out for a cluster cluster-manager did not create, the installation's own, and one Flux applies from git.
+The first call removes its model backend registration, HelmRelease, OCIRepository and values, without waiting for the uninstall; nextStep says when to re-run. Once list_clusters no longer lists it, the second call removes what the uninstall left, then answers notFound.nothingLeft. Refused with the way out for a cluster cluster-manager did not create, the installation's own, and one Flux applies from git. Served models are no refusal: they go with it (dryRun names them).
 ```
 
 ```json
@@ -229,7 +229,7 @@ The first call removes its model backend registration, HelmRelease, OCIRepositor
 ```text
 Delete a GPU node pool create_node_pool created, idle nodes first; with the cluster's last pool, its model serving too.
 
-Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left. Answers within the caller's deadline: partial and nextStep name the re-run that continues.
+Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left.
 ```
 
 ```json
@@ -280,7 +280,7 @@ Refused while a node of the pool is busy unless force, naming each busy node and
 ```text
 Switch model serving off for a cluster: remove the serving slice and model backend cluster-manager created.
 
-Refused while models are served on the cluster unless force (the message names them), when the cluster cannot be read as you, and for a slice cluster-manager did not create. The slice goes in order; last the serving namespace is removed, or marked retired, naming what holds it. The model cache claims stay: remove_model_cache removes them. Answers within the caller's deadline: partial and nextStep name the re-run that continues. dryRun lists what would be removed.
+Refused while models are served on the cluster unless force (the message names them), when the cluster cannot be read as you, and for a slice cluster-manager did not create. The slice goes in order; last the serving namespace is removed, or marked retired, naming what holds it. The model cache claims stay: remove_model_cache removes them.
 ```
 
 ```json
@@ -326,7 +326,7 @@ Refused while models are served on the cluster unless force (the message names t
 ```text
 Switch model serving on for a cluster, with or without a GPU pool: its one serving slice, <cluster>-agent-platform.
 
-The slice (KServe, the llm-d control plane, the models Gateway at models.<domain>) follows the agent-platform chart from the version the installation's platform release runs, at least 4.85.0, to the next major; the cluster's kserve backend is registered with model-manager. An existing release is updated in place. Refused where the platform's own release or a hand install provides serving already. dryRun returns the rendered manifests and writes nothing.
+The slice (KServe, the llm-d control plane, the models Gateway at models.<domain>) follows the agent-platform chart from the version the installation's platform release runs, at least 4.85.0, to the next major; the cluster's kserve backend is registered with model-manager. An existing release is updated in place. Refused where the platform's own release or a hand install provides serving already.
 ```
 
 ```json
@@ -388,7 +388,7 @@ apply lands objects on the installation as you; commit opens a pull request as y
 ```text
 List the installation's clusters with their organization, release, GPU operator, model serving, zones and model cache.
 
-Per cluster: whether it is the installation's own; who provides the GPU operator and the serving layer (chart, cluster-manager, manual or unknown) and their readiness; the zones of its node subnets a pool may be pinned to; its GPU pool releases; where commit mode writes (commitTarget); its model cache claims with their zone and monthly price; and for a cluster create_cluster made, who it binds as cluster-admin. Empty where the installation does not serve the Cluster API.
+Says who provides the GPU operator and serving (chart, cluster-manager, manual) and how ready they are, the zones a pool may be pinned to, and what each model cache claim costs a month. Empty where the installation does not serve the Cluster API.
 ```
 
 ```json
@@ -404,7 +404,7 @@ Per cluster: whether it is the installation's own; who provides the GPU operator
 ```text
 List one cluster's node pools with their lifecycle, nodes, Kubernetes versions, instance sizes and prices.
 
-phase is creating, ready, scaling, removing or failed; steps say where the pool release, the MachinePool, the nodes and a prewarm placeholder stand, naming what holds a node back (the pods a drain waits on, a launch Karpenter refused and the way around it) and the idle nodes delete_node_pool removes. The pool's and the control plane's Kubernetes versions are given side by side, without a verdict. Each size carries its on-demand price per hour in the cluster's region, or priceNote.
+phase is creating, ready, scaling, removing or failed; steps name what holds a pool or node back (a drain, a launch Karpenter refused, and the way around it). The pool's and the control plane's Kubernetes versions are given side by side, without a verdict.
 ```
 
 ```json
@@ -450,9 +450,9 @@ Each with its state (active, deprecated, wip, preview), Kubernetes version, clus
 ## `remove_model_cache`
 
 ```text
-Remove a cluster's model cache: its hf-cache* volume claims, billed every month they exist, even with no pool left.
+Remove a cluster's model cache: its hf-cache* storage claims, billed every month they exist, even with no pool left.
 
-Where cluster-manager's serving slice mounts the cache, it is switched to serve without it first; every predictor then downloads its weights at each start. Refused while a pod mounts a claim to be removed (the refusal names the models to unload with model-manager's unload_model), when the cluster cannot be read as you, and where someone else provides serving. The answer lists the claims removed with their size and monthly price. dryRun lists what would be removed.
+Where cluster-manager's serving slice mounts the cache, it is switched to serve without it first; every predictor then downloads its weights at each start. Refused while a pod mounts a claim to be removed (the refusal names the models to unload with model-manager's unload_model), when the cluster cannot be read as you, and where someone else provides serving.
 ```
 
 ```json

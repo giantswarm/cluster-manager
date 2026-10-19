@@ -111,10 +111,8 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListClusters,
 		tooldesc.Describe("List the installation's clusters with their organization, release, GPU operator, model serving, zones and model cache.",
-			"Per cluster: whether it is the installation's own; who provides the GPU operator and the serving layer (chart, cluster-manager, manual or unknown) and their readiness; "+
-				"the zones of its node subnets a pool may be pinned to; its GPU pool releases; where commit mode writes (commitTarget); "+
-				"its model cache claims with their zone and monthly price; and for a cluster create_cluster made, who it binds as cluster-admin. "+
-				"Empty where the installation does not serve the Cluster API."),
+			"Says who provides the GPU operator and serving (chart, cluster-manager, manual) and how ready they are, the zones a pool may be pinned to, "+
+				"and what each model cache claim costs a month. Empty where the installation does not serve the Cluster API."),
 		readOnly(),
 	), t.listClusters)
 
@@ -131,7 +129,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		tooldesc.Describe("Create a workload cluster in an organization from a Giant Swarm release, as you or, in mode commit, as a pull request.",
 			"Composes the release chart's HelmRelease, OCIRepository and <name>-values ConfigMap in org-<organization>, checked against the release chart's schema before any write. "+
 				"The cluster trusts the installation's identity provider, and binds you and the organization's admins as cluster-admin; values with their own global.controlPlane.oidc or bindings win whole. "+
-				"Each refusal says why and the way out. A re-run with the same arguments changes nothing; create_node_pool adds GPU pools."),
+				"A re-run with the same arguments changes nothing; create_node_pool adds GPU pools."),
 		mcp.WithString(argOrganization, mcp.Required(), mcp.Description("The organization the cluster belongs to; it lives in the namespace org-<organization>")),
 		mcp.WithString(argName, mcp.Required(), mcp.Description(fmt.Sprintf("The cluster's name: a DNS label of at most %d characters starting with a letter, unused on the installation; it cannot change", compose.MaxClusterNameLength))),
 		mcp.WithString(argProvider, mcp.Required(), mcp.Enum(compose.Providers()...), mcp.Description("The provider line: its release chart is release-<provider>")),
@@ -147,9 +145,10 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolDeleteCluster,
 		tooldesc.Describe("Delete a workload cluster create_cluster created, with its GPU pools and serving, in two calls with the same arguments.",
-			"The first call removes its model backend registration, HelmRelease, OCIRepository and values, without waiting for the uninstall; the answer names what goes with it, the models served and nextStep. "+
-				"Once list_clusters no longer lists it, the second call removes what the uninstall left, and then answers not found with notFound.nothingLeft. "+
-				"Refused with the way out for a cluster cluster-manager did not create, the installation's own, and one Flux applies from git."),
+			"The first call removes its model backend registration, HelmRelease, OCIRepository and values, without waiting for the uninstall; nextStep says when to re-run. "+
+				"Once list_clusters no longer lists it, the second call removes what the uninstall left, then answers notFound.nothingLeft. "+
+				"Refused with the way out for a cluster cluster-manager did not create, the installation's own, and one Flux applies from git. "+
+				"Served models are no refusal: they go with it (dryRun names them)."),
 		mcp.WithString(argOrganization, mcp.Required(), mcp.Description("The organization the cluster belongs to; it lives in the namespace org-<organization>")),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("The cluster's name as given to create_cluster")),
 		modeArg("apply: remove the objects as you; commit: open the removal pull request as you, the backend removed live; commit.liveSteps names what is left"),
@@ -160,10 +159,8 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListNodePools,
 		tooldesc.Describe("List one cluster's node pools with their lifecycle, nodes, Kubernetes versions, instance sizes and prices.",
-			"phase is creating, ready, scaling, removing or failed; steps say where the pool release, the MachinePool, the nodes and a prewarm placeholder stand, "+
-				"naming what holds a node back (the pods a drain waits on, a launch Karpenter refused and the way around it) and the idle nodes delete_node_pool removes. "+
-				"The pool's and the control plane's Kubernetes versions are given side by side, without a verdict. "+
-				"Each size carries its on-demand price per hour in the cluster's region, or priceNote."),
+			"phase is creating, ready, scaling, removing or failed; steps name what holds a pool or node back (a drain, a launch Karpenter refused, and the way around it). "+
+				"The pool's and the control plane's Kubernetes versions are given side by side, without a verdict."),
 		clusterArg(),
 		namespaceArg(),
 		readOnly(),
@@ -172,8 +169,9 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolCreateNodePool,
 		tooldesc.Describe("Create or update a GPU node pool for a cluster, with the GPU operator and the model serving slice it needs.",
 			"A second call with the same name is the update; dryRun shows the difference. "+
-				"Composes the gpu-node-pool release from the cluster's current release and, where missing, the <cluster>-gpu-operator release and the cluster's one serving slice (<cluster>-agent-platform), and registers the cluster's kserve backend with model-manager. "+
-				"The answer lists each size with what it leaves a predictor, its local disk and on-demand price, and the smallest size that hosts each serving preset (presetFit)."),
+				"Composes the gpu-node-pool release from the cluster's current release, the <cluster>-gpu-operator release where none runs, "+
+				"and the cluster's one serving slice (<cluster>-agent-platform), shared by every pool and updated on every call; registers the cluster's kserve backend with model-manager. "+
+				"The answer prices each size and names the smallest hosting each serving preset (presetFit)."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithString(argName, mcp.Required(), mcp.Pattern(compose.PoolNamePattern.String()), mcp.Description("Pool name within the cluster, five to twenty lowercase characters, digits and dashes (gpu00, gpu-l4); <cluster>-<name> names the MachinePool")),
@@ -182,7 +180,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		mcp.WithNumber(argMaxGPUs, mcp.Min(1), mcp.DefaultNumber(defaultMaxGPUs), mcp.Description("Upper bound of the pool in GPUs across all of its nodes; the minimum is always 0 (scale to zero)")),
 		mcp.WithString(argChartVersion, mcp.Description("Exact gpu-node-pool chart version to pin; default none: the pool follows the chart from "+compose.MinPoolChartVersion+" to the next major")),
 		mcp.WithBoolean(argPrewarm, mcp.DefaultBool(false), mcp.Description("Launch the pool's first node with the release, held by a placeholder until the first workload; only for the installation's own pool, at install")),
-		mcp.WithArray(argZones, mcp.Items(map[string]any{"type": "string"}), mcp.Description("Availability zones the pool's nodes may launch in, of the cluster's node subnets (list_clusters zones); with cache on, the pool follows its cache")),
+		mcp.WithArray(argZones, mcp.Items(map[string]any{"type": "string"}), mcp.Description("Availability zones of the cluster's node subnets (list_clusters zones). With cache on, every pool's predictors then mount the named zone's claim")),
 		mcp.WithBoolean(argCache, mcp.DefaultBool(false), mcp.Description("Whether the cluster's slice, for every pool, mounts a model cache claim: a volume billed monthly until remove_model_cache. Omitted: keep the setting")),
 		mcp.WithBoolean(argServing, mcp.DefaultBool(true), mcp.Description("Whether the pool serves models: false creates a plain GPU pool, with no serving slice and no backend registration")),
 		modeArg("apply: land the objects as you; commit: open the pull request as you (list_clusters commitTarget), the backend registered live"),
@@ -194,8 +192,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolDeleteNodePool,
 		tooldesc.Describe("Delete a GPU node pool create_node_pool created, idle nodes first; with the cluster's last pool, its model serving too.",
 			"Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. "+
-				"Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left. "+
-				"Answers within the caller's deadline: partial and nextStep name the re-run that continues."),
+				"Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Pool name as given to create_node_pool")),
@@ -210,7 +207,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 		tooldesc.Describe("Switch model serving on for a cluster, with or without a GPU pool: its one serving slice, <cluster>-agent-platform.",
 			fmt.Sprintf("The slice (KServe, the llm-d control plane, the models Gateway at models.<domain>) follows the agent-platform chart from the version the installation's platform release runs, at least %s, to the next major; ", compose.MinSliceChartVersion)+
 				"the cluster's kserve backend is registered with model-manager. An existing release is updated in place. "+
-				"Refused where the platform's own release or a hand install provides serving already. dryRun returns the rendered manifests and writes nothing."),
+				"Refused where the platform's own release or a hand install provides serving already."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithBoolean(argCache, mcp.DefaultBool(false), mcp.Description("Whether the slice mounts a model cache claim: a volume billed monthly until remove_model_cache. Omitted: keep the release's setting")),
@@ -225,8 +222,7 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolDisableModelServing,
 		tooldesc.Describe("Switch model serving off for a cluster: remove the serving slice and model backend cluster-manager created.",
 			"Refused while models are served on the cluster unless force (the message names them), when the cluster cannot be read as you, and for a slice cluster-manager did not create. "+
-				"The slice goes in order; last the serving namespace is removed, or marked retired, naming what holds it. The model cache claims stay: remove_model_cache removes them. "+
-				"Answers within the caller's deadline: partial and nextStep name the re-run that continues. dryRun lists what would be removed."),
+				"The slice goes in order; last the serving namespace is removed, or marked retired, naming what holds it. The model cache claims stay: remove_model_cache removes them."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Remove the serving slice even while models are served: they go with it")),
@@ -239,10 +235,9 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	), t.disableModelServing)
 
 	s.AddTool(mcp.NewTool(ToolRemoveModelCache,
-		tooldesc.Describe("Remove a cluster's model cache: its hf-cache* volume claims, billed every month they exist, even with no pool left.",
+		tooldesc.Describe("Remove a cluster's model cache: its hf-cache* storage claims, billed every month they exist, even with no pool left.",
 			"Where cluster-manager's serving slice mounts the cache, it is switched to serve without it first; every predictor then downloads its weights at each start. "+
-				"Refused while a pod mounts a claim to be removed (the refusal names the models to unload with model-manager's unload_model), when the cluster cannot be read as you, and where someone else provides serving. "+
-				"The answer lists the claims removed with their size and monthly price. dryRun lists what would be removed."),
+				"Refused while a pod mounts a claim to be removed (the refusal names the models to unload with model-manager's unload_model), when the cluster cannot be read as you, and where someone else provides serving."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithString(argClaim, mcp.Description("One model cache claim to remove, by name (hf-cache, hf-cache-eu-central-1a); default every hf-cache* claim of the serving namespace")),
