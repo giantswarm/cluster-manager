@@ -7,7 +7,7 @@ toolchain go1.27.2
 require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/giantswarm/gitops-commit v0.11.3
+	github.com/giantswarm/gitops-commit v0.11.4
 	github.com/giantswarm/mcp-oauth v1.7.3
 	github.com/giantswarm/mcp-toolkit v0.4.1
 	github.com/go-jose/go-jose/v4 v4.1.6
