@@ -15,6 +15,10 @@ docker-build: build-linux-amd64 ## Build a local dev image (TAG=cluster-manager:
 test-race: ## Run tests with the race detector.
 	go test -race ./...
 
+.PHONY: tools-doc
+tools-doc: ## Regenerate docs/tools.md from the registered tools.
+	TOOLS_DOC_UPDATE=1 go test ./internal/api -run TestToolsDocIsCurrent
+
 ##@ Helm
 
 .PHONY: helm-lint
