@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,6 +74,10 @@ func newServer(t *testing.T) *handlersServer {
 // KaaS components does.
 func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
 	t.Helper()
+	return &handlersServer{buildServer(clusterAPI)}
+}
+
+func buildServer(clusterAPI bool) *mcpserver.MCPServer {
 	disc := &discoveryfake.FakeDiscovery{Fake: &k8stesting.Fake{}}
 	if clusterAPI {
 		disc.Resources = []*metav1.APIResourceList{{GroupVersion: tools.ClusterGVR.GroupVersion().String(), APIResources: []metav1.APIResource{{Name: tools.ClusterGVR.Resource, Kind: "Cluster", Namespaced: true}}}}
@@ -83,7 +88,7 @@ func newServerWithClusterAPI(t *testing.T, clusterAPI bool) *handlersServer {
 		detect.NodesGVR: "NodeList", detect.DeploymentGVR: "DeploymentList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.LLMISVCGVR: "LLMInferenceServiceList", detect.LLMISVCConfigResource.WithVersion("v1alpha2"): "LLMInferenceServiceConfigList", detect.DaemonSetGVR: "DaemonSetList", detect.NodeClaimGVR: "NodeClaimList", detect.GatewayGVR: "GatewayList", detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
 	svc := tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"})
-	return &handlersServer{NewMCPServer(svc, "test")}
+	return NewMCPServer(svc, "test")
 }
 
 type handlersServer struct{ messageHandler }
