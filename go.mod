@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/giantswarm/gitops-commit v0.11.4
+	github.com/giantswarm/gitops-commit v0.11.5
 	github.com/giantswarm/mcp-oauth v1.7.4
 	github.com/giantswarm/mcp-toolkit v0.4.2
 	github.com/go-jose/go-jose/v4 v4.1.6
@@ -154,7 +154,7 @@ require (
 	github.com/go-openapi/swag/typeutils v0.29.2 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
-	github.com/google/go-github/v92 v92.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
