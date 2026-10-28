@@ -8,7 +8,7 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/gitops-commit v0.11.10
-	github.com/giantswarm/mcp-oauth v1.8.0
+	github.com/giantswarm/mcp-oauth v1.9.3
 	github.com/giantswarm/mcp-toolkit v0.4.7
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/mark3labs/mcp-go v1.4.0
