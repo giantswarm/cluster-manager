@@ -63,6 +63,9 @@
                 }
             }
         },
+        "externalDNSIP": {
+            "type": "string"
+        },
         "extraArgs": {
             "type": "array",
             "description": "Extra container arguments."
@@ -165,7 +168,13 @@
         "global": {
             "type": "object",
             "description": "Platform-wide values a parent chart (the `agent-platform` meta chart) shares with every component; Helm forwards them to this chart. `oauth.*` reads the identity contract as its defaults: `global.identity.issuerUrl`, `global.identity.clientId`, `global.identity.existingSecret`, `global.identity.ca.secretName` / `.key`, and `global.domain` for the OAuth base URL. Empty here; a chart installed on its own sets `oauth.*` directly.",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "properties": {
+                "podSecurityStandards": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
         },
         "gpuOperator": {
             "type": "object",
@@ -176,6 +185,10 @@
                     "description": "Run NVIDIA's DCGM exporter on the GPU pools' nodes through the composed `<cluster>-gpu-operator` release (its `dcgmExporter.enabled`), for an installation whose observability scrapes it (a ServiceMonitor on the `nvidia-dcgm-exporter` Service in `kube-system`). Off by default: nothing scrapes the exporter out of the box, and on a fresh pool node it is an image pull and a pod initialising DCGM on the GPU while the device plugin brings `nvidia.com/gpu` up."
                 }
             }
+        },
+        "helm": {
+            "type": "object",
+            "additionalProperties": true
         },
         "image": {
             "type": "object",
@@ -222,6 +235,9 @@
                     "description": "Enable debug logging."
                 }
             }
+        },
+        "managementCluster": {
+            "type": "string"
         },
         "mcp": {
             "type": "object",
