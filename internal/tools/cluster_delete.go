@@ -315,16 +315,20 @@ func kubeconfigSecretOf(hr *unstructured.Unstructured) string {
 
 // clusterReleases names the HelmReleases that go with the cluster's release:
 // the GPU pool, operator and slice releases cluster-manager created, through
-// their ownerReference to the Cluster, and the default apps the uninstall
-// removes — every release in ns labelled with the cluster but its own.
+// their ownerReference to the Cluster, the default apps the uninstall
+// removes — every release in ns labelled with the cluster but its own —, and
+// the releases installing into the cluster through its kubeconfig Secret:
+// the slice's children, which carry no cluster label and go with the slice
+// release (giantswarm/cluster-manager#212).
 func clusterReleases(ctx context.Context, dyn dynamic.Interface, ns, cluster string) ([]string, error) {
-	list, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: compose.LabelCluster + "=" + cluster})
+	list, err := dyn.Resource(HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list the releases of cluster %s in %s: %w", cluster, ns, err)
 	}
+	secret := compose.KubeconfigSecretName(cluster)
 	var names []string
 	for _, hr := range list.Items {
-		if hr.GetName() != cluster {
+		if hr.GetName() != cluster && (hr.GetLabels()[compose.LabelCluster] == cluster || kubeconfigSecretOf(&hr) == secret) {
 			names = append(names, ns+"/"+hr.GetName())
 		}
 	}

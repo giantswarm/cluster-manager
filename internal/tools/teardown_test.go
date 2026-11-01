@@ -628,3 +628,136 @@ func TestCreateNodePoolHealsStrandedConfigs(t *testing.T) {
 	require.Len(t, kept.Warnings, 1)
 	assert.Contains(t, kept.Warnings[0], "3 LLMInferenceServiceConfig(s) in agent-platform on wc1 are terminating while an llmisvc controller runs (kserve-config-llm-decode-worker-data-parallel, kserve-config-llm-scheduler, kserve-config-llm-template): models still referencing them hold them")
 }
+
+// installingChildren puts the slice's two child releases into the state
+// helm-controller holds them in while it installs them: its finalizer on,
+// Ready=Unknown [Progressing].
+func installingChildren(t *testing.T, l *lab) {
+	t.Helper()
+	ctx := context.Background()
+	res := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	for _, child := range []string{llmisvcResourcesRelease, runtimeConfigsRelease} {
+		hr, err := res.Get(ctx, wc1Child(child), metav1.GetOptions{})
+		require.NoError(t, err)
+		hr.SetFinalizers([]string{fluxFinalizer})
+		require.NoError(t, unstructured.SetNestedSlice(hr.Object, []any{map[string]any{
+			"type": "Ready", "status": "Unknown", "reason": "Progressing", "message": "Running 'install' action with timeout of 5m0s",
+		}}, "status", "conditions"))
+		_, err = res.Update(ctx, hr, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+}
+
+// installed marks the slice's child releases installed: Ready=True.
+func installed(t *testing.T, l *lab) {
+	t.Helper()
+	ctx := context.Background()
+	res := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	for _, child := range []string{llmisvcResourcesRelease, runtimeConfigsRelease} {
+		hr, err := res.Get(ctx, wc1Child(child), metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedSlice(hr.Object, []any{map[string]any{"type": "Ready", "status": "True", "reason": "InstallSucceeded"}}, "status", "conditions"))
+		_, err = res.Update(ctx, hr, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+}
+
+// TestDeleteLastPoolWaitsForTheSliceInstall (giantswarm/cluster-manager#212):
+// a slice removed while helm-controller still installs its children is not
+// torn down under the install — a child deleted mid-install fails its
+// uninstall and stays, finalizer and all, once the cluster goes. The
+// teardown waits within the budget; what does not settle cuts it before any
+// removal of the slice, and the answer names the installing releases. Once
+// they installed, the re-run tears down in order. The dry run names them.
+func TestDeleteLastPoolWaitsForTheSliceInstall(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	installingChildren(t, l)
+	installing := "2 HelmRelease(s) of the serving slice of wc1 are still installing"
+	children := "org-acme/wc1-kserve-llmisvc-resources (Ready=Unknown [Progressing] Running 'install' action with timeout of 5m0s); org-acme/wc1-kserve-runtime-configs (Ready=Unknown [Progressing] Running 'install' action with timeout of 5m0s)"
+
+	dry := deleteLastPool(t, svc, context.Background(), false, true)
+	assert.Equal(t, withActions(orderedTeardown, "would-delete", 0), objectNames(dry))
+	require.NotEmpty(t, dry.Warnings)
+	assert.Equal(t, installing+" — the teardown would wait for their install to end before removing any of the slice, so no uninstall races an install: "+children, dry.Warnings[0])
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeReserve+300*time.Millisecond)
+	defer cancel()
+	out := deleteLastPool(t, svc, ctx, false, false)
+	assert.True(t, out.Partial)
+	assert.Equal(t, withActions(orderedTeardown, "pending", 0), objectNames(out), "nothing of the slice is removed while it installs")
+	require.NotEmpty(t, out.Warnings)
+	assert.Equal(t, installing+", and the teardown removes none of the slice while an install runs — an uninstall racing it fails, and the release stays with finalizers.fluxcd.io once the cluster is gone: "+children, out.Warnings[0])
+	assert.Contains(t, out.NextStep, "10 object(s) are pending")
+	assert.Equal(t, fixtureConfigs, remainingConfigs(t, l))
+	for _, child := range []string{llmisvcResourcesRelease, runtimeConfigsRelease} {
+		_, err := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme").Get(context.Background(), wc1Child(child), metav1.GetOptions{})
+		require.NoError(t, err, "%s is not deleted while it installs", child)
+	}
+
+	installed(t, l)
+	again := deleteLastPool(t, svc, context.Background(), false, false)
+	assert.False(t, again.Partial)
+	assert.Equal(t, orderedTeardown, objectNames(again))
+	assertGone(t, l, wc1Child(llmisvcResourcesRelease), wc1Child(runtimeConfigsRelease), "wc1-agent-platform", "wc1-gpu-a10g")
+}
+
+// TestDeleteLastPoolWaitsForAnInstallThatEnds: an install that ends within
+// the budget is waited for, and the teardown runs in the same call.
+func TestDeleteLastPoolWaitsForAnInstallThatEnds(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	installingChildren(t, l)
+	// helm-controller ends the install between the teardown's first and
+	// second look; the reactor only counts, the install is landed in the
+	// tracker from outside it (the fake holds its lock while reactors run).
+	var looks atomic.Int32
+	first := make(chan struct{})
+	fakeInstallation(t, l).PrependReactor("list", HelmReleaseGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		if looks.Add(1) == 1 {
+			close(first)
+		}
+		return false, nil, nil
+	})
+	go func() {
+		<-first
+		installed(t, l)
+	}()
+	out := deleteLastPool(t, svc, context.Background(), false, false)
+	assert.GreaterOrEqual(t, looks.Load(), int32(2), "the teardown looked again after the install ended")
+	assert.False(t, out.Partial)
+	assert.Equal(t, orderedTeardown, objectNames(out))
+	assertGone(t, l, wc1Child(llmisvcResourcesRelease), wc1Child(runtimeConfigsRelease), "wc1-agent-platform", "wc1-gpu-a10g")
+}
+
+// TestInstalling: what counts as an install helm-controller runs.
+func TestInstalling(t *testing.T) {
+	hr := func(finalizers []any, suspend bool, deleted bool, conds ...any) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"name": "x", "finalizers": finalizers},
+			"spec":     map[string]any{"suspend": suspend},
+			"status":   map[string]any{"conditions": conds},
+		}}
+		if deleted {
+			now := metav1.Now()
+			u.SetDeletionTimestamp(&now)
+		}
+		return u
+	}
+	cond := func(typ, status string) map[string]any { return map[string]any{"type": typ, "status": status} }
+	flux := []any{fluxFinalizer}
+	for name, c := range map[string]struct {
+		hr   *unstructured.Unstructured
+		want bool
+	}{
+		"never picked up":               {hr(nil, false, false), false},
+		"picked up, not installing yet": {hr(flux, false, false), false},
+		"progressing":                   {hr(flux, false, false, cond("Ready", "Unknown")), true},
+		"upgrading":                     {hr(flux, false, false, cond("Ready", "True"), cond("Reconciling", "True")), true},
+		"installed":                     {hr(flux, false, false, cond("Ready", "True")), false},
+		"failed":                        {hr(flux, false, false, cond("Ready", "False")), false},
+		"suspended":                     {hr(flux, true, false, cond("Ready", "Unknown")), false},
+		"deleted":                       {hr(flux, false, true, cond("Ready", "Unknown")), false},
+	} {
+		_, got := installing(c.hr)
+		assert.Equal(t, c.want, got, name)
+	}
+}

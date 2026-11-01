@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -268,10 +269,13 @@ func (td *teardown) awaitOrphans(plans []deletePlan, secret string) error {
 		if err != nil {
 			return err
 		}
-		if ok {
+		switch {
+		case ok:
 			gone = append(gone, p.act.String())
-		} else {
+		case td.dryRun:
 			left = append(left, p.act.String())
+		default:
+			left = append(left, td.releaseState(p))
 		}
 	}
 	switch {
@@ -280,13 +284,27 @@ func (td *teardown) awaitOrphans(plans []deletePlan, secret string) error {
 	case td.dryRun:
 		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) install into the cluster through %s, which is gone: they would be suspended and deleted, so helm-controller skips their uninstall and takes %s off: %s", len(left), secret, fluxFinalizer, strings.Join(left, ", ")))
 	default:
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) installing into the gone cluster through %s were suspended and deleted, and helm-controller has not taken %s off them yet: %s", len(left), secret, fluxFinalizer, strings.Join(left, ", ")))
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) installing into the gone cluster through %s were suspended and deleted, and helm-controller has not taken %s off them yet: %s", len(left), secret, fluxFinalizer, strings.Join(left, "; ")))
 		td.out.NextStep = "re-run delete_cluster with the same arguments once helm-controller has removed the suspended releases: it answers that nothing of the cluster is left"
 	}
 	if len(gone) > 0 {
 		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) installing into the gone cluster through %s were suspended and deleted, and helm-controller removed them without an uninstall: %s", len(gone), secret, strings.Join(gone, ", ")))
 	}
 	return nil
+}
+
+// releaseState names a release left terminating with what holds it: its
+// finalizers and its Ready condition (giantswarm/cluster-manager#212).
+func (td *teardown) releaseState(p deletePlan) string {
+	hr, err := p.res.Get(td.ctx, p.act.Name, metav1.GetOptions{})
+	if err != nil {
+		return p.act.String()
+	}
+	state := "finalizers: " + strings.Join(hr.GetFinalizers(), ", ")
+	if ready, found := detect.ReadyCondition(hr); found {
+		state += "; " + conditionState(ready)
+	}
+	return p.act.String() + " (" + state + ")"
 }
 
 // servingTeardown removes the slice's serving objects that must go before
@@ -304,6 +322,9 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether the LLMInferenceServiceConfigs of %s on %s are gone (%s): the serving slice is removed in order so none is left terminating — make the cluster readable as you and re-run, or pass force to remove the slice regardless", t.SliceNamespace, cluster, t.Reason)}
 	}
 	slice := compose.SliceReleaseName(cluster)
+	if err := td.awaitInstalls(ns, slice, cluster); err != nil {
+		return err
+	}
 	if err := td.deleteChildRelease(ns, slice, compose.SliceChildName(cluster, llmisvcResourcesRelease)); err != nil {
 		return err
 	}
@@ -313,6 +334,100 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 		return err
 	}
 	return td.deleteChildRelease(ns, slice, compose.SliceChildName(cluster, runtimeConfigsRelease))
+}
+
+// awaitInstalls waits within the budget, before the slice's first removal,
+// for every release of the slice still installing — the slice release in ns
+// and the child releases it renders — to end its install. A release deleted
+// while helm-controller installs it is uninstalled only once the install
+// ends, against a target that may be going by then: on a test installation
+// the children of a slice removed 30 s after it was created failed their
+// uninstall and stayed, finalizer and all, once the cluster went
+// (giantswarm/cluster-manager#212). Installing is a release helm-controller
+// is reconciling: Ready=Unknown or Reconciling=True. One it has not started
+// to install has no Helm release to uninstall and goes at once. What does not settle
+// within the budget cuts the teardown: every removal is pending, and the
+// re-run waits again. A dry run names them.
+func (td *teardown) awaitInstalls(ns, slice, cluster string) error {
+	for {
+		installing, err := installingReleases(td.ctx, td.dyn, ns, slice)
+		if err != nil {
+			return err
+		}
+		if len(installing) == 0 {
+			return nil
+		}
+		switch {
+		case td.dryRun:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) of the serving slice of %s are still installing — the teardown would wait for their install to end before removing any of the slice, so no uninstall races an install: %s", len(installing), cluster, strings.Join(installing, "; ")))
+			return nil
+		case !td.fits():
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) of the serving slice of %s are still installing, and the teardown removes none of the slice while an install runs — an uninstall racing it fails, and the release stays with %s once the cluster is gone: %s", len(installing), cluster, fluxFinalizer, strings.Join(installing, "; ")))
+			return nil
+		}
+		if err := sleepWithin(td.ctx, pollInterval(time.Until(td.budget))); err != nil {
+			return err
+		}
+	}
+}
+
+// installingReleases names the releases of the slice in ns still installing
+// (awaitInstalls), each with its state: the slice release and its children,
+// sorted by name.
+func installingReleases(ctx context.Context, dyn dynamic.Interface, ns, slice string) ([]string, error) {
+	res := dyn.Resource(HelmReleaseGVR).Namespace(ns)
+	children, err := res.List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s=%s", detect.LabelFluxReleaseName, slice, detect.LabelFluxReleaseNamespace, ns)})
+	if err != nil {
+		return nil, fmt.Errorf("list the child releases of %s/%s: %w", ns, slice, err)
+	}
+	releases := children.Items
+	parent, err := getOptional(ctx, dyn, HelmReleaseGVR, ns, slice)
+	if err != nil {
+		return nil, err
+	}
+	if parent != nil {
+		releases = append(releases, *parent)
+	}
+	var out []string
+	for i := range releases {
+		if state, ok := installing(&releases[i]); ok {
+			out = append(out, ns+"/"+releases[i].GetName()+" ("+state+")")
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// installing reports whether helm-controller is installing or upgrading a
+// release, with its state: Ready=Unknown or Reconciling=True. A release
+// being deleted or suspended is not.
+func installing(hr *unstructured.Unstructured) (string, bool) {
+	if hr.GetDeletionTimestamp() != nil {
+		return "", false
+	}
+	if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
+		return "", false
+	}
+	if ready, found := detect.ReadyCondition(hr); found && ready.Status == "Unknown" {
+		return conditionState(ready), true
+	}
+	if r, ok := detect.ConditionOf(hr, "Reconciling"); ok && r.Status == "True" {
+		return conditionState(r), true
+	}
+	return "", false
+}
+
+// conditionState is one condition as the answer names it:
+// Type=Status [Reason] message.
+func conditionState(c detect.Condition) string {
+	s := c.Type + "=" + c.Status
+	if c.Reason != "" {
+		s += " [" + c.Reason + "]"
+	}
+	if msg := strings.Join(strings.Fields(c.Message), " "); msg != "" {
+		s += " " + msg
+	}
+	return s
 }
 
 // purgeWhenControllerGone removes, once no llm-d controller runs on the
@@ -344,7 +459,7 @@ func (td *teardown) purgeWhenControllerGone(t target, servingNamespace string) e
 		return nil
 	}
 	defer timed(td.ctx, "purge", "configs", len(configs), "models", len(models))()
-	var reason string // why the objects are not gone yet
+	reason := "the call's budget ran out first" // why the objects are not gone yet
 	for td.fits() && !td.dryRun {
 		if detect.LLMISVCControllerRuns(td.ctx, t.Reader) {
 			reason = "the llmisvc controller still runs on " + t.Cluster
