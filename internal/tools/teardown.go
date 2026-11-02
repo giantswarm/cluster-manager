@@ -322,7 +322,7 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 		return &ErrRefused{Reason: fmt.Sprintf("cannot tell whether the LLMInferenceServiceConfigs of %s on %s are gone (%s): the serving slice is removed in order so none is left terminating — make the cluster readable as you and re-run, or pass force to remove the slice regardless", t.SliceNamespace, cluster, t.Reason)}
 	}
 	slice := compose.SliceReleaseName(cluster)
-	if err := td.awaitInstalls(ns, slice, cluster); err != nil {
+	if err := td.awaitInstalls(ns, slice, cluster, force); err != nil {
 		return err
 	}
 	if err := td.deleteChildRelease(ns, slice, compose.SliceChildName(cluster, llmisvcResourcesRelease)); err != nil {
@@ -343,12 +343,13 @@ func (s *Service) servingTeardown(td *teardown, t target, force bool) error {
 // ends, against a target that may be going by then: on a test installation
 // the children of a slice removed 30 s after it was created failed their
 // uninstall and stayed, finalizer and all, once the cluster went
-// (giantswarm/cluster-manager#212). Installing is a release helm-controller
-// is reconciling: Ready=Unknown or Reconciling=True. One it has not started
-// to install has no Helm release to uninstall and goes at once. What does not settle
+// (giantswarm/cluster-manager#212). Installing is a release whose Helm
+// action runs now (installing); one that has not started, failed or waits
+// for a retry has none to race and goes at once. What does not settle
 // within the budget cuts the teardown: every removal is pending, and the
-// re-run waits again. A dry run names them.
-func (td *teardown) awaitInstalls(ns, slice, cluster string) error {
+// re-run waits again. A dry run names them; force removes the slice
+// regardless and names them too.
+func (td *teardown) awaitInstalls(ns, slice, cluster string, force bool) error {
 	for {
 		installing, err := installingReleases(td.ctx, td.dyn, ns, slice)
 		if err != nil {
@@ -358,6 +359,9 @@ func (td *teardown) awaitInstalls(ns, slice, cluster string) error {
 			return nil
 		}
 		switch {
+		case force:
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) of the serving slice of %s are still installing and are removed regardless (force) — an uninstall racing the install may fail and leave the release with %s once the cluster is gone; delete_cluster's re-run removes such a release: %s", len(installing), cluster, fluxFinalizer, strings.Join(installing, "; ")))
+			return nil
 		case td.dryRun:
 			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%d HelmRelease(s) of the serving slice of %s are still installing — the teardown would wait for their install to end before removing any of the slice, so no uninstall races an install: %s", len(installing), cluster, strings.Join(installing, "; ")))
 			return nil
@@ -398,9 +402,11 @@ func installingReleases(ctx context.Context, dyn dynamic.Interface, ns, slice st
 	return out, nil
 }
 
-// installing reports whether helm-controller is installing or upgrading a
-// release, with its state: Ready=Unknown or Reconciling=True. A release
-// being deleted or suspended is not.
+// installing reports whether helm-controller runs an install or upgrade of
+// a release now, with its state: Ready=Unknown or Reconciling=True while a
+// Helm action runs (runningAction). A release that failed (Ready=False),
+// waits for a retry or a prerequisite, or is being deleted or suspended is
+// not.
 func installing(hr *unstructured.Unstructured) (string, bool) {
 	if hr.GetDeletionTimestamp() != nil {
 		return "", false
@@ -408,13 +414,27 @@ func installing(hr *unstructured.Unstructured) (string, bool) {
 	if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
 		return "", false
 	}
-	if ready, found := detect.ReadyCondition(hr); found && ready.Status == "Unknown" {
+	ready, found := detect.ReadyCondition(hr)
+	if found && ready.Status == "False" {
+		return "", false
+	}
+	if found && ready.Status == "Unknown" && runningAction(ready) {
 		return conditionState(ready), true
 	}
-	if r, ok := detect.ConditionOf(hr, "Reconciling"); ok && r.Status == "True" {
+	if r, ok := detect.ConditionOf(hr, "Reconciling"); ok && r.Status == "True" && runningAction(r) {
 		return conditionState(r), true
 	}
 	return "", false
+}
+
+// runningAction reports whether a condition says helm-controller runs a Helm
+// action now: reason Progressing with its "Running '<action>' action"
+// message. helm-controller also keeps Reconciling=True while it waits —
+// ProgressingWithRetry after a failed action, "Fulfilling prerequisites"
+// while a dependency or the source is not ready — with no action running:
+// nothing to race, and a release that cannot install must stay removable.
+func runningAction(c detect.Condition) bool {
+	return c.Reason == "Progressing" && strings.HasPrefix(c.Message, "Running '")
 }
 
 // conditionState is one condition as the answer names it:

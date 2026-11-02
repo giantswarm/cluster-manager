@@ -743,6 +743,12 @@ func TestInstalling(t *testing.T) {
 		return u
 	}
 	cond := func(typ, status string) map[string]any { return map[string]any{"type": typ, "status": status} }
+	running := func(typ, status string) map[string]any {
+		return map[string]any{"type": typ, "status": status, "reason": "Progressing", "message": "Running 'install' action with timeout of 5m0s"}
+	}
+	waiting := func(reason, message string) map[string]any {
+		return map[string]any{"type": "Reconciling", "status": "True", "reason": reason, "message": message}
+	}
 	flux := []any{fluxFinalizer}
 	for name, c := range map[string]struct {
 		hr   *unstructured.Unstructured
@@ -750,14 +756,32 @@ func TestInstalling(t *testing.T) {
 	}{
 		"never picked up":               {hr(nil, false, false), false},
 		"picked up, not installing yet": {hr(flux, false, false), false},
-		"progressing":                   {hr(flux, false, false, cond("Ready", "Unknown")), true},
-		"upgrading":                     {hr(flux, false, false, cond("Ready", "True"), cond("Reconciling", "True")), true},
+		"installing":                    {hr(flux, false, false, running("Ready", "Unknown"), running("Reconciling", "True")), true},
+		"upgrading":                     {hr(flux, false, false, cond("Ready", "True"), running("Reconciling", "True")), true},
+		"progressing, no action":        {hr(flux, false, false, cond("Ready", "Unknown")), false},
 		"installed":                     {hr(flux, false, false, cond("Ready", "True")), false},
-		"failed":                        {hr(flux, false, false, cond("Ready", "False")), false},
-		"suspended":                     {hr(flux, true, false, cond("Ready", "Unknown")), false},
-		"deleted":                       {hr(flux, false, true, cond("Ready", "Unknown")), false},
+		"failed":                        {hr(flux, false, false, cond("Ready", "False"), waiting("ProgressingWithRetry", "retrying after 30s")), false},
+		"failed, retrying":              {hr(flux, false, false, cond("Ready", "Unknown"), waiting("ProgressingWithRetry", "retrying after 30s")), false},
+		"waiting for a dependency":      {hr(flux, false, false, map[string]any{"type": "Ready", "status": "False", "reason": "DependencyNotReady"}, waiting("Progressing", "Fulfilling prerequisites")), false},
+		"suspended":                     {hr(flux, true, false, running("Ready", "Unknown")), false},
+		"deleted":                       {hr(flux, false, true, running("Ready", "Unknown")), false},
 	} {
 		_, got := installing(c.hr)
 		assert.Equal(t, c.want, got, name)
 	}
+}
+
+// TestDeleteLastPoolWithForceSkipsTheInstallWait: force removes a slice
+// whatever its install state, naming the installing releases.
+func TestDeleteLastPoolWithForceSkipsTheInstallWait(t *testing.T) {
+	l, svc := servingLab(t, "wc1-configs.yaml")
+	installingChildren(t, l)
+	ctx, cancel := context.WithTimeout(context.Background(), writeReserve+300*time.Millisecond)
+	defer cancel()
+	out := deleteLastPool(t, svc, ctx, true, false)
+	assert.False(t, out.Partial)
+	assert.Equal(t, orderedTeardown, objectNames(out))
+	require.NotEmpty(t, out.Warnings)
+	assert.Contains(t, out.Warnings[0], "2 HelmRelease(s) of the serving slice of wc1 are still installing and are removed regardless (force)")
+	assertGone(t, l, wc1Child(llmisvcResourcesRelease), wc1Child(runtimeConfigsRelease), "wc1-agent-platform", "wc1-gpu-a10g")
 }
