@@ -293,3 +293,61 @@ func TestDeleteClusterRefusesAGitOpsLeftover(t *testing.T) {
 	assertRefused(t, err, "HelmRelease org-acme/dev01-cert-exporter is in git: Flux Kustomization default/acme-clusters applies it")
 	assert.Empty(t, log.seen())
 }
+
+// TestDeleteClusterNamesTheSliceChildren (giantswarm/cluster-manager#212):
+// the first pass names the slice's children with the releases that go with
+// the cluster — they carry no cluster label, only the kubeconfig Secret they
+// install through —; the second pass names each child helm-controller has
+// not let go of within the call, with what holds it.
+func TestDeleteClusterNamesTheSliceChildren(t *testing.T) {
+	l, svc := deleteLab(t)
+	ctx := context.Background()
+	releases := l.installation.Resource(HelmReleaseGVR).Namespace("org-acme")
+	child := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{
+			"name": "dev01-kserve-runtime-configs", "namespace": "org-acme", "finalizers": []any{fluxFinalizer},
+			"labels": map[string]any{compose.LabelManagedBy: helmManagedBy, labelFluxName: "dev01-agent-platform", labelFluxNamespace: "org-acme"},
+		},
+		"spec": map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "dev01-kubeconfig"}}},
+		"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": "UninstallFailed", "message": "failed to delete release: kserve-runtime-configs",
+		}}},
+	}}
+	_, err := releases.Create(ctx, child, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	in := dev01Delete()
+	in.DryRun = true
+	dry, err := svc.DeleteCluster(ctx, in)
+	require.NoError(t, err)
+	assert.Contains(t, dry.WithCluster, "org-acme/dev01-kserve-runtime-configs")
+
+	for _, gone := range []struct {
+		gvr  schema.GroupVersionResource
+		name string
+	}{{HelmReleaseGVR, "dev01"}, {ClusterGVR, "dev01"}, {HelmReleaseGVR, "dev01-cert-exporter"}, {compose.OCIRepositoryGVR, "dev01-cert-exporter"}, {HelmReleaseGVR, "dev01-gpu"}, {HelmReleaseGVR, "dev01-gpu-operator"}, {HelmReleaseGVR, "dev01-agent-platform"}, {compose.OCIRepositoryGVR, "dev01"}, {ConfigMapGVR, "dev01-values"}} {
+		require.NoError(t, l.installation.Resource(gone.gvr).Namespace("org-acme").Delete(ctx, gone.name, metav1.DeleteOptions{}))
+	}
+	// helm-controller keeps its finalizer: the delete marks the release
+	// terminating and nothing takes it off within the call.
+	tracker := fakeInstallation(t, l).Tracker()
+	fakeInstallation(t, l).PrependReactor("delete", HelmReleaseGVR.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		del, _ := a.(k8stesting.DeleteAction)
+		obj, err := tracker.Get(HelmReleaseGVR, del.GetNamespace(), del.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		u, _ := obj.(*unstructured.Unstructured)
+		now := metav1.Now()
+		u.SetDeletionTimestamp(&now)
+		return true, nil, tracker.Update(HelmReleaseGVR, u, del.GetNamespace())
+	})
+	ctx, cancel := context.WithTimeout(ctx, writeReserve+300*time.Millisecond)
+	defer cancel()
+	got, err := svc.DeleteCluster(ctx, dev01Delete())
+	require.NoError(t, err)
+	require.Len(t, got.Warnings, 1)
+	assert.Contains(t, got.Warnings[0], "1 HelmRelease(s) installing into the gone cluster through dev01-kubeconfig were suspended and deleted, and helm-controller has not taken finalizers.fluxcd.io off them yet: org-acme/dev01-kserve-runtime-configs (finalizers: finalizers.fluxcd.io; Ready=False [UninstallFailed] failed to delete release: kserve-runtime-configs)")
+	assert.Contains(t, got.NextStep, "re-run delete_cluster with the same arguments once helm-controller has removed the suspended releases")
+}
