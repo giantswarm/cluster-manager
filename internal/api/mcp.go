@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/giantswarm/mcp-toolkit/brand"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -96,6 +97,7 @@ var commitTools = []string{ToolCreateCluster, ToolDeleteCluster, ToolCreateNodeP
 // text.
 func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	opts := append(tracingOptions(),
+		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithInstructions("Manage the clusters of this Giant Swarm installation and their GPU node pools. list_clusters names every cluster with its organization, release, whether it is the installation's own cluster, whether the GPU operator and the serving layer are present and who provides them, and its GPU pool releases; list_releases names the installation's releases with the ones a new cluster may run; create_cluster composes a workload cluster (the release chart's HelmRelease, its OCIRepository and a values ConfigMap in the organization's namespace), checked against the release chart's schema, and lands it as you or, in mode commit, opens the pull request that adds it to the repository owning the organization; delete_cluster removes a cluster create_cluster created, as you, its GPU pools with it, and refuses the installation's own cluster and one Flux applies from git; list_node_pools shows one cluster's MachinePools with the pool's Kubernetes version and the control plane's side by side; create_node_pool composes a GPU pool's release (gpu-node-pool chart) from the cluster's current release and settings and lands it as you — a second call on the same name is the update, dryRun the drift check; delete_node_pool removes what create_node_pool created, the pool's idle nodes first, and refuses while a node of the pool is busy; enable_model_serving and disable_model_serving switch the serving slice (KServe, the models Gateway) on or off for a cluster through its one <cluster>-agent-platform release, with or without a GPU pool; remove_model_cache removes a cluster's model cache — the claims that outlive every pool and are billed while they exist — after switching the slice to serve without it. Every call runs as you: what you may read is what these tools list, what you may write is what they change."),
 	)

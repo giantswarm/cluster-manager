@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/giantswarm/mcp-toolkit/brand"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -216,4 +217,18 @@ func TestErrResultNotFound(t *testing.T) {
 	plain := errResult(&tools.ErrNotFound{What: "cluster nope"})
 	assert.True(t, plain.IsError)
 	assert.Len(t, plain.Content, 1, "a not-found without a block stays one text")
+}
+
+// The initialize result advertises the Giant Swarm logo as the server's icon,
+// which muster stores on the MCPServer and the developer portal shows.
+func TestNewMCPServer_AdvertisesTheGiantSwarmIcon(t *testing.T) {
+	initReq := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`)
+	raw, err := json.Marshal(NewMCPServer(nil, "test").HandleMessage(t.Context(), initReq))
+	require.NoError(t, err)
+	var resp struct {
+		Result mcp.InitializeResult `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &resp), string(raw))
+	assert.Equal(t, "cluster-manager", resp.Result.ServerInfo.Name)
+	assert.Equal(t, []mcp.Icon{brand.GiantSwarmIcon()}, resp.Result.ServerInfo.Icons)
 }
