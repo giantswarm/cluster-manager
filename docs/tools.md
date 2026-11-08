@@ -229,7 +229,7 @@ The first call removes its model backend registration, HelmRelease, OCIRepositor
 ```text
 Delete a GPU node pool create_node_pool created, idle nodes first; with the cluster's last pool, its model serving too.
 
-Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left. A re-run once the pool is gone names the NodeClaims, NodePool and EC2NodeClass it left.
+Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left. A re-run once the pool is gone names what it left; forced, removes its NodeClaims.
 ```
 
 ```json

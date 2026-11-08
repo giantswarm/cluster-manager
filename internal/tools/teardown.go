@@ -73,6 +73,9 @@ type teardown struct {
 	out    *WriteResult
 	budget time.Time
 	cut    bool
+	// refused are the NodeClaims whose delete the caller was refused,
+	// named once.
+	refused map[string]bool
 }
 
 func newTeardown(ctx context.Context, dyn dynamic.Interface, dryRun bool, out *WriteResult, budget time.Time) *teardown {
@@ -156,6 +159,10 @@ func (td *teardown) deleteNodeClaims(reader dynamic.Interface, nodes []*poolNode
 	for _, n := range nodes {
 		err := td.delete(res, ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: n.claim.GetName()})
 		if apierrors.IsForbidden(err) && force {
+			if td.refused == nil {
+				td.refused = map[string]bool{}
+			}
+			td.refused[n.claim.GetName()] = true
 			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%v: node %s of the pool is not removed by this call, and its instance runs until its NodeClaim is deleted — have someone allowed to delete it (kubectl delete nodeclaim %s)", err, n.name(), n.claim.GetName()))
 			continue
 		}

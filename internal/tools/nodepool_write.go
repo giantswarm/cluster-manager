@@ -985,8 +985,8 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 
 // deleteRemovedPool is delete_node_pool where the pool's release is gone
 // already: a re-run after the removal names what of the pool is left on the
-// cluster — its Karpenter NodePool, NodeClaims and EC2NodeClass, which
-// nothing proves cluster-manager's any more (poolLeftovers;
+// cluster — its Karpenter NodePool, NodeClaims and EC2NodeClass, forced
+// removing the running NodeClaims nothing else keeps (poolLeftovers;
 // giantswarm/cluster-manager#219) — and retires the
 // serving namespace and the Gateway API CRDs the slice left — a teardown cut
 // before that step, or one from before the step existed, has no pool left to
@@ -1013,7 +1013,9 @@ func (s *Service) deleteRemovedPool(ctx context.Context, dyn dynamic.Interface, 
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, t.warmup))
-	left.name(td, t)
+	if err := left.resolve(td, t, in.Force); err != nil {
+		return nil, err
+	}
 	if slice {
 		if err := s.retireLeftSlice(td, t); err != nil {
 			return nil, err
