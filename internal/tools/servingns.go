@@ -181,20 +181,9 @@ func (s *Service) retireSliceLeftovers(ctx context.Context, dyn dynamic.Interfac
 	if t.Reader == nil {
 		return nil, nil
 	}
-	leaving, err := sliceReleaseLeaving(ctx, dyn, t.Namespace, t.Cluster)
-	if err != nil || !leaving {
+	left, err := s.sliceLeft(ctx, dyn, t)
+	if err != nil || !left {
 		return nil, err
-	}
-	ns, err := s.servingNamespaceOf(ctx, t)
-	if err != nil {
-		return nil, err
-	}
-	marked, err := gatewayAPICRDsMarked(ctx, t)
-	if err != nil {
-		return nil, err
-	}
-	if ns == nil && !marked {
-		return nil, nil
 	}
 	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Mode: mode, DryRun: dryRun, Objects: []ObjectAction{}}
 	td := newTeardown(ctx, dyn, dryRun, out, s.budget(ctx, start, t.warmup))
@@ -204,6 +193,25 @@ func (s *Service) retireSliceLeftovers(ctx context.Context, dyn dynamic.Interfac
 	td.finish()
 	logApplied(ctx, tool, out, start, t.warmup)
 	return out, nil
+}
+
+// sliceLeft reports whether a slice that went left its serving namespace or
+// its marked Gateway API CRDs on a readable target: no slice release of the
+// cluster's name stands, and either is there.
+func (s *Service) sliceLeft(ctx context.Context, dyn dynamic.Interface, t target) (bool, error) {
+	leaving, err := sliceReleaseLeaving(ctx, dyn, t.Namespace, t.Cluster)
+	if err != nil || !leaving {
+		return false, err
+	}
+	ns, err := s.servingNamespaceOf(ctx, t)
+	if err != nil {
+		return false, err
+	}
+	marked, err := gatewayAPICRDsMarked(ctx, t)
+	if err != nil {
+		return false, err
+	}
+	return ns != nil || marked, nil
 }
 
 // retiredReason says why a retired serving namespace stays and how it goes.

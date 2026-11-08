@@ -826,7 +826,9 @@ func backendTargetName(t compose.BackendTarget) string {
 // node of the pool is busy unless forced — the refusal names the nodes, what
 // holds them and the models served on the cluster (nodesGuard) — and removes
 // the pool's idle nodes itself, through their NodeClaims on the cluster,
-// before anything else (giantswarm/cluster-manager#49).
+// before anything else (giantswarm/cluster-manager#49); forced, every node of
+// the pool goes so, and a NodeClaim still running at the end is named
+// (giantswarm/cluster-manager#219).
 // With the cluster's last pool go the operator release cluster-manager
 // created, its slice release unless another slice is on in it, and the
 // kserve backend it registered. The slice goes in order (servingTeardown):
@@ -874,6 +876,8 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 		return nil, &ErrRefused{Reason: fmt.Sprintf("HelmRelease %s/%s was not created by cluster-manager (%s): delete_node_pool removes only what create_node_pool created — %s", ns, release, ownerDescription(hr), removalHint(hr))}
 	}
 	t := s.target(ctx, dyn, c)
+	// The nodes whose NodeClaims the call removes first: the idle ones,
+	// forced every one (giantswarm/cluster-manager#219).
 	var idle []*poolNode
 	if !in.Force {
 		if idle, err = s.nodesGuard(ctx, dyn, c, release, t); err != nil {
@@ -920,8 +924,11 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			return nil, err
 		}
 	}
+	if in.Force {
+		idle = forcedNodes(ctx, t, release, out)
+	}
 	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, t.warmup))
-	if err := td.deleteNodeClaims(t.Reader, idle); err != nil {
+	if err := td.deleteNodeClaims(t.Reader, idle, in.Force); err != nil {
 		return nil, err
 	}
 	if backend != nil {
@@ -966,30 +973,53 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 			return nil, err
 		}
 	}
+	if in.Force {
+		claimsLeft(td, t, release)
+	}
 	td.finish()
 	logApplied(ctx, "delete_node_pool", out, start, t.warmup)
 	return out, nil
 }
 
 // deleteRemovedPool is delete_node_pool where the pool's release is gone
-// already: a re-run after the removal retires the serving namespace and the
-// Gateway API CRDs the slice left — a teardown cut before that step, or one from before the step
-// existed, has no pool left to be re-run on (giantswarm/cluster-manager#191).
-// With nothing left, or in mode commit (the namespace is retired live), the
-// pool is not found.
+// already: a re-run after the removal removes what of the pool is left on
+// the cluster — its Karpenter NodePool, NodeClaims and EC2NodeClass, each
+// named (poolLeftovers; giantswarm/cluster-manager#219) — and retires the
+// serving namespace and the Gateway API CRDs the slice left — a teardown cut
+// before that step, or one from before the step existed, has no pool left to
+// be re-run on (giantswarm/cluster-manager#191). With nothing left, the
+// cluster not readable as the caller, or in mode commit (the leftovers are
+// removed live), the pool is not found.
 func (s *Service) deleteRemovedPool(ctx context.Context, dyn dynamic.Interface, c *unstructured.Unstructured, in DeleteNodePoolInput, start time.Time) (*WriteResult, error) {
-	notFound := &ErrNotFound{What: fmt.Sprintf("node pool %s of cluster %s (HelmRelease %s/%s)", in.Name, c.GetName(), c.GetNamespace(), compose.ReleaseName(c.GetName(), in.Name))}
+	release := compose.ReleaseName(c.GetName(), in.Name)
+	notFound := &ErrNotFound{What: fmt.Sprintf("node pool %s of cluster %s (HelmRelease %s/%s)", in.Name, c.GetName(), c.GetNamespace(), release)}
 	if in.Mode == ModeCommit {
 		return nil, notFound
 	}
-	out, err := s.retireSliceLeftovers(ctx, dyn, c, "delete_node_pool", in.Mode, in.DryRun, start)
+	t := s.target(ctx, dyn, c)
+	if t.Reader == nil {
+		return nil, notFound
+	}
+	left := readPoolLeftovers(ctx, t, release, in.Force)
+	slice, err := s.sliceLeft(ctx, dyn, t)
 	if err != nil {
 		return nil, err
 	}
-	if out == nil {
+	if left.empty() && !slice {
 		return nil, notFound
 	}
-	out.Pool = in.Name
+	out := &WriteResult{Cluster: c.GetName(), Namespace: c.GetNamespace(), Pool: in.Name, Mode: in.Mode, DryRun: in.DryRun, Objects: []ObjectAction{}}
+	td := newTeardown(ctx, dyn, in.DryRun, out, s.budget(ctx, start, t.warmup))
+	if err := left.remove(td, t, in.Force); err != nil {
+		return nil, err
+	}
+	if slice {
+		if err := s.retireLeftSlice(td, t); err != nil {
+			return nil, err
+		}
+	}
+	td.finish()
+	logApplied(ctx, "delete_node_pool", out, start, t.warmup)
 	return out, nil
 }
 
