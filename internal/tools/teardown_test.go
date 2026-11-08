@@ -576,7 +576,7 @@ func TestDeleteLastPoolUnreadableTarget(t *testing.T) {
 	out := deleteLastPool(t, svc, ctx, true, false)
 	assert.Equal(t, []string{"delete HelmRelease org-acme/wc1-kserve-llmisvc-resources", "delete HelmRelease org-acme/wc1-kserve-runtime-configs"}, objectNames(out)[:2])
 	require.Len(t, out.Warnings, 3)
-	assert.Contains(t, out.Warnings[0], "the NodeClaims of pool wc1-gpu-a10g on wc1 cannot be read as you (cluster wc1 not readable as you through "+wc1APIServer+": connection refused): they are not removed by this call — re-run delete_node_pool with force once they can")
+	assert.Contains(t, out.Warnings[0], "the NodeClaims of pool wc1-gpu-a10g on wc1 cannot be read as you (cluster wc1 not readable as you through "+wc1APIServer+": connection refused): they are not removed by this call")
 	assert.Contains(t, out.Warnings[1], "whether LLMInferenceServiceConfigs remain in agent-platform on wc1 cannot be told")
 	assert.Contains(t, out.Warnings[2], "whether the serving namespace model-serving remains on wc1 cannot be told")
 }

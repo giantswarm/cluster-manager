@@ -3,14 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-
-	"github.com/giantswarm/cluster-manager/internal/detect"
 )
 
 // A pool's Karpenter objects on the workload cluster outlive its release
@@ -20,10 +18,12 @@ import (
 // disrupt then keeps its instance running and billed for a pool nothing
 // manages, and holds the EC2NodeClass (Karpenter's finalizer waits for its
 // NodeClaims). So a forced delete removes the pool's NodeClaims itself, as
-// the caller, before anything else — as the idle ones go without force — and
-// names a NodeClaim still running at its end; and a re-run once the pool's
-// release is gone removes what of the pool is left on the cluster
-// (poolLeftovers) and names each, instead of answering not found over it.
+// the caller — as the idle ones go without force —: first, and once more at
+// its end for one Karpenter launched while the teardown ran, naming one it
+// could not remove. The pool's release is what proves the pool
+// cluster-manager's: nothing on the workload cluster carries its mark, so a
+// re-run once the release is gone removes nothing there and names what of
+// the pool is left (poolLeftovers), instead of answering not found over it.
 
 var (
 	// karpenterNodePoolGVR is Karpenter's NodePool on the workload cluster,
@@ -48,8 +48,7 @@ func (l *poolLive) running() []*poolNode {
 
 // forcedNodes are the nodes a forced delete removes through their NodeClaims:
 // every NodeClaim of the pool not deleted yet, busy or not. A cluster or a
-// claim list not readable as the caller removes none and says so: the
-// re-run removes what outlives the pool.
+// claim list not readable as the caller removes none and says so.
 func forcedNodes(ctx context.Context, t target, pool string, out *WriteResult) []*poolNode {
 	why := t.Reason
 	if t.Reader != nil {
@@ -59,28 +58,25 @@ func forcedNodes(ctx context.Context, t target, pool string, out *WriteResult) [
 		}
 		why = live.claimsErr.Error()
 	}
-	out.Warnings = append(out.Warnings, fmt.Sprintf("the NodeClaims of pool %s on %s cannot be read as you (%s): they are not removed by this call — re-run delete_node_pool with force once they can, it removes any that outlives the pool", pool, t.Cluster, why))
+	out.Warnings = append(out.Warnings, fmt.Sprintf("the NodeClaims of pool %s on %s cannot be read as you (%s): they are not removed by this call, and one Karpenter does not disrupt keeps its instance running — re-run delete_node_pool with force while the pool's release is still being removed, once they can be read", pool, t.Cluster, why))
 	return nil
 }
 
-// claimsLeft names, at the end of a forced delete, the pool's NodeClaims
-// still running on the cluster: one Karpenter launched while the teardown
-// ran, or one whose delete was refused. Nothing is read on a dry run or a
-// cut teardown, whose pending objects the re-run writes first.
-func claimsLeft(td *teardown, t target, pool string) {
+// sweepClaims is a forced delete's last step: the pool's NodeClaims still
+// running — one Karpenter launched for a Pending predictor while the
+// teardown ran — are removed too. Nothing is read on a dry run or a cut
+// teardown, whose pending objects the re-run writes first.
+func sweepClaims(td *teardown, t target, pool string) error {
 	if td.dryRun || td.cut || t.Reader == nil {
-		return
+		return nil
 	}
-	live := readPoolLive(td.ctx, t.Reader, pool, false)
-	for _, n := range live.running() {
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) of pool %s still runs on %s after the forced delete: its instance keeps running and billed — re-run delete_node_pool with force, it removes the NodeClaims that outlive the pool", n.claim.GetName(), n.name(), pool, t.Cluster))
-	}
+	return td.deleteNodeClaims(t.Reader, readPoolLive(td.ctx, t.Reader, pool, false).running(), true)
 }
 
 // poolLeftovers is what of a removed pool is left on its workload cluster:
 // its Karpenter NodePool and EC2NodeClass, and its NodeClaims with their
-// nodes (the pods on them read unless forced, for what holds them). An
-// object not readable as the caller counts as none.
+// nodes and what holds them. An object not readable as the caller counts as
+// none.
 type poolLeftovers struct {
 	pool      string
 	nodePool  *unstructured.Unstructured
@@ -88,11 +84,13 @@ type poolLeftovers struct {
 	live      *poolLive
 }
 
-func readPoolLeftovers(ctx context.Context, t target, pool string, force bool) *poolLeftovers {
-	left := &poolLeftovers{pool: pool, live: readPoolLive(ctx, t.Reader, pool, !force)}
-	left.nodePool = getOrNone(ctx, t, karpenterNodePoolGVR, pool)
-	left.nodeClass = getOrNone(ctx, t, ec2NodeClassGVR, pool)
-	return left
+func readPoolLeftovers(ctx context.Context, t target, pool string) *poolLeftovers {
+	return &poolLeftovers{
+		pool:      pool,
+		live:      readPoolLive(ctx, t.Reader, pool, true),
+		nodePool:  getOrNone(ctx, t, karpenterNodePoolGVR, pool),
+		nodeClass: getOrNone(ctx, t, ec2NodeClassGVR, pool),
+	}
 }
 
 // getOrNone reads a cluster-scoped object on the target; nil when it is
@@ -110,78 +108,44 @@ func (l *poolLeftovers) empty() bool {
 	return l.nodePool == nil && l.nodeClass == nil && len(l.live.claims()) == 0
 }
 
-// remove removes what is left of the pool, in order: the NodePool first, so
-// Karpenter launches no node for it any more, then the NodeClaims — busy ones
-// only when forced, a busy one otherwise named with what holds it —, the
-// EC2NodeClass last (Karpenter's finalizer holds it until its NodeClaims are
-// gone). Each is named in the answer; one being deleted already is answered
-// terminating with where it stands.
-func (l *poolLeftovers) remove(td *teardown, t target, force bool) error {
-	if err := l.removeObject(td, t, karpenterNodePoolGVR, l.nodePool, "Karpenter launches no node for it any more"); err != nil {
-		return err
-	}
-	res := t.Reader.Resource(detect.NodeClaimGVR)
+// name answers what of the pool is left, each object with where it stands:
+// one being deleted as terminating, one that stands with what it costs and
+// the command that removes it — cluster-manager removes nothing it cannot
+// tell is its own, and with the pool's release gone nothing proves these
+// are.
+func (l *poolLeftovers) name(td *teardown, t target) {
+	const unproven = "cluster-manager no longer tells it its own, the pool's release that proved it being gone"
+	l.nameObject(td, t, l.nodePool, "Karpenter removes it once its NodeClaims are gone", "Karpenter may still launch a node for it")
 	for _, n := range l.live.nodes {
 		if n.claim == nil {
 			continue
 		}
-		act := ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: n.claim.GetName()}
+		name := n.claim.GetName()
 		if n.terminating() {
-			act.Action = actionTerminating
-			td.out.Objects = append(td.out.Objects, act)
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) of the removed pool %s on %s is terminating since %s: %s", act.Name, n.name(), l.pool, t.Cluster, n.deletedAt(), n.terminationStage()))
+			td.out.Objects = append(td.out.Objects, ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: name, Action: actionTerminating})
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) of the removed pool %s on %s is terminating since %s: %s", name, n.name(), l.pool, t.Cluster, n.deletedAt(), n.terminationStage()))
 			continue
 		}
-		if holds := l.live.holds(n); holds != "" && !force {
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s outlived pool %s on %s and is kept: %s — its instance runs and is billed for a pool nothing manages; free the node and re-run delete_node_pool, or re-run with force to remove it regardless", act.Name, l.pool, t.Cluster, holds))
-			continue
+		state := "idle"
+		if holds := l.live.holds(n); holds != "" {
+			state = holds
 		}
-		err := td.delete(res, act)
-		if apierrors.IsForbidden(err) {
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) outlived pool %s on %s and is left: %v — its instance runs and is billed until someone allowed to deletes it (kubectl delete nodeclaim %s)", act.Name, n.name(), l.pool, t.Cluster, err, act.Name))
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) outlived pool %s on %s: %s", act.Name, n.name(), l.pool, t.Cluster, td.outcome("removed, Karpenter drains the node and terminates its instance")))
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("NodeClaim %s (node %s) outlived pool %s on %s and still runs (%s): its instance is billed for a pool nothing manages, and %s — delete it once nothing needs the node (kubectl delete nodeclaim %s); Karpenter drains the node and terminates the instance", name, n.name(), l.pool, t.Cluster, state, unproven, name))
 	}
-	return l.removeObject(td, t, ec2NodeClassGVR, l.nodeClass, "Karpenter removes it once the pool's NodeClaims are gone")
+	l.nameObject(td, t, l.nodeClass, "Karpenter removes it once the pool's NodeClaims are gone", "nothing removes it")
 }
 
-// removeObject removes one of the pool's Karpenter objects left on the
-// cluster (nil: none), named in the answer.
-func (l *poolLeftovers) removeObject(td *teardown, t target, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, then string) error {
+// nameObject names one of the pool's Karpenter objects left on the cluster
+// (nil: none).
+func (l *poolLeftovers) nameObject(td *teardown, t target, obj *unstructured.Unstructured, terminating, standing string) {
 	if obj == nil {
-		return nil
+		return
 	}
-	act := ObjectAction{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Name: obj.GetName()}
+	kind, name := obj.GetKind(), obj.GetName()
 	if ts := obj.GetDeletionTimestamp(); ts != nil {
-		act.Action = actionTerminating
-		td.out.Objects = append(td.out.Objects, act)
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%s %s of the removed pool %s on %s is terminating since %s: %s", act.Kind, act.Name, l.pool, t.Cluster, ts.UTC().Format(time.RFC3339), then))
-		return nil
+		td.out.Objects = append(td.out.Objects, ObjectAction{APIVersion: obj.GetAPIVersion(), Kind: kind, Name: name, Action: actionTerminating})
+		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%s %s of the removed pool %s on %s is terminating since %s: %s", kind, name, l.pool, t.Cluster, ts.UTC().Format(time.RFC3339), terminating))
+		return
 	}
-	err := td.delete(t.Reader.Resource(gvr), act)
-	if apierrors.IsForbidden(err) {
-		td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%s %s outlived pool %s on %s and is left: %v — remove it as someone allowed to", act.Kind, act.Name, l.pool, t.Cluster, err))
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%s %s outlived pool %s on %s: %s", act.Kind, act.Name, l.pool, t.Cluster, td.outcome("removed")))
-	return nil
-}
-
-// outcome says what became of a removal just recorded: done, pending once
-// the teardown is cut, or what a dry run would do.
-func (td *teardown) outcome(done string) string {
-	switch {
-	case td.cut:
-		return "pending, the re-run removes it"
-	case td.dryRun:
-		return "a dry run removes nothing; the call removes it"
-	}
-	return done
+	td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%s %s outlived pool %s on %s: %s — delete it once its NodeClaims are gone (kubectl delete %s %s)", kind, name, l.pool, t.Cluster, standing, strings.ToLower(kind), name))
 }

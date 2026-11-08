@@ -156,7 +156,7 @@ func (td *teardown) deleteNodeClaims(reader dynamic.Interface, nodes []*poolNode
 	for _, n := range nodes {
 		err := td.delete(res, ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: n.claim.GetName()})
 		if apierrors.IsForbidden(err) && force {
-			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%v: node %s of the pool is not removed by this call, and its instance runs until its NodeClaim is deleted — ask for the delete of NodeClaims as you and re-run delete_node_pool with force", err, n.name()))
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%v: node %s of the pool is not removed by this call, and its instance runs until its NodeClaim is deleted — have someone allowed to delete it (kubectl delete nodeclaim %s)", err, n.name(), n.claim.GetName()))
 			continue
 		}
 		if apierrors.IsForbidden(err) {
