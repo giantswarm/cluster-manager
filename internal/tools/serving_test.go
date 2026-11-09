@@ -353,7 +353,7 @@ func TestDeleteLastPoolKeepsASharedSlice(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, out.LastPool)
 	assert.Equal(t, "org-acme/wc1-agent-platform", out.SliceKept)
-	assert.Equal(t, []string{"would-delete", "would-delete"}, actions(out), "pool release and source (no operator of cluster-manager's on wc1 here); the slice and the backend stay")
+	assert.Equal(t, []string{"would-delete NodeClaim /wc1-gpu-a10g-k7m2p", "would-delete NodeClaim /wc1-gpu-a10g-q9x4z", "would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(out), "the pool's NodeClaims, release and source (no operator of cluster-manager's on wc1 here); the slice and the backend stay")
 }
 
 // TestServingRefusedWhereDNS01ZoneDiscoveryFails

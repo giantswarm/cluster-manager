@@ -194,11 +194,12 @@ func NewMCPServer(svc *tools.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolDeleteNodePool,
 		tooldesc.Describe("Delete a GPU node pool create_node_pool created, idle nodes first; with the cluster's last pool, its model serving too.",
 			"Refused while a node of the pool is busy unless force, naming each busy node and the models to unload first with model-manager's unload_model, and while a served model waits for a node of this pool. "+
-				"Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left."),
+				"Does not wait for the instances to terminate: list_node_pools shows them. With a pool that is not the last, the backend registration is re-written for the pools left. "+
+				"A re-run once the pool is gone names what it left; forced, removes its NodeClaims."),
 		clusterArg(),
 		namespaceArg(),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Pool name as given to create_node_pool")),
-		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Delete even while the pool runs nodes: their workloads, served models included, are evicted")),
+		mcp.WithBoolean(argForce, mcp.DefaultBool(false), mcp.Description("Delete even while the pool runs nodes: every NodeClaim of the pool is deleted, their workloads, served models included, evicted")),
 		modeArg("apply: remove the objects as you, refused for a pool Flux applies from git; commit: open the removal pull request, the backend changed live"),
 		dryRunArg("List what would be removed; nothing is written"),
 		mcp.WithDestructiveHintAnnotation(true),

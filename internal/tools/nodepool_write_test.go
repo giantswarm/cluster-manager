@@ -318,7 +318,7 @@ func TestDeleteNodePool(t *testing.T) {
 	lab.target(t, wc1APIServer, "wc1-serving.yaml")
 	forced, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no node: the release's removal takes them down")
+	assert.Equal(t, []string{"would-delete NodeClaim /wc1-gpu-a10g-k7m2p", "would-delete NodeClaim /wc1-gpu-a10g-q9x4z", "would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no node and removes every NodeClaim of the pool, the busy one too (giantswarm/cluster-manager#219)")
 
 	lab.target(t, wc1APIServer, "wc1.yaml", servingAPIs...)
 	dry, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, DryRun: true})
@@ -1302,7 +1302,7 @@ func TestDeleteNodePoolRefusesWhileAPredictorWaitsForANode(t *testing.T) {
 
 	forced, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true, DryRun: true})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no model")
+	assert.Equal(t, []string{"would-delete NodeClaim /wc1-gpu-a10g-k7m2p", "would-delete NodeClaim /wc1-gpu-a10g-q9x4z", "would-delete OCIRepository org-acme/wc1-gpu-a10g", "would-delete HelmRelease org-acme/wc1-gpu-a10g"}, objectNames(forced), "force judges no model; the pool's NodeClaims go first")
 }
 
 // TestDeleteNodePoolIgnoresAnotherPoolsWaitingModel

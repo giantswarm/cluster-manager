@@ -313,16 +313,17 @@ func TestDeleteLastPoolRemovesOperatorAndBackend(t *testing.T) {
 		names = append(names, o.Kind+" "+o.Namespace+"/"+o.Name)
 	}
 	assert.Equal(t, []string{
+		"NodeClaim /wc1-gpu-a10g-k7m2p", "NodeClaim /wc1-gpu-a10g-q9x4z",
 		"HelmRelease org-acme/wc1-gpu-operator", "OCIRepository org-acme/wc1-gpu-operator",
 		"ConfigMap agent-platform/model-backend-kserve-wc1",
 		"OCIRepository org-acme/wc1-agent-platform", "HelmRelease org-acme/wc1-agent-platform",
 		"OCIRepository org-acme/wc1-gpu-a10g", "HelmRelease org-acme/wc1-gpu-a10g",
-	}, names, "the operator, the backend registration, the slice, and the pool last — its release the very last, the re-run's anchor")
+	}, names, "forced, the pool's NodeClaims first; then the operator, the backend registration, the slice, and the pool last — its release the very last, the re-run's anchor")
 	assertGolden(t, "delete_node_pool_last_pool", dry)
 
 	last, err := svc.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeApply, Force: true})
 	require.NoError(t, err)
-	assert.Len(t, last.Objects, 7)
+	assert.Len(t, last.Objects, 9, "the two NodeClaims and the seven objects of the dry run")
 	assert.Empty(t, last.SliceKept)
 	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).GPUOperator.Status, "nothing of cluster-manager's remains")
 	assert.Equal(t, detect.StatusAbsent, wc1Cluster(t, l).Serving.Status, "the slice release went with the last pool")

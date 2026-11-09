@@ -73,6 +73,9 @@ type teardown struct {
 	out    *WriteResult
 	budget time.Time
 	cut    bool
+	// refused are the NodeClaims whose delete the caller was refused,
+	// named once.
+	refused map[string]bool
 }
 
 func newTeardown(ctx context.Context, dyn dynamic.Interface, dryRun bool, out *WriteResult, budget time.Time) *teardown {
@@ -142,16 +145,27 @@ func (td *teardown) apply(p applyPlan) error {
 // the cluster, as the caller, before anything else: Karpenter drains each
 // node and terminates its instance within the pool's terminationGracePeriod,
 // so the pool release's removal finds no node and nobody waits for the
-// empty-node consolidation (giantswarm/cluster-manager#49). A delete the
-// caller is not allowed is a refusal with the ways out; nothing else has
-// been written by then.
-func (td *teardown) deleteNodeClaims(reader dynamic.Interface, idle []*poolNode) error {
-	if len(idle) == 0 {
+// empty-node consolidation (giantswarm/cluster-manager#49). Forced, every
+// node of the pool goes so, busy or not: nothing else removes a NodeClaim
+// that outlives its pool (giantswarm/cluster-manager#219). A delete the
+// caller is not allowed is a refusal with the ways out — nothing else has
+// been written by then —, forced a warning naming the node, and the
+// teardown goes on.
+func (td *teardown) deleteNodeClaims(reader dynamic.Interface, nodes []*poolNode, force bool) error {
+	if len(nodes) == 0 {
 		return nil
 	}
 	res := reader.Resource(detect.NodeClaimGVR)
-	for _, n := range idle {
+	for _, n := range nodes {
 		err := td.delete(res, ObjectAction{APIVersion: n.claim.GetAPIVersion(), Kind: n.claim.GetKind(), Name: n.claim.GetName()})
+		if apierrors.IsForbidden(err) && force {
+			if td.refused == nil {
+				td.refused = map[string]bool{}
+			}
+			td.refused[n.claim.GetName()] = true
+			td.out.Warnings = append(td.out.Warnings, fmt.Sprintf("%v: node %s of the pool is not removed by this call, and its instance runs until its NodeClaim is deleted — have someone allowed to delete it (kubectl delete nodeclaim %s)", err, n.name(), n.claim.GetName()))
+			continue
+		}
 		if apierrors.IsForbidden(err) {
 			return &ErrRefused{Reason: fmt.Sprintf("%v: removing the pool's idle node %s needs the delete of its NodeClaim as you — ask for it, wait for Karpenter to consolidate the empty node, or pass force to remove the pool regardless (its release's removal takes the nodes down)", err, n.name())}
 		}
