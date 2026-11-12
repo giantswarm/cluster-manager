@@ -111,8 +111,10 @@ grep -q -- '^              ephemeral-storage: 128Mi$' <<<"$got" || fail "tmpVolu
 # exchange flags and the whole client Secret (no items, so an absent client-id
 # key does not block the pod); an inline clientSecret renders the Secret,
 # existingSecret wins over it. github.enabled alone: the deprecated pin. The
-# template refuses tokenExchange without github.enabled, an audience or a
-# client secret.
+# template refuses tokenExchange without github.enabled, Dex with downstream
+# OAuth, muster's forwardToken, an audience muster accepts as a providerApps
+# name or a client secret, and any other tokenExchange value without its
+# tokenEndpoint.
 exchange=("${dex[@]}" --set muster.mcpServer.enabled=true --set github.enabled=true \
   --set github.tokenExchange.tokenEndpoint=https://muster.example/oauth/token --set github.tokenExchange.audience=github-cluster-manager)
 got=$(helm template t "$CHART" "${exchange[@]}" --set github.tokenExchange.existingSecret=cm-github)
@@ -153,7 +155,10 @@ done <<'REFUSALS'
 --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a --set github.tokenExchange.existingSecret=s|github.enabled is false
 --set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.existingSecret=s|github.tokenExchange.audience is required
 --set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a|github.tokenExchange.existingSecret or github.tokenExchange.clientSecret
---set githubTokenExchange.endpoint=https://m.example/t|githubTokenExchange
+--set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a --set github.tokenExchange.existingSecret=s --set oauth.downstream.enabled=false|set oauth.enabled with oauth.provider dex and oauth.downstream.enabled
+--set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a --set github.tokenExchange.existingSecret=s --set muster.mcpServer.enabled=true --set muster.mcpServer.auth.forwardToken=false|set muster.mcpServer.auth.forwardToken
+--set github.enabled=true --set github.tokenExchange.audience=a|github.tokenExchange.tokenEndpoint is required when any other github.tokenExchange value is set
+--set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=GitHub_App --set github.tokenExchange.existingSecret=s|/github/tokenExchange/audience
 REFUSALS
 
 echo "verify-chart: ok"

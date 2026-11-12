@@ -157,7 +157,14 @@ as files into the repository that owns the cluster and open one pull request as 
   to the GitHub App `giantswarm-cluster-manager` (`github.authorizationServer`): muster puts the person's
   App user token on every call and `auth.forwardIdentity` puts their IdP ID token in `X-Muster-Id-Token`
   next to it, used for Kubernetes, so apply mode is unchanged. `get_info` answers `modes.commit: true`
-  with either.
+  with either. A delegated caller (a token with `act`, an agent acting for the person) is refused a
+  commit as forbidden.
+- **Known limits of the token exchange.** With `auth.providerApps`, muster still attaches the person's
+  App token to every call, not only to commits, until giantswarm/giantswarm#39227. Fetching the grant
+  from muster's broker is a temporary deviation from MCP 2025-11-25 (a server holds no credential it was
+  not issued), decided in giantswarm/giantswarm#39213; the exit is the server holding its own grant
+  through URL elicitation and ID-JAG (giantswarm/giantswarm#39102). Installations stay on the pin until
+  the agentlab end-to-end proof.
 - **What the answer says.** `commit{repository, base, directory, kustomization, prune, branch, files[],
   pullRequest, number, author, liveSteps[]}`; `dryRun` shows every file with its content (a secret file
   without) and opens nothing; a re-run whose files the base already carries opens nothing. The kserve

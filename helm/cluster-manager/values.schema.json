@@ -169,7 +169,8 @@
                     "properties": {
                         "audience": {
                             "type": "string",
-                            "description": "RFC 8693 audience: the App whose grant the broker releases. Also the App named in `grant_required` answers and listed under the MCPServer's `auth.providerApps`, so muster answers with that App's sign-in link. The App needs contents and pull-request write on every repository a commit targets. Required with `tokenEndpoint`."
+                            "description": "RFC 8693 audience: the App whose grant the broker releases. Also the App named in `grant_required` answers and listed under the MCPServer's `auth.providerApps`, so muster answers with that App's sign-in link. The App needs contents and pull-request write on every repository a commit targets. Required with `tokenEndpoint`.",
+                            "pattern": "^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
                         },
                         "caSecretName": {
                             "type": "string",

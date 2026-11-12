@@ -212,16 +212,16 @@ github:
     # -- RFC 8693 token endpoint (muster's broker) that releases the person's
     # GitHub App user token for a commit. Set: only a commit asks for GitHub,
     # and one without the person's grant answers `grant_required` naming
-    # `audience`. Needs `github.enabled`, `oauth.enabled` with Dex and
-    # `oauth.downstream.enabled`. Empty: the deprecated `authorizationServer`
-    # pin.
+    # `audience`. Needs `github.enabled`, `oauth.enabled` with Dex,
+    # `oauth.downstream.enabled` and `muster.mcpServer.auth.forwardToken`.
+    # Empty: the deprecated `authorizationServer` pin.
     tokenEndpoint: ""
     # -- RFC 8693 audience: the App whose grant the broker releases. Also the
     # App named in `grant_required` answers and listed under the MCPServer's
     # `auth.providerApps`, so muster answers with that App's sign-in link.
     # The App needs contents and pull-request write on every repository a
     # commit targets. Required with `tokenEndpoint`.
-    audience: ""
+    audience: ""  # @schema pattern: ^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
     # -- Confidential broker client ID. Empty: read from the Secret's
     # `client-id` key.
     clientID: ""
