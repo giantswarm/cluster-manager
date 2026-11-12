@@ -519,12 +519,12 @@ const statusGrantRequired = "grant_required"
 // act on it (a missing cluster, an ambiguous name, a refused read). A missing
 // provider App grant also carries {"status": "grant_required", "apps":
 // [<app>]} as structured content, which muster answers with the App's
-// sign-in.
+// sign-in, and as a second text content serializing it.
 func errResult(err error) *mcp.CallToolResult {
 	if grant, ok := errors.AsType[*tools.ErrGrantRequired](err); ok {
-		res := mcp.NewToolResultError(statusGrantRequired + ": " + grant.Reason)
-		res.StructuredContent = map[string]any{"status": statusGrantRequired, "apps": []string{grant.App}, "message": grant.Reason}
-		return res
+		structured := map[string]any{"status": statusGrantRequired, "apps": []string{grant.App}, "message": grant.Reason}
+		block, _ := json.Marshal(structured)
+		return &mcp.CallToolResult{IsError: true, StructuredContent: structured, Content: []mcp.Content{mcp.NewTextContent(statusGrantRequired + ": " + grant.Reason), mcp.NewTextContent(string(block))}}
 	}
 	var refused *tools.ErrRefused
 	if errors.As(err, &refused) && refused.Refused != nil {
