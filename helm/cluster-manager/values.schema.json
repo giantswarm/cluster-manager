@@ -190,7 +190,7 @@
                         },
                         "tokenEndpoint": {
                             "type": "string",
-                            "description": "RFC 8693 token endpoint (muster's broker) that releases the person's GitHub App user token for a commit. Set: only a commit asks for GitHub, and one without the person's grant answers `grant_required` naming `audience`. Needs `github.enabled`, `oauth.enabled` with Dex and `oauth.downstream.enabled`. Empty: the deprecated `authorizationServer` pin."
+                            "description": "RFC 8693 token endpoint (muster's broker) that releases the person's GitHub App user token for a commit. Set: only a commit asks for GitHub, and one without the person's grant answers `grant_required` naming `audience`. Needs `github.enabled`, `oauth.enabled` with Dex, `oauth.downstream.enabled` and `muster.mcpServer.auth.forwardToken`. Empty: the deprecated `authorizationServer` pin."
                         }
                     }
                 }
