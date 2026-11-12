@@ -273,6 +273,10 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
+	ctx, err := s.authorizeCommit(ctx, in.Mode)
+	if err != nil {
+		return nil, err
+	}
 	spec := compose.ClusterSpec{
 		Organization: in.Organization, Name: in.Name, Provider: in.Provider, Release: in.Release,
 		Identity: in.Identity, Description: in.Description, Values: in.Values,

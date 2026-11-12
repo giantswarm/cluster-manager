@@ -197,19 +197,32 @@ func commitLocationFor(ctx context.Context, dyn dynamic.Interface, c *unstructur
 	return loc, err
 }
 
+var errNoGitHub = &ErrRefused{Reason: "commit mode opens the pull request with your GitHub authorization, and this call carries none: connect cluster-manager in muster (core_auth_login server=cluster-manager), then call again"}
+
+// authorizeCommit fetches the person's GitHub grant for a commit-mode call
+// before anything is read or written, and returns ctx carrying it; any other
+// mode, or the App-pinned registration whose bearer already is the grant,
+// returns ctx as is.
+func (s *Service) authorizeCommit(ctx context.Context, mode string) (context.Context, error) {
+	if mode != ModeCommit || s.gitHubUser == nil {
+		return ctx, nil
+	}
+	gh, err := s.gitHubUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if gh == nil || gh.Token == "" {
+		return nil, errNoGitHub
+	}
+	return identity.ContextWithGitHub(ctx, gh), nil
+}
+
 // gitHubFor is the caller's GitHub remote, or the refusal naming the
 // consent that gives one.
 func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
 	gh, ok := identity.GitHubFromContext(ctx)
-	if s.gitHubUser != nil {
-		var err error
-		if gh, err = s.gitHubUser(ctx); err != nil {
-			return nil, nil, err
-		}
-		ok = gh != nil && gh.Token != ""
-	}
 	if !ok {
-		return nil, nil, &ErrRefused{Reason: "commit mode opens the pull request with your GitHub authorization, and this call carries none: connect cluster-manager in muster (core_auth_login server=cluster-manager), then call again"}
+		return nil, nil, errNoGitHub
 	}
 	remote, err := s.remote(gh.Token)
 	if err != nil {

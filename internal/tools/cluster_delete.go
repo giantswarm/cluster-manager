@@ -69,6 +69,10 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
+	ctx, err := s.authorizeCommit(ctx, in.Mode)
+	if err != nil {
+		return nil, err
+	}
 	if in.Organization == "" {
 		return nil, &ErrRefused{Reason: "organization: required, the cluster lives in its org- namespace"}
 	}
