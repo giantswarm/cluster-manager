@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/giantswarm/mcp-toolkit/brand"
@@ -207,6 +208,19 @@ func TestErrResultRefused(t *testing.T) {
 // TestErrResultNotFound (giantswarm/cluster-manager#167): delete_cluster's
 // "nothing of it is left" answers the message, then {"notFound": …} as JSON;
 // a plain not-found stays one text.
+func TestErrResultNamesTheMissingGrant(t *testing.T) {
+	res := errResult(fmt.Errorf("create: %w", &tools.ErrGrantRequired{App: "github", Reason: "grant it"}))
+	require.True(t, res.IsError)
+	require.Equal(t, "grant_required: grant it", res.Content[0].(mcp.TextContent).Text)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var wire struct {
+		StructuredContent map[string]any `json:"structuredContent"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &wire))
+	require.Equal(t, map[string]any{"status": "grant_required", "apps": []any{"github"}, "message": "grant it"}, wire.StructuredContent)
+}
+
 func TestErrResultNotFound(t *testing.T) {
 	res := errResult(&tools.ErrNotFound{What: "cluster org-acme/dev01 (nothing of it is left)", NotFound: &tools.NotFound{Cluster: "dev01", Namespace: "org-acme", NothingLeft: true}})
 	assert.True(t, res.IsError)

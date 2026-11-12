@@ -67,6 +67,15 @@ func WithGitHub(remote RemoteFor) Option {
 	return func(s *Service) { s.remote = remote }
 }
 
+// GitHubUser fetches the person's GitHub grant for one call.
+type GitHubUser func(context.Context) (*identity.GitHub, error)
+
+// WithGitHubUser fetches the person's grant on demand for commit mode, in
+// place of the token an App-pinned registration carries.
+func WithGitHubUser(user GitHubUser) Option {
+	return func(s *Service) { s.gitHubUser = user }
+}
+
 // CommitAvailable reports whether this server offers commit mode.
 func (s *Service) CommitAvailable() bool { return s.remote != nil }
 
@@ -192,6 +201,13 @@ func commitLocationFor(ctx context.Context, dyn dynamic.Interface, c *unstructur
 // consent that gives one.
 func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
 	gh, ok := identity.GitHubFromContext(ctx)
+	if s.gitHubUser != nil {
+		var err error
+		if gh, err = s.gitHubUser(ctx); err != nil {
+			return nil, nil, err
+		}
+		ok = gh != nil && gh.Token != ""
+	}
 	if !ok {
 		return nil, nil, &ErrRefused{Reason: "commit mode opens the pull request with your GitHub authorization, and this call carries none: connect cluster-manager in muster (core_auth_login server=cluster-manager), then call again"}
 	}

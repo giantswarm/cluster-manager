@@ -153,7 +153,10 @@ as files into the repository that owns the cluster and open one pull request as 
   puts their user token on every call, which the server verifies with `GET /user` and opens the pull
   request with; `auth.forwardIdentity` puts the person's IdP ID token in `X-Muster-Id-Token` next to it,
   validated as a forwarded bearer is otherwise and used for Kubernetes, so apply mode is unchanged. One
-  registration carries both. `get_info` answers `modes.commit: true` only then.
+  registration carries both. Or, with `githubTokenExchange`, the registration stays the forwarded ID
+  token and only a commit asks for GitHub: the server fetches the person's App user grant from muster's
+  RFC 8693 broker for that call, and without one answers `grant_required` naming `githubTokenExchange.grantApp`,
+  which muster turns into that App's sign-in link. `get_info` answers `modes.commit: true` with either.
 - **What the answer says.** `commit{repository, base, directory, kustomization, prune, branch, files[],
   pullRequest, number, author, liveSteps[]}`; `dryRun` shows every file with its content (a secret file
   without) and opens nothing; a re-run whose files the base already carries opens nothing. The kserve
