@@ -92,7 +92,7 @@ func TestGitHubExchange(t *testing.T) {
 			defer upstream.Close()
 			client := upstream.Client()
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL, GrantApp: "github"}
+			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL}
 			ctx := identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"})
 			switch scenario {
 			case "delegated actor":
@@ -120,7 +120,7 @@ func TestGitHubExchange(t *testing.T) {
 			if scenario == "no grant" || scenario == "GitHub refuses" {
 				grant, ok := errors.AsType[*tools.ErrGrantRequired](err)
 				require.True(t, ok)
-				require.Equal(t, "github", grant.App)
+				require.Equal(t, "manager-app", grant.App)
 			}
 			if scenario == "missing identity token" || scenario == "delegated actor" {
 				require.Zero(t, exchanges)
@@ -130,7 +130,7 @@ func TestGitHubExchange(t *testing.T) {
 }
 
 func TestGitHubExchangeConfiguration(t *testing.T) {
-	valid := GitHubExchangeConfig{TokenEndpoint: "https://broker.example.com/oauth/token", ClientID: "manager", ClientSecretFile: "/mounted/client-secret", Audience: "manager-app", GrantApp: "github"} // #nosec G101 -- configuration fixture with a path, no secret value
+	valid := GitHubExchangeConfig{TokenEndpoint: "https://broker.example.com/oauth/token", ClientID: "manager", ClientSecretFile: "/mounted/client-secret", Audience: "manager-app"} // #nosec G101 -- configuration fixture with a path, no secret value
 	require.NoError(t, valid.Validate())
 	for _, endpoint := range []string{"http://broker.example.com/token", "https://user:password@broker.example.com/token", "https://broker.example.com/token?credential=value", "https://broker.example.com/token#fragment", "/token"} {
 		configuration := valid
@@ -141,6 +141,40 @@ func TestGitHubExchangeConfiguration(t *testing.T) {
 	configuration.ClientSecretFile = ""
 	require.Error(t, configuration.Validate())
 	configuration = valid
-	configuration.GrantApp = ""
+	configuration.Audience = ""
 	require.Error(t, configuration.Validate())
+	configuration = valid
+	configuration.ClientID = ""
+	require.Error(t, configuration.Validate())
+	configuration.ClientIDFile = "/mounted/client-id"
+	require.NoError(t, configuration.Validate())
+}
+
+func TestGitHubExchangeClientID(t *testing.T) {
+	directory := t.TempDir()
+	clientIDFile := filepath.Join(directory, "client-id")
+	require.NoError(t, os.WriteFile(clientIDFile, []byte("file-client\n"), 0o600))
+	absent := filepath.Join(directory, "absent")
+
+	for _, scenario := range []struct {
+		name, flag, file, want string
+	}{
+		{name: "flag wins over file", flag: "flag-client", file: clientIDFile, want: "flag-client"},
+		{name: "flag with the file key absent", flag: "flag-client", file: absent, want: "flag-client"},
+		{name: "file", file: clientIDFile, want: "file-client"},
+		{name: "neither", file: absent},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			got, err := GitHubExchangeConfig{ClientID: scenario.flag, ClientIDFile: scenario.file}.resolveClientID()
+			if scenario.want == "" {
+				require.ErrorContains(t, err, "client ID")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, scenario.want, got)
+		})
+	}
+
+	_, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: "https://broker.example.com/oauth/token", ClientIDFile: absent, ClientSecretFile: filepath.Join(directory, "client-secret"), Audience: "manager-app"}) // #nosec G101 -- configuration fixture with paths, no secret value
+	require.ErrorContains(t, err, "client ID", "startup fails without a client ID")
 }

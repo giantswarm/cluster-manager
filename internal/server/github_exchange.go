@@ -24,17 +24,16 @@ import (
 // GitHubExchangeConfig identifies a confidential RFC 8693 client and its
 // operator-controlled target. No caller can select the endpoint or target.
 type GitHubExchangeConfig struct {
-	TokenEndpoint    string
+	TokenEndpoint string
+	// ClientID wins over ClientIDFile.
 	ClientID         string
+	ClientIDFile     string
 	ClientSecretFile string
-	// Audience is the broker target that releases the person's grant of
-	// the App GrantApp names.
+	// Audience is the provider App whose grant the broker releases, also
+	// named in the grant_required answer.
 	Audience string
 	CAFile   string
 	APIURL   string
-	// GrantApp is the provider App muster keeps the person's grant under,
-	// named in the grant_required answer.
-	GrantApp string
 }
 
 // Validate checks required fields.
@@ -43,8 +42,8 @@ func (c GitHubExchangeConfig) Validate() error {
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return errors.New("GitHub token exchange requires an HTTPS token endpoint without credentials, query or fragment")
 	}
-	if c.ClientID == "" || c.ClientSecretFile == "" || c.Audience == "" || c.GrantApp == "" {
-		return errors.New("GitHub token exchange requires a client ID, client secret file, target audience and grant App")
+	if (c.ClientID == "" && c.ClientIDFile == "") || c.ClientSecretFile == "" || c.Audience == "" {
+		return errors.New("GitHub token exchange requires a client ID or client ID file, a client secret file and an audience")
 	}
 	if c.APIURL != "" {
 		apiURL, err := url.Parse(c.APIURL)
@@ -55,6 +54,18 @@ func (c GitHubExchangeConfig) Validate() error {
 	return nil
 }
 
+// resolveClientID returns ClientID, else the content of ClientIDFile.
+func (c GitHubExchangeConfig) resolveClientID() (string, error) {
+	if c.ClientID != "" {
+		return c.ClientID, nil
+	}
+	content, err := os.ReadFile(c.ClientIDFile) // #nosec G304 -- operator-provided path
+	if err != nil || strings.TrimSpace(string(content)) == "" {
+		return "", fmt.Errorf("GitHub token exchange needs a client ID: --github-token-exchange-client-id is empty and %s holds none", c.ClientIDFile)
+	}
+	return strings.TrimSpace(string(content)), nil
+}
+
 // NewGitHubExchange obtains the person's user grant on demand. Tokens are
 // neither cached nor attached to a session; only the returned request-local
 // identity holds one.
@@ -62,6 +73,11 @@ func NewGitHubExchange(configuration GitHubExchangeConfig) (tools.GitHubUser, er
 	if err := configuration.Validate(); err != nil {
 		return nil, err
 	}
+	clientID, err := configuration.resolveClientID()
+	if err != nil {
+		return nil, err
+	}
+	configuration.ClientID = clientID
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if configuration.CAFile != "" {
 		pem, err := os.ReadFile(configuration.CAFile) // #nosec G304 -- operator-provided path
@@ -87,7 +103,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 	// only that it is HTTPS.
 	exchanger := oidc.NewTokenExchangeClientWithOptions(oidc.TokenExchangeClientOptions{HTTPClient: client, Logger: slog.New(slog.DiscardHandler), AllowPrivateIP: true})
 	grantRequired := func(reason string) error {
-		return &tools.ErrGrantRequired{App: configuration.GrantApp, Reason: fmt.Sprintf(reason, configuration.GrantApp, configuration.GrantApp)}
+		return &tools.ErrGrantRequired{App: configuration.Audience, Reason: fmt.Sprintf(reason, configuration.Audience, configuration.Audience)}
 	}
 	return func(ctx context.Context) (*identity.GitHub, error) {
 		_, ok := identity.FromContext(ctx)

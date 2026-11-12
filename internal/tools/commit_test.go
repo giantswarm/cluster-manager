@@ -174,7 +174,7 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 	ctx := asPerson(context.Background())
 
 	_, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(ctx, commitMode(l4("wc1", "gpu-l4", false)))
-	assertRefused(t, err, "mode commit (a pull request opened as you) is not offered by this server: it has no way to your GitHub authorization (chart value github.enabled or githubTokenExchange) — use mode apply")
+	assertRefused(t, err, "mode commit (a pull request opened as you) is not offered by this server: it has no way to your GitHub authorization (chart value github.enabled) — use mode apply")
 
 	svc := l.service(Config{Installation: "gazelle"}, withFake(fake))
 	_, err = svc.CreateNodePool(context.Background(), commitMode(l4("wc1", "gpu-l4", false)))

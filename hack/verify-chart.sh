@@ -106,4 +106,54 @@ grep -q -- '^          emptyDir: {}$' <<<"$got" || fail "tmpVolume.sizeLimit emp
 if grep -q -- 'sizeLimit' <<<"$got"; then fail "tmpVolume.sizeLimit empty: a sizeLimit rendered"; fi
 grep -q -- '^              ephemeral-storage: 128Mi$' <<<"$got" || fail "tmpVolume.sizeLimit empty: the container's ephemeral-storage limit is gone"
 
+# GitHub commit mode. github.tokenExchange: the MCPServer keeps forwarding the
+# ID token and lists the audience under providerApps; the server gets the
+# exchange flags and the whole client Secret (no items, so an absent client-id
+# key does not block the pod); an inline clientSecret renders the Secret,
+# existingSecret wins over it. github.enabled alone: the deprecated pin. The
+# template refuses tokenExchange without github.enabled, an audience or a
+# client secret.
+exchange=("${dex[@]}" --set muster.mcpServer.enabled=true --set github.enabled=true \
+  --set github.tokenExchange.tokenEndpoint=https://muster.example/oauth/token --set github.tokenExchange.audience=github-cluster-manager)
+got=$(helm template t "$CHART" "${exchange[@]}" --set github.tokenExchange.existingSecret=cm-github)
+for want in \
+  '- --github-token-exchange-endpoint=https://muster.example/oauth/token' \
+  '- --github-token-exchange-audience=github-cluster-manager' \
+  '- --github-token-exchange-client-id-file=/etc/cluster-manager/github-token-exchange/client-id' \
+  '- --github-token-exchange-client-secret-file=/etc/cluster-manager/github-token-exchange/client-secret' \
+  'secretName: cm-github' \
+  'forwardToken: true' \
+  '- "github-cluster-manager"'; do
+  grep -qF -- "$want" <<<"$got" || fail "github.tokenExchange renders no '$want'"
+done
+for unwanted in '--github-authorization-server' '--github-token-exchange-client-id=' 'forwardIdentity' 'authorizationServer:' 'kind: Secret'; do
+  if grep -qF -- "$unwanted" <<<"$got"; then fail "github.tokenExchange renders '$unwanted'"; fi
+done
+if grep -A4 -- '- name: github-token-exchange$' <<<"$got" | grep -qF -- 'items:'; then fail "github.tokenExchange mounts only some keys of its Secret"; fi
+got=$(helm template t "$CHART" "${exchange[@]}" --set github.tokenExchange.clientID=cid --set github.tokenExchange.clientSecret=inline)
+for want in \
+  '- --github-token-exchange-client-id=cid' \
+  'secretName: t-cluster-manager-github-token-exchange' \
+  'client-secret: "inline"' \
+  'client-id: "cid"'; do
+  grep -qF -- "$want" <<<"$got" || fail "github.tokenExchange.clientSecret renders no '$want'"
+done
+got=$(helm template t "$CHART" "${exchange[@]}" --set github.tokenExchange.clientSecret=inline --set github.tokenExchange.existingSecret=cm-github)
+if grep -qF -- 'kind: Secret' <<<"$got"; then fail "github.tokenExchange.existingSecret set: the chart renders a Secret"; fi
+got=$(helm template t "$CHART" "${dex[@]}" --set muster.mcpServer.enabled=true --set github.enabled=true)
+for want in '- --github-authorization-server=https://github.com/apps/giantswarm-cluster-manager' 'forwardIdentity: true'; do
+  grep -qF -- "$want" <<<"$got" || fail "the github pin renders no '$want'"
+done
+if grep -qF -- 'providerApps' <<<"$got"; then fail "the github pin renders providerApps"; fi
+while IFS='|' read -r args want; do
+  # shellcheck disable=SC2086
+  out=$(helm template t "$CHART" "${dex[@]}" $args 2>&1) && fail "rendered with $args, want refusal '$want'"
+  grep -qF -- "$want" <<<"$out" || fail "$args: want refusal '$want', got: $out"
+done <<'REFUSALS'
+--set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a --set github.tokenExchange.existingSecret=s|github.enabled is false
+--set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.existingSecret=s|github.tokenExchange.audience is required
+--set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a|github.tokenExchange.existingSecret or github.tokenExchange.clientSecret
+--set githubTokenExchange.endpoint=https://m.example/t|githubTokenExchange
+REFUSALS
+
 echo "verify-chart: ok"

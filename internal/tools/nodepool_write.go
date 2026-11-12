@@ -1195,7 +1195,7 @@ func (s *Service) checkMode(mode string, commits bool) error {
 	case mode == ModeCommit && !commits:
 		return &ErrRefused{Reason: "mode commit covers create_cluster, delete_cluster, create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
 	case mode == ModeCommit && !s.CommitAvailable():
-		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it has no way to your GitHub authorization (chart value github.enabled or githubTokenExchange) — use mode apply"}
+		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it has no way to your GitHub authorization (chart value github.enabled) — use mode apply"}
 	case mode == ModeCommit:
 		return nil
 	default:

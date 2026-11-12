@@ -187,3 +187,32 @@ OTLP trace export env, rendered only with observability.otel.endpoint.
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+"true" when commit mode fetches the person's GitHub grant per call through
+github.tokenExchange, empty for the App-pinned registration or with github
+off. Fails on a tokenExchange the chart cannot render.
+*/}}
+{{- define "cluster-manager.githubTokenExchange" -}}
+{{- $exchange := .Values.github.tokenExchange }}
+{{- if $exchange.tokenEndpoint }}
+{{- if not .Values.github.enabled }}
+{{- fail "github.tokenExchange.tokenEndpoint is set but github.enabled is false: set github.enabled to fetch the person's GitHub grant per commit, or clear github.tokenExchange" }}
+{{- end }}
+{{- if not $exchange.audience }}
+{{- fail "github.tokenExchange.audience is required with github.tokenExchange.tokenEndpoint" }}
+{{- end }}
+{{- if not (or $exchange.existingSecret $exchange.clientSecret) }}
+{{- fail "github.tokenExchange needs github.tokenExchange.existingSecret or github.tokenExchange.clientSecret" }}
+{{- end }}
+{{- "true" }}
+{{- end }}
+{{- end }}
+
+{{/*
+The Secret holding the token exchange client: existingSecret, else the one
+the chart renders from clientSecret.
+*/}}
+{{- define "cluster-manager.githubTokenExchangeSecretName" -}}
+{{- .Values.github.tokenExchange.existingSecret | default (printf "%s-github-token-exchange" (include "cluster-manager.fullname" .)) }}
+{{- end }}
