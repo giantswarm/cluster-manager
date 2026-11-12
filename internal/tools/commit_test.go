@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/giantswarm/cluster-manager/internal/identity"
 )
@@ -173,7 +175,7 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 	ctx := asPerson(context.Background())
 
 	_, err := l.service(Config{Installation: "gazelle"}).CreateNodePool(ctx, commitMode(l4("wc1", "gpu-l4", false)))
-	assertRefused(t, err, "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply")
+	assertRefused(t, err, "mode commit (a pull request opened as you) is not offered by this server: it cannot reach your GitHub authorization (chart value github.enabled) — use mode apply")
 
 	svc := l.service(Config{Installation: "gazelle"}, withFake(fake))
 	_, err = svc.CreateNodePool(context.Background(), commitMode(l4("wc1", "gpu-l4", false)))
@@ -197,6 +199,91 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 
 	_, err = svc.EnableModelServing(ctx, ModelServingInput{Cluster: "wc1", Mode: ModeCommit})
 	assertRefused(t, err, "mode commit covers create_cluster, delete_cluster, create_node_pool and delete_node_pool; this tool lands its objects in mode apply only")
+}
+
+// TestCommitAsksForTheGrant: with the grant fetched per call, a commit
+// without it answers the grant the person must give and opens nothing; with
+// it the pull request is opened as the person.
+func TestCommitAsksForTheGrant(t *testing.T) {
+	l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
+	granted := false
+	user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+		if !granted {
+			return nil, &ErrGrantRequired{App: "github", Reason: "grant it"}
+		}
+		return &identity.GitHub{Login: "jane", Token: "the-persons-grant"}, nil
+	})
+	svc := l.service(Config{Installation: "gazelle"}, withFake(fake), user)
+	in := commitMode(l4("wc1", "gpu-l4", false))
+	in.Pool.Name = "gpu-l4"
+
+	_, err := svc.CreateNodePool(context.Background(), in)
+	grant, ok := errors.AsType[*ErrGrantRequired](err)
+	require.True(t, ok, "%v", err)
+	assert.Equal(t, "github", grant.App)
+	assert.Empty(t, fake.PullRequests())
+
+	granted = true
+	out, err := svc.CreateNodePool(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, "jane", out.Commit.Author)
+	assert.Len(t, fake.PullRequests(), 1)
+}
+
+// TestCommitFetchesTheGrantFirst: every commit-mode tool fetches the
+// person's grant before it reads or writes anything, so a call without the
+// grant answers grant_required and touches no cluster.
+func TestCommitFetchesTheGrantFirst(t *testing.T) {
+	calls := map[string]func(*Service, context.Context) error{
+		"create_cluster": func(s *Service, ctx context.Context) error { _, err := s.CreateCluster(ctx, dev01Commit()); return err },
+		"delete_cluster": func(s *Service, ctx context.Context) error {
+			_, err := s.DeleteCluster(ctx, dev01DeleteCommit())
+			return err
+		},
+		"create_node_pool": func(s *Service, ctx context.Context) error {
+			_, err := s.CreateNodePool(ctx, commitMode(l4("wc1", "gpu-l4", false)))
+			return err
+		},
+		"delete_node_pool": func(s *Service, ctx context.Context) error {
+			_, err := s.DeleteNodePool(ctx, DeleteNodePoolInput{Cluster: "wc1", Name: "gpu-a10g", Mode: ModeCommit})
+			return err
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
+			fetches := 0
+			user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+				fetches++
+				return nil, &ErrGrantRequired{App: "github", Reason: "grant it"}
+			})
+			svc := l.service(Config{Installation: "gazelle"}, withFake(fake), user)
+			fakes := []*dynamicfake.FakeDynamicClient{l.installation.(*dynamicfake.FakeDynamicClient), fakeTarget(t, l, wc1APIServer)}
+			for _, dyn := range fakes {
+				dyn.ClearActions()
+			}
+
+			_, isGrant := errors.AsType[*ErrGrantRequired](call(svc, t.Context()))
+			require.True(t, isGrant)
+			require.Equal(t, 1, fetches)
+			for _, dyn := range fakes {
+				require.Empty(t, dyn.Actions())
+			}
+			require.Empty(t, fake.PullRequests())
+		})
+	}
+}
+
+// TestApplyNeverFetchesTheGrant: mode apply needs no GitHub grant.
+func TestApplyNeverFetchesTheGrant(t *testing.T) {
+	l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
+	user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+		t.Fatal("mode apply fetched the GitHub grant")
+		return nil, nil
+	})
+	svc := l.service(Config{Installation: "gazelle"}, withFake(fake), user)
+	_, err := svc.CreateNodePool(t.Context(), l4("wc1", "gpu-l4", true))
+	require.NoError(t, err)
 }
 
 // TestDeleteNodePoolCommit: the removal pull request deletes the pool's

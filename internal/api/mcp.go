@@ -511,9 +511,21 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText(string(b)), nil
 }
 
+// statusGrantRequired is muster's provider App contract: a tool result whose
+// structured status it is names, under apps, the Apps the call needs.
+const statusGrantRequired = "grant_required"
+
 // errResult is a tool error: the message names the cause so the caller can
-// act on it (a missing cluster, an ambiguous name, a refused read).
+// act on it (a missing cluster, an ambiguous name, a refused read). A missing
+// provider App grant also carries {"status": "grant_required", "apps":
+// [<app>]} as structured content, which muster answers with the App's
+// sign-in, and as a second text content serializing it.
 func errResult(err error) *mcp.CallToolResult {
+	if grant, ok := errors.AsType[*tools.ErrGrantRequired](err); ok {
+		structured := map[string]any{"status": statusGrantRequired, "apps": []string{grant.App}, "message": grant.Reason}
+		block, _ := json.Marshal(structured)
+		return &mcp.CallToolResult{IsError: true, StructuredContent: structured, Content: []mcp.Content{mcp.NewTextContent(statusGrantRequired + ": " + grant.Reason), mcp.NewTextContent(string(block))}}
+	}
 	var refused *tools.ErrRefused
 	if errors.As(err, &refused) && refused.Refused != nil {
 		// The structured refusal beside the text: a second text content

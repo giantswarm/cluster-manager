@@ -1,6 +1,7 @@
 {{- if and .Values.github.enabled (not .Values.oauth.enabled) }}
-{{- fail "github.enabled pins the MCPServer to the GitHub App and forwards the person's ID token next to its user token, which the server validates as an OAuth resource server: set oauth.enabled" }}
+{{- fail "github.enabled needs oauth.enabled: commit mode acts as the person, whose forwarded ID token the server validates as an OAuth resource server" }}
 {{- end }}
+{{- $githubExchange := include "cluster-manager.githubTokenExchange" . }}
 {{- if .Values.muster.mcpServer.enabled }}
 {{- /*
 Registers this server with muster. Tools appear as x_<name>_<tool>. With
@@ -8,7 +9,10 @@ oauth.enabled the CR carries the auth block: muster forwards the session's IdP
 id_token (forwardToken), which this server validates against its trusted
 audiences (oauth.trustedAudiences plus the requiredAudiences below), and
 requests the requiredAudiences at login. Without OAuth muster connects
-anonymously. With github.enabled the auth pins the GitHub App
+anonymously. With github.enabled and github.tokenExchange the auth stays the
+forwarded ID token and lists github.tokenExchange.audience under providerApps:
+muster answers the server's grant_required with that App's sign-in. With
+github.enabled alone (deprecated) the auth pins the GitHub App
 giantswarm-cluster-manager instead: the bearer is the person's App user token
 (commit mode's pull request) and forwardIdentity puts the ID token in
 X-Muster-Id-Token next to it.
@@ -40,7 +44,7 @@ spec:
   {{- with .Values.muster.mcpServer.description }}
   description: {{ . | quote }}
   {{- end }}
-  {{- if and .Values.oauth.enabled .Values.github.enabled }}
+  {{- if and .Values.oauth.enabled .Values.github.enabled (not $githubExchange) }}
   {{- with .Values.github.authorizationServer }}
   auth:
     type: oauth
@@ -68,6 +72,10 @@ spec:
   auth:
     type: oauth
     forwardToken: {{ .Values.muster.mcpServer.auth.forwardToken }}
+    {{- if $githubExchange }}
+    providerApps:
+      - {{ .Values.github.tokenExchange.audience | quote }}
+    {{- end }}
     {{- with .Values.muster.mcpServer.auth.requiredAudiences }}
     requiredAudiences:
       {{- toYaml . | nindent 6 }}

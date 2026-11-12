@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/giantswarm/mcp-toolkit/brand"
@@ -202,6 +203,23 @@ func TestErrResultRefused(t *testing.T) {
 	plain := errResult(&tools.ErrRefused{Reason: "mode commit is not available"})
 	assert.True(t, plain.IsError)
 	assert.Len(t, plain.Content, 1, "a refusal without a block stays one text")
+}
+
+// TestErrResultNamesTheMissingGrant: a missing grant answers the reason,
+// then the structured grant_required, also serialized as a second text.
+func TestErrResultNamesTheMissingGrant(t *testing.T) {
+	res := errResult(fmt.Errorf("create: %w", &tools.ErrGrantRequired{App: "github", Reason: "grant it"}))
+	require.True(t, res.IsError)
+	require.Len(t, res.Content, 2)
+	require.Equal(t, "grant_required: grant it", res.Content[0].(mcp.TextContent).Text)
+	require.JSONEq(t, `{"status":"grant_required","apps":["github"],"message":"grant it"}`, res.Content[1].(mcp.TextContent).Text)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var wire struct {
+		StructuredContent map[string]any `json:"structuredContent"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &wire))
+	require.Equal(t, map[string]any{"status": "grant_required", "apps": []any{"github"}, "message": "grant it"}, wire.StructuredContent)
 }
 
 // TestErrResultNotFound (giantswarm/cluster-manager#167): delete_cluster's

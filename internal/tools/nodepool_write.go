@@ -117,6 +117,18 @@ const (
 
 func (e *ErrRefused) Error() string { return e.Reason }
 
+// ErrGrantRequired is a commit the person has not granted the GitHub App
+// for: the call needs their grant of App, which muster keeps. The MCP answer
+// names App so muster turns it into the App's sign-in.
+type ErrGrantRequired struct {
+	// App is the provider App, by muster's name for it.
+	App string
+	// Reason says what the grant is for.
+	Reason string
+}
+
+func (e *ErrGrantRequired) Error() string { return e.Reason }
+
 // CreateNodePoolInput is create_node_pool's input.
 type CreateNodePoolInput struct {
 	Cluster   string
@@ -366,6 +378,10 @@ func (a ObjectAction) String() string {
 func (s *Service) CreateNodePool(ctx context.Context, in CreateNodePoolInput) (*WriteResult, error) {
 	start := time.Now()
 	if err := s.checkMode(in.Mode, true); err != nil {
+		return nil, err
+	}
+	ctx, err := s.authorizeCommit(ctx, in.Mode)
+	if err != nil {
 		return nil, err
 	}
 	k := s.clients(ctx)
@@ -858,6 +874,10 @@ func (s *Service) DeleteNodePool(ctx context.Context, in DeleteNodePoolInput) (*
 	if err := s.checkMode(in.Mode, true); err != nil {
 		return nil, err
 	}
+	ctx, err := s.authorizeCommit(ctx, in.Mode)
+	if err != nil {
+		return nil, err
+	}
 	k := s.clients(ctx)
 	c, err := s.getCluster(ctx, k, in.Cluster, in.Namespace)
 	if err != nil {
@@ -1183,7 +1203,7 @@ func (s *Service) checkMode(mode string, commits bool) error {
 	case mode == ModeCommit && !commits:
 		return &ErrRefused{Reason: "mode commit covers create_cluster, delete_cluster, create_node_pool and delete_node_pool; this tool lands its objects in mode apply only"}
 	case mode == ModeCommit && !s.CommitAvailable():
-		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it is not registered with its GitHub App (chart value github.enabled), so it holds no GitHub authorization of yours — use mode apply"}
+		return &ErrRefused{Reason: "mode commit (a pull request opened as you) is not offered by this server: it cannot reach your GitHub authorization (chart value github.enabled) — use mode apply"}
 	case mode == ModeCommit:
 		return nil
 	default:

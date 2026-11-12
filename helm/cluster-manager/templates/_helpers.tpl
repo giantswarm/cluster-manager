@@ -187,3 +187,44 @@ OTLP trace export env, rendered only with observability.otel.endpoint.
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+"true" when commit mode fetches the person's GitHub grant per call through
+github.tokenExchange (tokenEndpoint set), empty for the App-pinned
+registration or with github off. Fails on a configuration the server or
+muster would refuse: the exchange needs github.enabled, Dex OAuth with
+downstream OAuth (the person's ID token is the subject token), muster
+forwarding that token (providerApps needs forwardToken), an audience and a
+client secret.
+*/}}
+{{- define "cluster-manager.githubTokenExchange" -}}
+{{- $exchange := .Values.github.tokenExchange }}
+{{- if $exchange.tokenEndpoint }}
+{{- if not .Values.github.enabled }}
+{{- fail "github.tokenExchange.tokenEndpoint is set but github.enabled is false: set github.enabled to fetch the person's GitHub grant per commit, or clear github.tokenExchange" }}
+{{- end }}
+{{- if not (and .Values.oauth.enabled (eq .Values.oauth.provider "dex") .Values.oauth.downstream.enabled) }}
+{{- fail "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled" }}
+{{- end }}
+{{- if and .Values.muster.mcpServer.enabled (not .Values.muster.mcpServer.auth.forwardToken) }}
+{{- fail "github.tokenExchange lists its audience under the MCPServer's auth.providerApps, which muster accepts only with forwardToken: set muster.mcpServer.auth.forwardToken" }}
+{{- end }}
+{{- if not $exchange.audience }}
+{{- fail "github.tokenExchange.audience is required with github.tokenExchange.tokenEndpoint" }}
+{{- end }}
+{{- if not (or $exchange.existingSecret $exchange.clientSecret) }}
+{{- fail "github.tokenExchange needs github.tokenExchange.existingSecret or github.tokenExchange.clientSecret" }}
+{{- end }}
+{{- "true" }}
+{{- else if or $exchange.audience $exchange.clientID $exchange.clientSecret $exchange.existingSecret $exchange.caSecretName }}
+{{- fail "github.tokenExchange.tokenEndpoint is required when any other github.tokenExchange value is set" }}
+{{- end }}
+{{- end }}
+
+{{/*
+The Secret holding the token exchange client: existingSecret, else the one
+the chart renders from clientSecret.
+*/}}
+{{- define "cluster-manager.githubTokenExchangeSecretName" -}}
+{{- .Values.github.tokenExchange.existingSecret | default (printf "%s-github-token-exchange" (include "cluster-manager.fullname" .)) }}
+{{- end }}
