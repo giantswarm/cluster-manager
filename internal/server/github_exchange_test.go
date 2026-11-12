@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +26,7 @@ import (
 var (
 	personToken    = unsignedJWT(`{"sub":"alice"}`)
 	delegatedToken = unsignedJWT(`{"sub":"alice","act":{"sub":"agent"}}`)
+	opaqueToken    = "not-a-jwt"
 )
 
 func unsignedJWT(claims string) string {
@@ -31,7 +35,7 @@ func unsignedJWT(claims string) string {
 }
 
 func TestGitHubExchange(t *testing.T) {
-	for _, scenario := range []string{"success", "delegated actor", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses"} {
+	for _, scenario := range []string{"success", "delegated actor", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses", "GitHub unavailable", "unparseable identity token"} {
 		t.Run(scenario, func(t *testing.T) {
 			secretFile := filepath.Join(t.TempDir(), "client-secret")
 			require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
@@ -54,7 +58,7 @@ func TestGitHubExchange(t *testing.T) {
 					switch scenario {
 					case "no grant":
 						w.WriteHeader(http.StatusBadRequest)
-						_, _ = fmt.Fprint(w, `{"error":"invalid_target","error_description":"do not expose fixture-secret"}`)
+						_, _ = fmt.Fprint(w, `{"error":"invalid_target","error_description":"the requested audience cannot be served"}`)
 						return
 					case "broker error":
 						w.WriteHeader(http.StatusInternalServerError)
@@ -82,26 +86,34 @@ func TestGitHubExchange(t *testing.T) {
 				verifications++
 				require.Empty(t, r.Header.Get("X-Muster-Id-Token"))
 				require.Equal(t, "Bearer fixture-user-grant", r.Header.Get("Authorization"))
-				if scenario == "GitHub refuses" {
+				switch scenario {
+				case "GitHub refuses":
 					w.WriteHeader(http.StatusUnauthorized)
+					return
+				case "GitHub unavailable":
+					w.WriteHeader(http.StatusForbidden)
 					return
 				}
 				_, _ = fmt.Fprint(w, `{"login":"alice"}`)
 			})
 			upstream := httptest.NewTLSServer(handler)
 			defer upstream.Close()
-			client := upstream.Client()
-			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL}
+			caFile := filepath.Join(t.TempDir(), "ca.crt")
+			require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}), 0o600))
+			var logged bytes.Buffer
+			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", CAFile: caFile, APIURL: upstream.URL}
 			ctx := identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"})
 			switch scenario {
 			case "delegated actor":
 				ctx = identity.ContextWithToken(ctx, delegatedToken)
+			case "unparseable identity token":
+				ctx = identity.ContextWithToken(ctx, opaqueToken)
 			case "missing identity token":
 			default:
 				ctx = identity.ContextWithToken(ctx, personToken)
 			}
-			resolve := newGitHubExchange(configuration, client)
+			resolve, err := NewGitHubExchange(configuration, slog.New(slog.NewJSONHandler(&logged, nil)))
+			require.NoError(t, err)
 			result, err := resolve(ctx)
 			if scenario == "success" {
 				require.NoError(t, err)
@@ -117,14 +129,31 @@ func TestGitHubExchange(t *testing.T) {
 			for _, value := range []string{personToken, "fixture-secret", "fixture-user-grant", "fixture-refresh"} {
 				require.NotContains(t, err.Error(), value)
 			}
-			if scenario == "no grant" || scenario == "GitHub refuses" {
-				grant, ok := errors.AsType[*tools.ErrGrantRequired](err)
-				require.True(t, ok)
+			grant, isGrant := errors.AsType[*tools.ErrGrantRequired](err)
+			require.Equal(t, scenario == "no grant" || scenario == "GitHub refuses", isGrant, "%v", err)
+			if isGrant {
 				require.Equal(t, "manager-app", grant.App)
 			}
-			if scenario == "missing identity token" || scenario == "delegated actor" {
+			switch scenario {
+			case "missing identity token", "delegated actor", "unparseable identity token":
 				require.Zero(t, exchanges)
+				_, refused := errors.AsType[*tools.ErrRefused](err)
+				require.True(t, refused)
 			}
+			if scenario == "delegated actor" || scenario == "unparseable identity token" {
+				require.ErrorContains(t, err, "forbidden: commit mode opens the pull request as you, and only you, not an agent acting for you")
+			}
+			if scenario == "no grant" {
+				var record map[string]any
+				require.NoError(t, json.Unmarshal(logged.Bytes(), &record))
+				require.Equal(t, "WARN", record["level"])
+				require.Equal(t, "GitHub token exchange refused", record["msg"])
+				require.Equal(t, float64(http.StatusBadRequest), record["status"])
+				require.Equal(t, "invalid_target", record["error"])
+				require.Equal(t, "the requested audience cannot be served", record["errorDescription"])
+			}
+			require.NotContains(t, logged.String(), "fixture-secret")
+			require.NotContains(t, logged.String(), personToken)
 		})
 	}
 }
@@ -175,6 +204,24 @@ func TestGitHubExchangeClientID(t *testing.T) {
 		})
 	}
 
-	_, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: "https://broker.example.com/oauth/token", ClientIDFile: absent, ClientSecretFile: filepath.Join(directory, "client-secret"), Audience: "manager-app"}) // #nosec G101 -- configuration fixture with paths, no secret value
+	_, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: "https://broker.example.com/oauth/token", ClientIDFile: absent, ClientSecretFile: filepath.Join(directory, "client-secret"), Audience: "manager-app"}, slog.New(slog.DiscardHandler)) // #nosec G101 -- configuration fixture with paths, no secret value
 	require.ErrorContains(t, err, "client ID", "startup fails without a client ID")
+}
+
+// TestGitHubExchangeTrustsOnlyItsCA: without the broker's CA the exchange
+// never reaches it, and the answer is no grant_required.
+func TestGitHubExchangeTrustsOnlyItsCA(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
+	reached := false
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	defer upstream.Close()
+	resolve, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	ctx := identity.ContextWithToken(identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"}), personToken)
+	_, err = resolve(ctx)
+	require.ErrorContains(t, err, "GitHub authorization service is unavailable")
+	_, isGrant := errors.AsType[*tools.ErrGrantRequired](err)
+	require.False(t, isGrant)
+	require.False(t, reached)
 }

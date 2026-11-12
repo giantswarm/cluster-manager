@@ -212,7 +212,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}))
 	}
 	if o.githubExchangeEndpoint != "" {
-		user, err := server.NewGitHubExchange(o.gitHubExchangeConfig())
+		user, err := server.NewGitHubExchange(o.gitHubExchangeConfig(), log)
 		if err != nil {
 			return err
 		}
