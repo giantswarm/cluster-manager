@@ -1,3 +1,6 @@
+{{- if .Values.oauth.dex.allowPrivateURLs }}
+{{- fail "oauth.dex.allowPrivateURLs=true is no longer supported: remove it; Dex reaches private addresses and follows the proxy environment without it" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -97,9 +100,6 @@ spec:
             {{- if eq .Values.oauth.provider "dex" }}
             - --dex-issuer-url={{ include "cluster-manager.oauthDexIssuerURL" . }}
             - --dex-client-id={{ include "cluster-manager.oauthDexClientID" . }}
-            {{- if .Values.oauth.dex.allowPrivateURLs }}
-            - --allow-private-oauth-urls=true
-            {{- end }}
             {{- if include "cluster-manager.oauthDexCASecretName" . }}
             - --dex-ca-file=/etc/cluster-manager/idp-ca/{{ include "cluster-manager.oauthDexCASecretKey" . }}
             {{- end }}
