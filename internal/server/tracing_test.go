@@ -37,10 +37,9 @@ func recordSpans(t *testing.T) *tracetest.InMemoryExporter {
 	return exporter
 }
 
-func postMCP(t *testing.T, url, sessionID, traceparent, body string) *http.Response {
+func postMCP(t *testing.T, handler http.Handler, sessionID, traceparent, body string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url+"/mcp", strings.NewReader(body))
-	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://cluster-manager.example.com/mcp", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if sessionID != "" {
@@ -49,8 +48,9 @@ func postMCP(t *testing.T, url, sessionID, traceparent, body string) *http.Respo
 	if traceparent != "" {
 		req.Header.Set("traceparent", traceparent)
 	}
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	resp := recorder.Result()
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	return resp
@@ -65,22 +65,19 @@ func TestToolCallIsTracedAndJoinsTheCallersTrace(t *testing.T) {
 	})
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, mcpSrv, nil)
 	require.NoError(t, err)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
 	for _, path := range []string{"/healthz", "/readyz"} {
-		resp, err := http.Get(ts.URL + path)
-		require.NoError(t, err)
-		_ = resp.Body.Close()
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
 	}
 	require.Empty(t, exporter.GetSpans(), "the probes are not traced")
 
-	init := postMCP(t, ts.URL, "", "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+	init := postMCP(t, srv.Handler(), "", "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
 	sessionID := init.Header.Get(mcpserver.HeaderKeySessionID)
 	exporter.Reset()
 
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	postMCP(t, ts.URL, sessionID, "00-"+traceID+"-00f067aa0ba902b7-01",
+	postMCP(t, srv.Handler(), sessionID, "00-"+traceID+"-00f067aa0ba902b7-01",
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
 
 	byName := map[string]sdktrace.ReadOnlySpan{}
