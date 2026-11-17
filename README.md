@@ -15,8 +15,6 @@ API.
 
 ## Tools
 
-Configuration upgrades: [OAuth migration](docs/oauth-migration.md).
-
 Through muster the tools appear as `x_cluster-manager_<tool>`. [docs/tools.md](docs/tools.md) shows every tool's description and input schema as a model reads them (`make tools-doc`).
 
 | Tool | Purpose |
