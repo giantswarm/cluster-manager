@@ -63,9 +63,6 @@ type OAuthConfig struct {
 	// kube-apiserver trusts them (the chart passes both). Empty: only tokens
 	// this server issued itself.
 	TrustedAudiences []string
-	// SSOAllowPrivateIPs lets the JWKS endpoint used for forwarded tokens
-	// resolve to a private address (an in-cluster Dex).
-	SSOAllowPrivateIPs bool
 	// AllowPublicClientRegistration lets MCP clients register over DCR
 	// without a token (labs only).
 	AllowPublicClientRegistration bool
@@ -126,7 +123,7 @@ type oauthRuntime struct {
 	log     *slog.Logger
 }
 
-func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime, error) {
+func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger, adjust ...func(*oauth.ServerConfig)) (*oauthRuntime, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -145,8 +142,10 @@ func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime,
 		AllowPublicClientRegistration: cfg.AllowPublicClientRegistration,
 		MaxClientsPerIP:               10,
 		TrustedAudiences:              cfg.TrustedAudiences,
-		AllowPrivateIPJWKS:            cfg.SSOAllowPrivateIPs,
 		JWKSRootCAs:                   rootCAs,
+	}
+	for _, fn := range adjust {
+		fn(serverCfg)
 	}
 	srv, err := oauth.NewServer(provider, store, store, store, serverCfg, log,
 		oauth.WithAuditor(security.NewAuditor(log, true)))

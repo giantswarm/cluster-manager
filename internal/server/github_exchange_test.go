@@ -2,16 +2,20 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
@@ -96,10 +100,7 @@ func TestGitHubExchange(t *testing.T) {
 				}
 				_, _ = fmt.Fprint(w, `{"login":"alice"}`)
 			})
-			upstream := httptest.NewTLSServer(handler)
-			defer upstream.Close()
-			caFile := filepath.Join(t.TempDir(), "ca.crt")
-			require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}), 0o600))
+			upstream, caFile := newLocalhostTLSServer(t, handler)
 			var logged bytes.Buffer
 			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", CAFile: caFile, APIURL: upstream.URL}
 			ctx := identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"})
@@ -214,8 +215,7 @@ func TestGitHubExchangeTrustsOnlyItsCA(t *testing.T) {
 	secretFile := filepath.Join(t.TempDir(), "client-secret")
 	require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
 	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
-	defer upstream.Close()
+	upstream, _ := newLocalhostTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 	resolve, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	ctx := identity.ContextWithToken(identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"}), personToken)
@@ -224,4 +224,63 @@ func TestGitHubExchangeTrustsOnlyItsCA(t *testing.T) {
 	_, isGrant := errors.AsType[*tools.ErrGrantRequired](err)
 	require.False(t, isGrant)
 	require.False(t, reached)
+}
+
+// newLocalhostTLSServer serves on a hostname endpoint (https://localhost:port)
+// with a certificate for it; the second result is the PEM CA file that
+// verifies it.
+func newLocalhostTLSServer(t *testing.T, handler http.Handler) (*httptest.Server, string) {
+	t.Helper()
+	cert := selfSignedLocalhost(t)
+	srv := httptest.NewUnstartedServer(handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	require.NoError(t, err)
+	srv.URL = "https://localhost:" + port
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600))
+	return srv, caFile
+}
+
+// TestGitHubExchangeRefusesIPLiteralEndpoint: an IP-literal private endpoint
+// never receives the request, and a hostname endpoint is reached through the
+// caller-supplied client.
+func TestGitHubExchangeRefusesIPLiteralEndpoint(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
+	reached := 0
+	upstream, caFile := newLocalhostTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":"invalid_target"}`)
+	}))
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "https://"))
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	pemBytes, err := os.ReadFile(caFile)
+	require.NoError(t, err)
+	require.True(t, roots.AppendCertsFromPEM(pemBytes))
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}
+	ctx := identity.ContextWithToken(identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"}), personToken)
+
+	for _, scenario := range []struct {
+		endpoint    string
+		wantReached int
+		wantGrant   bool
+	}{
+		{endpoint: "https://127.0.0.1:" + port + "/token"},
+		{endpoint: "https://10.0.0.1:" + port + "/token"},
+		{endpoint: "https://localhost:" + port + "/token", wantReached: 1, wantGrant: true},
+	} {
+		reached = 0
+		resolve := newGitHubExchange(GitHubExchangeConfig{TokenEndpoint: scenario.endpoint, ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app"}, client, slog.New(slog.DiscardHandler))
+		_, err := resolve(ctx)
+		require.Error(t, err, scenario.endpoint)
+		_, isGrant := errors.AsType[*tools.ErrGrantRequired](err)
+		require.Equal(t, scenario.wantGrant, isGrant, scenario.endpoint)
+		require.Equal(t, scenario.wantReached, reached, scenario.endpoint)
+	}
 }

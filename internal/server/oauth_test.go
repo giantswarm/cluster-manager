@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	oauth "github.com/giantswarm/mcp-oauth"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/stretchr/testify/assert"
@@ -146,15 +147,14 @@ func (f *fakeIdP) idToken(t *testing.T, aud []string, exp time.Time) string {
 
 func (f *fakeIdP) config(downstream bool) OAuthConfig {
 	return OAuthConfig{
-		BaseURL:            "http://localhost:8080",
-		Provider:           ProviderDex,
-		DexIssuerURL:       f.issuer,
-		DexClientID:        "agent-platform",
-		DexClientSecret:    "lab-only",
-		DexCAFile:          f.caFile,
-		TrustedAudiences:   []string{"agent-platform"},
-		SSOAllowPrivateIPs: true,
-		DownstreamOAuth:    downstream,
+		BaseURL:          "http://localhost:8080",
+		Provider:         ProviderDex,
+		DexIssuerURL:     f.issuer,
+		DexClientID:      "agent-platform",
+		DexClientSecret:  "lab-only",
+		DexCAFile:        f.caFile,
+		TrustedAudiences: []string{"agent-platform"},
+		DownstreamOAuth:  downstream,
 	}
 }
 
@@ -179,7 +179,7 @@ func TestOAuthConfigValidation(t *testing.T) {
 // carries the caller — and, with downstream OAuth, the caller's token.
 func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
 	idp := newFakeIdP(t)
-	o, err := newOAuth(idp.config(true), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := newOAuth(idp.config(true), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)), loopbackJWKS)
 	require.NoError(t, err)
 	t.Cleanup(func() { o.shutdown(context.Background()) })
 
@@ -229,7 +229,7 @@ func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
 
 func TestDownstreamOffKeepsTheServiceAccount(t *testing.T) {
 	idp := newFakeIdP(t)
-	o, err := newOAuth(idp.config(false), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := newOAuth(idp.config(false), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)), loopbackJWKS)
 	require.NoError(t, err)
 	t.Cleanup(func() { o.shutdown(context.Background()) })
 
@@ -277,7 +277,7 @@ func TestUntrustedAudienceIsRefused(t *testing.T) {
 		cfg := idp.config(true)
 		cfg.TrustedAudiences = trusted
 		var logs bytes.Buffer
-		o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(&logs, nil)))
+		o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(&logs, nil)), loopbackJWKS)
 		require.NoError(t, err)
 		t.Cleanup(func() { o.shutdown(context.Background()) })
 		seen := &struct {
@@ -364,4 +364,10 @@ func TestServerGuardsMCPButNotProbes(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, status(http.MethodPost, "/mcp", ""), "MCP needs a token")
 	assert.Equal(t, http.StatusNotFound, status(http.MethodGet, "/api/v1/backend", ""), "there is no REST API")
 	assert.Equal(t, http.StatusOK, status(http.MethodGet, "/.well-known/oauth-authorization-server", ""), "metadata stays public")
+}
+
+// loopbackJWKS lets the fake IdP's JWKS resolve to loopback, which a host
+// list never allows.
+func loopbackJWKS(cfg *oauth.ServerConfig) {
+	cfg.AllowPrivateIPJWKS = true //nolint:staticcheck // SA1019: httptest serves on loopback
 }

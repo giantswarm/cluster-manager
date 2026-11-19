@@ -41,7 +41,7 @@ func TestGitHubPinCarriesBothTokens(t *testing.T) {
 	gh, calls := fakeGitHub(t, "ghu_person", "jane")
 	cfg := idp.config(true)
 	cfg.GitHub = &GitHubPin{AuthorizationServer: "https://github.com/apps/giantswarm-cluster-manager", APIURL: gh.URL}
-	o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)), loopbackJWKS)
 	require.NoError(t, err)
 	t.Cleanup(func() { o.shutdown(context.Background()) })
 
