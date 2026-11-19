@@ -331,7 +331,7 @@
                         },
                         "caSecret": {
                             "type": "object",
-                            "description": "Secret with the CA of a Dex that serves a private certificate; `global.identity.ca.secretName` / `global.identity.ca.key`.",
+                            "description": "Secret with the CA of a Dex that serves a private certificate; mounted and passed as `--dex-ca-file`. Empty name falls back to `global.identity.ca.secretName` / `global.identity.ca.key`.",
                             "additionalProperties": false,
                             "properties": {
                                 "key": {
@@ -362,7 +362,7 @@
                     "properties": {
                         "enabled": {
                             "type": "boolean",
-                            "description": "Call the Kubernetes API as the caller: everything a request does presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a is cluster-manager's rule (every write as the person), so it is on by default and takes effect with `oauth.enabled`. The ServiceAccount then holds no permissions: the chart renders no RBAC for it (`rbac.create` is moot)."
+                            "description": "Call the Kubernetes API as the caller: everything a request does presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id is the apiserver's `--oidc-client-id`). This is cluster-manager's rule (every write as the person), so it is on by default and takes effect with `oauth.enabled`. The ServiceAccount then holds no permissions: the chart renders no RBAC for it (`rbac.create` is moot)."
                         }
                     }
                 },
