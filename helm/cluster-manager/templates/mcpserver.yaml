@@ -9,13 +9,9 @@ oauth.enabled the CR carries the auth block: muster forwards the session's IdP
 id_token (forwardToken), which this server validates against its trusted
 audiences (oauth.trustedAudiences plus the requiredAudiences below), and
 requests the requiredAudiences at login. Without OAuth muster connects
-anonymously. With github.enabled and github.tokenExchange the auth stays the
-forwarded ID token and lists github.tokenExchange.audience under providerApps:
-muster answers the server's grant_required with that App's sign-in. With
-github.enabled alone (deprecated) the auth pins the GitHub App
-giantswarm-cluster-manager instead: the bearer is the person's App user token
-(commit mode's pull request) and forwardIdentity puts the ID token in
-X-Muster-Id-Token next to it.
+anonymously. With github.enabled and github.tokenExchange the auth lists
+github.tokenExchange.audience under providerApps: muster answers the server's
+grant_required with that App's sign-in.
 */}}
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: MCPServer
@@ -44,31 +40,7 @@ spec:
   {{- with .Values.muster.mcpServer.description }}
   description: {{ . | quote }}
   {{- end }}
-  {{- if and .Values.oauth.enabled .Values.github.enabled (not $githubExchange) }}
-  {{- with .Values.github.authorizationServer }}
-  auth:
-    type: oauth
-    authorizationServer:
-      issuer: {{ .issuer | quote }}
-      {{- with .expectedIssuer }}
-      expectedIssuer: {{ . | quote }}
-      {{- end }}
-      authorizationEndpoint: {{ .authorizationEndpoint | quote }}
-      tokenEndpoint: {{ .tokenEndpoint | quote }}
-      {{- with .scopes }}
-      scopes: {{ . | quote }}
-      {{- end }}
-      clientCredentialsSecretRef:
-        name: {{ .clientCredentialsSecretRef.name | quote }}
-        namespace: {{ .clientCredentialsSecretRef.namespace | default $.Release.Namespace | quote }}
-      grantScope: {{ .grantScope | quote }}
-    forwardIdentity: true
-    {{- with $.Values.muster.mcpServer.auth.requiredAudiences }}
-    requiredAudiences:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-  {{- end }}
-  {{- else if .Values.oauth.enabled }}
+  {{- if .Values.oauth.enabled }}
   auth:
     type: oauth
     forwardToken: {{ .Values.muster.mcpServer.auth.forwardToken }}

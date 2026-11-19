@@ -190,9 +190,9 @@ OTLP trace export env, rendered only with observability.otel.endpoint.
 
 {{/*
 "true" when commit mode fetches the person's GitHub grant per call through
-github.tokenExchange (tokenEndpoint set), empty for the App-pinned
-registration or with github off. Fails on a configuration the server or
-muster would refuse: the exchange needs github.enabled, Dex OAuth with
+github.tokenExchange (tokenEndpoint set), empty with github off. Fails on a
+configuration the server or muster would refuse: github.enabled needs the
+exchange, and the exchange needs github.enabled, Dex OAuth with
 downstream OAuth (the person's ID token is the subject token), muster
 forwarding that token (providerApps needs forwardToken), an audience and a
 client secret.
@@ -218,6 +218,8 @@ client secret.
 {{- "true" }}
 {{- else if or $exchange.audience $exchange.clientID $exchange.clientSecret $exchange.existingSecret $exchange.caSecretName }}
 {{- fail "github.tokenExchange.tokenEndpoint is required when any other github.tokenExchange value is set" }}
+{{- else if .Values.github.enabled }}
+{{- fail "github.enabled needs github.tokenExchange.tokenEndpoint: commit mode fetches the person's GitHub grant per commit from muster's broker (github.tokenExchange)" }}
 {{- end }}
 {{- end }}
 

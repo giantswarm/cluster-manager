@@ -72,7 +72,7 @@ type Info struct {
 	Version string `json:"version"`
 	// Modes are the write modes this server offers: apply lands objects on
 	// the installation as the caller; commit opens a pull request as the
-	// caller, offered when the server is registered with its GitHub App.
+	// caller, offered when the server fetches the person's GitHub grant.
 	Modes Modes    `json:"modes"`
 	Tools []string `json:"tools"`
 	// ClusterAPI says whether the installation serves the Cluster API the
