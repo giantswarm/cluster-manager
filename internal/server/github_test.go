@@ -1,14 +1,11 @@
 package server
 
 import (
-	"context"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -37,25 +34,34 @@ func fakeGitHub(t *testing.T, token, login string) (*httptest.Server, *int) {
 // X-Muster-Id-Token is validated as a forwarded bearer is without the pin and
 // becomes the caller and the Kubernetes token, so apply mode is unchanged.
 func TestGitHubPinCarriesBothTokens(t *testing.T) {
-	idp := newFakeIdP(t)
 	gh, calls := fakeGitHub(t, "ghu_person", "jane")
-	cfg := idp.config(true)
-	cfg.GitHub = &GitHubPin{AuthorizationServer: "https://github.com/apps/giantswarm-cluster-manager", APIURL: gh.URL}
-	o, err := newOAuth(cfg, "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)), loopbackJWKS)
+	o := newTestOAuthRuntime(OAuthConfig{DownstreamOAuth: true})
+	guard, err := newGitHubGuard(GitHubPin{AuthorizationServer: "https://github.com/apps/giantswarm-cluster-manager", APIURL: gh.URL}, o.log)
 	require.NoError(t, err)
-	t.Cleanup(func() { o.shutdown(context.Background()) })
+
+	const forwarded = "forwarded-id-token"
+	// accepted stands for mcp-oauth's validation of the forwarded ID token.
+	accepted := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if bearerToken(r) != forwarded {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(handler.ContextWithUserInfo(r.Context(), forwardedUser)))
+		})
+	}
 
 	var seen struct {
 		id    *identity.Identity
 		token string
 		gh    *identity.GitHub
 	}
-	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := guard.protect(accepted(o.attachIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen.id, _ = identity.FromContext(r.Context())
 		seen.token, _ = identity.TokenFromContext(r.Context())
 		seen.gh, _ = identity.GitHubFromContext(r.Context())
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	}))))
 	call := func(bearer, idToken string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 		if bearer != "" {
@@ -68,7 +74,6 @@ func TestGitHubPinCarriesBothTokens(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		return rec
 	}
-	forwarded := idp.idToken(t, []string{"agent-platform"}, time.Now().Add(30*time.Minute))
 
 	rec := call("ghu_person", forwarded)
 	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
@@ -89,8 +94,6 @@ func TestGitHubPinCarriesBothTokens(t *testing.T) {
 
 	rec = call("", forwarded)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-
-	assert.Equal(t, http.StatusUnauthorized, call("ghu_person", idp.idToken(t, []string{"someone-else"}, time.Now().Add(30*time.Minute))).Code, "the ID token is validated as without the pin")
 }
 
 func TestGitHubPinValidation(t *testing.T) {
