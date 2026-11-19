@@ -53,12 +53,24 @@ func sopsAge(t *testing.T) []byte {
 	return []byte("creation_rules:\n- path_regex: .*\\.enc\\.yaml\n  encrypted_regex: ^(data|stringData)$\n  age: " + id.Recipient().String() + "\n")
 }
 
+// personKey carries the person's grant in a test's context, where the
+// production grant fetch asks muster's broker.
+type personKey struct{}
+
+// withFake offers commit mode against fake, with the grant asPerson put on
+// the call's context (none: the person has not granted the App).
 func withFake(fake *commit.Fake) Option {
-	return WithGitHub(func(string) (GitHubRemote, error) { return fake, nil })
+	return func(s *Service) {
+		WithGitHub(func(string) (GitHubRemote, error) { return fake, nil })(s)
+		WithGitHubUser(func(ctx context.Context) (*identity.GitHub, error) {
+			gh, _ := ctx.Value(personKey{}).(*identity.GitHub)
+			return gh, nil
+		})(s)
+	}
 }
 
 func asPerson(ctx context.Context) context.Context {
-	return identity.ContextWithGitHub(ctx, &identity.GitHub{Login: "jane", Token: "the-persons-token"})
+	return context.WithValue(ctx, personKey{}, &identity.GitHub{Login: "jane", Token: "the-persons-token"})
 }
 
 func commitMode(in CreateNodePoolInput) CreateNodePoolInput {
@@ -167,8 +179,8 @@ func TestCreateNodePoolCommitAddsTheParentEntry(t *testing.T) {
 	assert.Contains(t, got, "- cluster-manager")
 }
 
-// TestCreateNodePoolCommitRefusals: commit mode needs the App-pinned
-// registration, the person's GitHub authorization, a cluster Flux owns, and
+// TestCreateNodePoolCommitRefusals: commit mode needs the GitHub grant
+// fetch, the person's GitHub authorization, a cluster Flux owns, and
 // age recipients for the credentials — each refused before anything lands.
 func TestCreateNodePoolCommitRefusals(t *testing.T) {
 	l, fake := commitLab(t, map[string][]byte{})

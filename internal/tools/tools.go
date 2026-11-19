@@ -151,10 +151,10 @@ type Service struct {
 	// (judgeIssuance).
 	zones detect.SOAQuerier
 	// remote builds the caller's GitHub remote for commit mode (nil: commit
-	// mode is not offered — the server is not pinned to its GitHub App).
+	// mode is not offered).
 	remote RemoteFor
-	// gitHubUser fetches the person's grant for commit mode (nil: the
-	// pinned registration's token).
+	// gitHubUser fetches the person's grant for commit mode (nil: commit
+	// mode refuses every call).
 	gitHubUser GitHubUser
 }
 

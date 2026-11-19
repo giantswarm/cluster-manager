@@ -31,11 +31,8 @@ func TestValidateGitHubExchange(t *testing.T) {
 		"without OAuth":            {func(o *serveOptions) { o.oauthEnabled = false }, "requires Dex OAuth and downstream OAuth"},
 		"without downstream OAuth": {func(o *serveOptions) { o.downstreamOAuth = false }, "requires Dex OAuth and downstream OAuth"},
 		"with Google":              {func(o *serveOptions) { o.oauthProvider = server.ProviderGoogle }, "requires Dex OAuth and downstream OAuth"},
-		"with the GitHub pin": {func(o *serveOptions) {
-			o.githubAuthorizationServer = "https://github.com/apps/giantswarm-cluster-manager"
-		}, "replaces the GitHub-pinned MCP registration"},
-		"plain HTTP endpoint": {func(o *serveOptions) { o.githubExchangeEndpoint = "http://muster.example/oauth/token" }, "HTTPS token endpoint"},
-		"without audience":    {func(o *serveOptions) { o.githubExchangeAudience = "" }, "an audience"},
+		"plain HTTP endpoint":      {func(o *serveOptions) { o.githubExchangeEndpoint = "http://muster.example/oauth/token" }, "HTTPS token endpoint"},
+		"without audience":         {func(o *serveOptions) { o.githubExchangeAudience = "" }, "an audience"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			options := exchange()

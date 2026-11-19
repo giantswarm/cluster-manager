@@ -1194,8 +1194,8 @@ func backendRefs(ns string, names []string) []objectRef {
 }
 
 // checkMode refuses a mode the tool or this server does not offer. Commit
-// mode needs the App-pinned registration (the GitHub token it opens the pull
-// request with) and exists for the node-pool writes.
+// mode needs the GitHub grant fetch (the token it opens the pull request
+// with) and exists for the node-pool writes.
 func (s *Service) checkMode(mode string, commits bool) error {
 	switch {
 	case mode == ModeApply:

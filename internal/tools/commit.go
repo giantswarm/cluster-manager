@@ -62,7 +62,7 @@ type GitHubRemote interface {
 type RemoteFor func(token string) (GitHubRemote, error)
 
 // WithGitHub offers commit mode: the pull request is opened as the person
-// with the GitHub token the App-pinned registration carries.
+// with the grant WithGitHubUser fetches for the call.
 func WithGitHub(remote RemoteFor) Option {
 	return func(s *Service) { s.remote = remote }
 }
@@ -70,8 +70,8 @@ func WithGitHub(remote RemoteFor) Option {
 // GitHubUser fetches the person's GitHub grant for one call.
 type GitHubUser func(context.Context) (*identity.GitHub, error)
 
-// WithGitHubUser fetches the person's grant on demand for commit mode, in
-// place of the token an App-pinned registration carries.
+// WithGitHubUser fetches the person's grant on demand for commit mode;
+// without it commit mode refuses every call.
 func WithGitHubUser(user GitHubUser) Option {
 	return func(s *Service) { s.gitHubUser = user }
 }
@@ -201,11 +201,13 @@ var errNoGitHub = &ErrRefused{Reason: "commit mode opens the pull request with y
 
 // authorizeCommit fetches the person's GitHub grant for a commit-mode call
 // before anything is read or written, and returns ctx carrying it; any other
-// mode, or the App-pinned registration whose bearer already is the grant,
-// returns ctx as is.
+// mode returns ctx as is.
 func (s *Service) authorizeCommit(ctx context.Context, mode string) (context.Context, error) {
-	if mode != ModeCommit || s.gitHubUser == nil {
+	if mode != ModeCommit {
 		return ctx, nil
+	}
+	if s.gitHubUser == nil {
+		return nil, errNoGitHub
 	}
 	gh, err := s.gitHubUser(ctx)
 	if err != nil {

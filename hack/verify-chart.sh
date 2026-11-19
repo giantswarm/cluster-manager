@@ -110,8 +110,8 @@ grep -q -- '^              ephemeral-storage: 128Mi$' <<<"$got" || fail "tmpVolu
 # ID token and lists the audience under providerApps; the server gets the
 # exchange flags and the whole client Secret (no items, so an absent client-id
 # key does not block the pod); an inline clientSecret renders the Secret,
-# existingSecret wins over it. github.enabled alone: the deprecated pin. The
-# template refuses tokenExchange without github.enabled, Dex with downstream
+# existingSecret wins over it. The template refuses github.enabled without
+# the exchange, tokenExchange without github.enabled, Dex with downstream
 # OAuth, muster's forwardToken, an audience muster accepts as a providerApps
 # name or a client secret, and any other tokenExchange value without its
 # tokenEndpoint.
@@ -142,16 +142,13 @@ for want in \
 done
 got=$(helm template t "$CHART" "${exchange[@]}" --set github.tokenExchange.clientSecret=inline --set github.tokenExchange.existingSecret=cm-github)
 if grep -qF -- 'kind: Secret' <<<"$got"; then fail "github.tokenExchange.existingSecret set: the chart renders a Secret"; fi
-got=$(helm template t "$CHART" "${dex[@]}" --set muster.mcpServer.enabled=true --set github.enabled=true)
-for want in '- --github-authorization-server=https://github.com/apps/giantswarm-cluster-manager' 'forwardIdentity: true'; do
-  grep -qF -- "$want" <<<"$got" || fail "the github pin renders no '$want'"
-done
-if grep -qF -- 'providerApps' <<<"$got"; then fail "the github pin renders providerApps"; fi
 while IFS='|' read -r args want; do
   # shellcheck disable=SC2086
   out=$(helm template t "$CHART" "${dex[@]}" $args 2>&1) && fail "rendered with $args, want refusal '$want'"
   grep -qF -- "$want" <<<"$out" || fail "$args: want refusal '$want', got: $out"
 done <<'REFUSALS'
+--set github.enabled=true|github.enabled needs github.tokenExchange.tokenEndpoint
+--set github.enabled=true --set muster.mcpServer.enabled=true|github.enabled needs github.tokenExchange.tokenEndpoint
 --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a --set github.tokenExchange.existingSecret=s|github.enabled is false
 --set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.existingSecret=s|github.tokenExchange.audience is required
 --set github.enabled=true --set github.tokenExchange.tokenEndpoint=https://m.example/t --set github.tokenExchange.audience=a|github.tokenExchange.existingSecret or github.tokenExchange.clientSecret
