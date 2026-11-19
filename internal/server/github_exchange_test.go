@@ -260,7 +260,7 @@ func TestGitHubExchangeRefusesIPLiteralEndpoint(t *testing.T) {
 	_, port, err := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "https://"))
 	require.NoError(t, err)
 	roots := x509.NewCertPool()
-	pemBytes, err := os.ReadFile(caFile)
+	pemBytes, err := os.ReadFile(filepath.Clean(caFile))
 	require.NoError(t, err)
 	require.True(t, roots.AppendCertsFromPEM(pemBytes))
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}
