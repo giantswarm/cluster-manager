@@ -60,7 +60,6 @@ type serveOptions struct {
 	ssoAllowPrivateIPs            bool
 	allowPublicClientRegistration bool
 	downstreamOAuth               bool
-	githubAuthorizationServer     string
 	githubAPIURL                  string
 	githubExchangeEndpoint        string
 	githubExchangeClient          string
@@ -118,8 +117,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (SSO_ALLOW_PRIVATE_IPS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("CLUSTER_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none). Needs --enable-oauth and an apiserver that trusts the IdP (CLUSTER_MANAGER_DOWNSTREAM_OAUTH)")
-	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's registration to (https://github.com/apps/giantswarm-cluster-manager): the bearer of every call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: the bearer is the forwarded IdP ID token and commit mode is not offered. Needs --enable-oauth (CLUSTER_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
-	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("CLUSTER_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (CLUSTER_MANAGER_GITHUB_API_URL)")
+	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("CLUSTER_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user on the fetched grant and commit mode's pull request (CLUSTER_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint (muster's broker) that releases the person's GitHub App user grant for commit mode, in place of the App-pinned registration (CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
 	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID; wins over --github-token-exchange-client-id-file (CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
 	f.StringVar(&o.githubExchangeClientFile, "github-token-exchange-client-id-file", envOr("CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE", ""), "Mounted confidential client ID file, read at startup when --github-token-exchange-client-id is empty (CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE)")
@@ -140,9 +138,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	warnDeprecatedOAuthOptions(o, log)
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
-	}
-	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
-		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
 	}
 	if err := validateGitHubExchange(o); err != nil {
 		return err
@@ -206,24 +201,20 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		tools.WithChartReader(&registry.Client{HTTP: &http.Client{Timeout: 20 * time.Second}}),
 		tools.WithSOAQuerier(zones),
 	}
-	if o.githubAuthorizationServer != "" || o.githubExchangeEndpoint != "" {
+	if o.githubExchangeEndpoint != "" {
 		// Commit mode: the pull request is opened as the person, with the
-		// App user token the pinned registration carries or the grant
-		// fetched for the call.
+		// grant fetched from muster's broker for the call.
 		apiURL := o.githubAPIURL
+		user, err := server.NewGitHubExchange(o.gitHubExchangeConfig(), log)
+		if err != nil {
+			return err
+		}
 		opts = append(opts, tools.WithGitHub(func(token string) (tools.GitHubRemote, error) {
 			if apiURL == server.DefaultGitHubAPIURL {
 				return commit.NewGitHub(token)
 			}
 			return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
-		}))
-	}
-	if o.githubExchangeEndpoint != "" {
-		user, err := server.NewGitHubExchange(o.gitHubExchangeConfig(), log)
-		if err != nil {
-			return err
-		}
-		opts = append(opts, tools.WithGitHubUser(user))
+		}), tools.WithGitHubUser(user))
 	}
 	svc := tools.New(clientsFor, targetsFor, toolsCfg, opts...)
 
@@ -243,15 +234,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			AllowPublicClientRegistration: o.allowPublicClientRegistration,
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
-		if o.githubAuthorizationServer != "" {
-			cfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
-		}
 	}
 	srv, err := server.New(cfg, api.NewMCPServer(svc, version), log)
 	if err != nil {
 		return err
 	}
-	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation, "commit", o.githubAuthorizationServer != "" || o.githubExchangeEndpoint != "")
+	log.Info("cluster-manager starting", "version", version, "listen", o.listen, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled, "oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "installation", o.installation, "commit", o.githubExchangeEndpoint != "")
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -322,8 +310,8 @@ func (o *serveOptions) gitHubExchangeConfig() server.GitHubExchangeConfig {
 	return server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL}
 }
 
-// validateGitHubExchange checks the token exchange options: they replace
-// the App-pinned registration and need the caller's IdP token.
+// validateGitHubExchange checks the token exchange options: the exchange's
+// subject is the caller's IdP token, so it needs Dex and downstream OAuth.
 func validateGitHubExchange(o *serveOptions) error {
 	if o.githubExchangeEndpoint == "" {
 		if o.githubExchangeClient != "" || o.githubExchangeClientFile != "" || o.githubExchangeSecretFile != "" || o.githubExchangeAudience != "" || o.githubExchangeCAFile != "" {
@@ -331,8 +319,8 @@ func validateGitHubExchange(o *serveOptions) error {
 		}
 		return nil
 	}
-	if !o.oauthEnabled || !o.downstreamOAuth || o.oauthProvider != server.ProviderDex || o.githubAuthorizationServer != "" {
-		return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
+	if !o.oauthEnabled || !o.downstreamOAuth || o.oauthProvider != server.ProviderDex {
+		return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
 	}
 	return o.gitHubExchangeConfig().Validate()
 }

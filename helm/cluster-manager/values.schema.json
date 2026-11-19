@@ -115,53 +115,9 @@
                     "type": "string",
                     "description": "GitHub's REST API, for `GET /user` and the pull request."
                 },
-                "authorizationServer": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "authorizationEndpoint": {
-                            "type": "string",
-                            "description": "Deprecated pin. GitHub's authorize endpoint (GitHub publishes no discovery document)."
-                        },
-                        "clientCredentialsSecretRef": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "Deprecated pin. Secret with the App's OAuth client under `client-id` and `client-secret`."
-                                },
-                                "namespace": {
-                                    "type": "string",
-                                    "description": "Deprecated pin. Namespace of that Secret; empty is the release namespace."
-                                }
-                            }
-                        },
-                        "expectedIssuer": {
-                            "type": "string",
-                            "description": "Deprecated pin. The issuer GitHub puts in the RFC 9207 `iss` parameter of its authorization response, `https://github.com/login/oauth` for every App. Empty omits the field."
-                        },
-                        "grantScope": {
-                            "type": "string",
-                            "description": "Deprecated pin. `subject`: the grant belongs to the person, not to one login session."
-                        },
-                        "issuer": {
-                            "type": "string",
-                            "description": "Deprecated: use `tokenExchange`. Pins the MCPServer to the GitHub App as its authorization server: muster runs the App's consent once per person and puts their user token on every call, which this server verifies with `GET /user` and opens the pull request with, and sets `forwardIdentity: true` so the person's IdP ID token arrives in `X-Muster-Id-Token` next to it, keeping apply mode on Kubernetes as the person. This value is the issuer identity the person's grant is filed under: the App's own, so the login App's GitHub grant stays separate. Also passed to the server, which names it in its refusals."
-                        },
-                        "scopes": {
-                            "type": "string",
-                            "description": "Deprecated pin. The OAuth `scope` parameter, only for an authorization server that needs one (a lab's stand-in); empty for GitHub, whose App permissions are the App's. Empty omits the field."
-                        },
-                        "tokenEndpoint": {
-                            "type": "string",
-                            "description": "Deprecated pin. GitHub's token endpoint."
-                        }
-                    }
-                },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Offer commit mode (`mode: commit` on `create_cluster`, `delete_cluster`, `create_node_pool` and `delete_node_pool`: the pull request opened as the person in the repository that owns the cluster). Needs `oauth.enabled`. With `tokenExchange.tokenEndpoint` set, muster keeps forwarding the person's ID token as the bearer (`muster.mcpServer.auth.forwardToken`) and the server fetches the person's GitHub App user token for each commit (RFC 8693); without it, the deprecated `authorizationServer` pin applies. Off: commit mode is refused."
+                    "description": "Offer commit mode (`mode: commit` on `create_cluster`, `delete_cluster`, `create_node_pool` and `delete_node_pool`: the pull request opened as the person in the repository that owns the cluster). Needs `oauth.enabled` and `tokenExchange.tokenEndpoint`: muster keeps forwarding the person's ID token as the bearer (`muster.mcpServer.auth.forwardToken`) and the server fetches the person's GitHub App user token for each commit (RFC 8693). Off: commit mode is refused."
                 },
                 "tokenExchange": {
                     "type": "object",
@@ -190,7 +146,7 @@
                         },
                         "tokenEndpoint": {
                             "type": "string",
-                            "description": "RFC 8693 token endpoint (muster's broker) that releases the person's GitHub App user token for a commit. Set: only a commit asks for GitHub, and one without the person's grant answers `grant_required` naming `audience`. Needs `github.enabled`, `oauth.enabled` with Dex, `oauth.downstream.enabled` and `muster.mcpServer.auth.forwardToken`. Empty: the deprecated `authorizationServer` pin."
+                            "description": "RFC 8693 token endpoint (muster's broker) that releases the person's GitHub App user token for a commit. Set: only a commit asks for GitHub, and one without the person's grant answers `grant_required` naming `audience`. Needs `github.enabled`, `oauth.enabled` with Dex, `oauth.downstream.enabled` and `muster.mcpServer.auth.forwardToken`; required with `github.enabled`."
                         }
                     }
                 }

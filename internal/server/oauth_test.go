@@ -327,12 +327,6 @@ func TestUntrustedAudienceIsRefused(t *testing.T) {
 	assert.NotContains(t, logs.String(), "refused")
 }
 
-// TestRefusalHeaderIsQuoted keeps a description inside the quoted-string of
-// the WWW-Authenticate challenge.
-func TestRefusalHeaderIsQuoted(t *testing.T) {
-	assert.Equal(t, `a\"b\\c d e`, headerQuoted("a\"b\\c\r\nd\ne"))
-}
-
 // TestServerGuardsMCPButNotProbes wires OAuth through the assembled server:
 // probes and the OAuth metadata stay open, the MCP endpoint demands a token.
 func TestServerGuardsMCPButNotProbes(t *testing.T) {
