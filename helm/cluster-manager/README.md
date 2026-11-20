@@ -1,5 +1,8 @@
 # cluster-manager
 
+CIMD is enabled by default. DCR is deprecated by MCP 2026-07-28 and remains a
+compatibility fallback; see the [OAuth registration guide](../../docs/oauth-client-registration.md).
+
 The Agent Platform's MCP-only cluster write surface — the installation's clusters and their GPU node pools, listed and written as the person, exposed to agents and the portal through muster
 
 The chart deploys one Deployment that serves the MCP streamable-HTTP endpoint
