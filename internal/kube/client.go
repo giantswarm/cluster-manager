@@ -8,12 +8,8 @@ package kube
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"log/slog"
 	"os"
-	"sync"
-	"time"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -21,36 +17,17 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	toolkitk8s "github.com/giantswarm/mcp-toolkit/k8s"
+
 	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
-// Clients bundles what the wiring layer and the kserve driver need.
-type Clients struct {
-	Dynamic   dynamic.Interface
-	Discovery discovery.DiscoveryInterface
-	// Clientset is the typed client (Jobs, Pods, Nodes, ConfigMaps, ...).
-	Clientset kubernetes.Interface
-
-	restCfg *rest.Config
-	log     *slog.Logger
-
-	mu     sync.Mutex
-	byUser map[[32]byte]*callerEntry
+// Factory selects explicitly configured application clients or caller clients.
+type Factory struct {
+	*toolkitk8s.Clients
+	users     *toolkitk8s.UserClients
+	userAgent string
 }
-
-// callerEntry caches the clients built for one caller token; entries are
-// evicted once the token has expired (the apiserver rejects it from then on).
-type callerEntry struct {
-	clients *Clients
-	expires time.Time
-	// expiredLogged: the expiry is logged once per token, not on every call
-	// a long job makes after the token ran out.
-	expiredLogged bool
-}
-
-// maxCallerClients bounds the per-token cache; entries expire with their token
-// anyway, this only guards against a flood of distinct tokens.
-const maxCallerClients = 256
 
 // Config selects how to reach the API server.
 type Config struct {
@@ -62,25 +39,16 @@ type Config struct {
 	// InCluster forces in-cluster auth. When false and no kubeconfig is
 	// found, in-cluster auth is still tried if the pod environment is present.
 	InCluster bool
-	// Logger for the caller-token fallbacks (nil: slog.Default()).
-	Logger *slog.Logger
 }
 
 // New builds the clients.
-func New(cfg Config) (*Clients, error) {
+func New(cfg Config) (*Factory, error) {
 	restCfg, err := restConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 	restCfg.UserAgent = "cluster-manager"
-	c, err := fromRESTConfig(restCfg)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.Logger != nil {
-		c.log = cfg.Logger
-	}
-	return c, nil
+	return fromRESTConfig(restCfg)
 }
 
 // One tool call is a burst of requests — create_node_pool reads some forty
@@ -94,7 +62,7 @@ const (
 	clientBurst = 200
 )
 
-func fromRESTConfig(restCfg *rest.Config) (*Clients, error) {
+func fromRESTConfig(restCfg *rest.Config) (*Factory, error) {
 	if restCfg.QPS == 0 {
 		restCfg.QPS = clientQPS
 	}
@@ -113,26 +81,11 @@ func fromRESTConfig(restCfg *rest.Config) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("clientset: %w", err)
 	}
-	return &Clients{Dynamic: dyn, Discovery: disc, Clientset: cs, restCfg: restCfg, log: slog.Default(), byUser: map[[32]byte]*callerEntry{}}, nil
-}
-
-// ForToken returns clients that authenticate to the API server with token (an
-// OIDC id_token the apiserver trusts) instead of the ServiceAccount. Server
-// address, CA and TLS settings are kept; every credential of the base config
-// is dropped so nothing but the caller's token is presented.
-func (c *Clients) ForToken(token string) (*Clients, error) {
-	if token == "" {
-		return nil, fmt.Errorf("caller token is empty")
-	}
-	cfg := rest.AnonymousClientConfig(c.restCfg)
-	cfg.BearerToken = token
-	cfg.UserAgent = c.restCfg.UserAgent
-	user, err := fromRESTConfig(cfg)
+	users, err := toolkitk8s.NewUserClients(restCfg, nil)
 	if err != nil {
 		return nil, err
 	}
-	user.log = c.log
-	return user, nil
+	return &Factory{Clients: &toolkitk8s.Clients{Dynamic: dyn, Discovery: disc, Clientset: cs}, users: users, userAgent: restCfg.UserAgent}, nil
 }
 
 // ForTarget returns clients for another cluster's apiserver — a workload
@@ -141,63 +94,31 @@ func (c *Clients) ForToken(token string) (*Clients, error) {
 // never used, so the caller's RBAC on the target governs (the target trusts
 // the installation's identity provider). Without a caller token there is no
 // identity to present and the target is not read.
-func (c *Clients) ForTarget(ctx context.Context, apiServer string, ca []byte) (*Clients, error) {
+func (c *Factory) ForTarget(ctx context.Context, apiServer string, ca []byte) (*toolkitk8s.Clients, error) {
 	token, ok := identity.TokenFromContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("no caller token: a workload cluster is read as the caller only")
 	}
-	cfg := &rest.Config{Host: apiServer, BearerToken: token, UserAgent: c.restCfg.UserAgent, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}
-	target, err := fromRESTConfig(cfg)
+	configuration := &rest.Config{Host: apiServer, UserAgent: c.userAgent, TLSClientConfig: rest.TLSClientConfig{CAData: ca}, QPS: clientQPS, Burst: clientBurst}
+	target, err := toolkitk8s.NewUserClients(configuration, nil)
 	if err != nil {
 		return nil, err
 	}
-	target.log = c.log
-	return target, nil
+	return target.ForToken(token)
 }
 
 // For selects caller clients when a token is present, including after expiry.
 // Calls without a token use the explicitly configured base clients.
-func (c *Clients) For(ctx context.Context) (*Clients, error) {
+func (c *Factory) For(ctx context.Context) (*toolkitk8s.Clients, error) {
 	token, ok := identity.TokenFromContext(ctx)
 	if !ok {
-		return c, nil
+		return c.Clients, nil
 	}
-	key := sha256.Sum256([]byte(token))
-	now := time.Now()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, cached := c.byUser[key]
-	if !cached {
-		if len(c.byUser) >= maxCallerClients {
-			c.evictLocked(now)
-		}
-		clients, err := c.ForToken(token)
-		if err != nil {
-			return nil, fmt.Errorf("caller-token Kubernetes clients: %w", err)
-		}
-		e = &callerEntry{clients: clients, expires: identity.TokenExpiry(token)}
-		c.byUser[key] = e
+	clients, err := c.users.ForToken(token)
+	if err != nil {
+		return nil, fmt.Errorf("caller-token Kubernetes clients: %w", err)
 	}
-	if !e.expires.IsZero() && now.After(e.expires) && !e.expiredLogged {
-		e.expiredLogged = true
-		c.log.Warn("caller token expired; the Kubernetes API will reject the remaining calls of this operation (the ServiceAccount holds no permissions)",
-			identity.LogAttr(ctx), "expired", e.expires.UTC().Format(time.RFC3339))
-	}
-	return e.clients, nil
-}
-
-// evictLocked drops expired entries, and when nothing expired the whole cache
-// (a token flood is not worth an LRU).
-func (c *Clients) evictLocked(now time.Time) {
-	for k, e := range c.byUser {
-		if !e.expires.IsZero() && now.After(e.expires) {
-			delete(c.byUser, k)
-		}
-	}
-	if len(c.byUser) >= maxCallerClients {
-		c.byUser = map[[32]byte]*callerEntry{}
-	}
+	return clients, nil
 }
 
 func restConfig(cfg Config) (*rest.Config, error) {

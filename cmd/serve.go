@@ -173,7 +173,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}
 	}()
 
-	clients, err := kube.New(kube.Config{Kubeconfig: o.kubeconfig, Context: o.kubeContext, InCluster: o.inCluster, Logger: log})
+	clients, err := kube.New(kube.Config{Kubeconfig: o.kubeconfig, Context: o.kubeContext, InCluster: o.inCluster})
 	if err != nil {
 		return fmt.Errorf("cluster-manager needs Kubernetes access: %w", err)
 	}
