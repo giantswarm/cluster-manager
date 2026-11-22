@@ -1,3 +1,6 @@
 # Developing on cluster-manager
 
-This is a great place to explain how to get started developing on this project.
+Run `go test ./...` and the repository's pre-commit checks before submitting changes.
+
+Caller-client construction failures stop the operation and never select ServiceAccount clients.
+Expired caller tokens remain on Kubernetes requests so the API server's rejection is returned.

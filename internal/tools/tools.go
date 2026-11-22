@@ -59,7 +59,7 @@ type Clients struct {
 
 // ClientsFor returns the clients a call uses: the caller's own when the
 // request carries the caller's forwarded token, else the ServiceAccount's.
-type ClientsFor func(ctx context.Context) Clients
+type ClientsFor func(ctx context.Context) (Clients, error)
 
 // Config is the installation-wide configuration of the tools.
 type Config struct {
@@ -259,7 +259,11 @@ type ClusterAPI struct {
 // RBAC on the clusters themselves. Never an error: a failed discovery is
 // the unknown state.
 func (s *Service) ClusterAPI(ctx context.Context) ClusterAPI {
-	return clusterAPI(s.clients(ctx).Discovery)
+	clients, err := s.clients(ctx)
+	if err != nil {
+		return ClusterAPI{Group: ClusterGVR.Group, Version: ClusterGVR.Version, State: ClusterAPIUnknown, Note: "caller Kubernetes clients unavailable"}
+	}
+	return clusterAPI(clients.Discovery)
 }
 
 func clusterAPI(disc discovery.DiscoveryInterface) ClusterAPI {

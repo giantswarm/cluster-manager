@@ -89,7 +89,7 @@ func buildServer(clusterAPI bool) *mcpserver.MCPServer {
 		tools.AppGVR: "AppList", tools.ConfigMapGVR: "ConfigMapList", compose.SecretGVR: "SecretList", compose.OCIRepositoryGVR: "OCIRepositoryList",
 		detect.NodesGVR: "NodeList", detect.DeploymentGVR: "DeploymentList", detect.ClusterPolicyGVR: "ClusterPolicyList", detect.LLMISVCGVR: "LLMInferenceServiceList", detect.LLMISVCConfigResource.WithVersion("v1alpha2"): "LLMInferenceServiceConfigList", detect.DaemonSetGVR: "DaemonSetList", detect.NodeClaimGVR: "NodeClaimList", detect.GatewayGVR: "GatewayList", detect.PersistentVolumeClaimGVR: "PersistentVolumeClaimList",
 	}, cluster("gazelle", "org-giantswarm"), cluster("wc1", "org-acme"))
-	svc := tools.New(func(context.Context) tools.Clients { return tools.Clients{Dynamic: dyn, Discovery: disc} }, nil, tools.Config{Installation: "gazelle"})
+	svc := tools.New(func(context.Context) (tools.Clients, error) { return tools.Clients{Dynamic: dyn, Discovery: disc}, nil }, nil, tools.Config{Installation: "gazelle"})
 	return NewMCPServer(svc, "test")
 }
 

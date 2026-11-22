@@ -84,7 +84,10 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Wr
 	if s.cfg.Installation != "" && in.Name == s.cfg.Installation {
 		return nil, &ErrRefused{Reason: fmt.Sprintf("cluster %s is the installation's own cluster (its management cluster): delete_cluster never removes it", in.Name)}
 	}
-	k := s.clients(ctx)
+	k, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err := requireClusterAPI(k.Discovery, ns+"/"+in.Name); err != nil {
 		return nil, err
 	}
