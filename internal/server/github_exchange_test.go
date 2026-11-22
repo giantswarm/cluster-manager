@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	oauthhandler "github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/stretchr/testify/require"
 
@@ -27,11 +29,7 @@ import (
 
 // JWTs with a placeholder signature: the server validated the bearer before
 // the exchange reads it.
-var (
-	personToken    = unsignedJWT(`{"sub":"alice"}`)
-	delegatedToken = unsignedJWT(`{"sub":"alice","act":{"sub":"agent"}}`)
-	opaqueToken    = "not-a-jwt"
-)
+var personToken = unsignedJWT(`{"sub":"alice"}`)
 
 func unsignedJWT(claims string) string {
 	encode := base64.RawURLEncoding.EncodeToString
@@ -39,7 +37,7 @@ func unsignedJWT(claims string) string {
 }
 
 func TestGitHubExchange(t *testing.T) {
-	for _, scenario := range []string{"success", "delegated actor", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses", "GitHub unavailable", "unparseable identity token"} {
+	for _, scenario := range []string{"success", "delegated actor", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses", "GitHub unavailable", "unvalidated identity token"} {
 		t.Run(scenario, func(t *testing.T) {
 			secretFile := filepath.Join(t.TempDir(), "client-secret")
 			require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
@@ -103,12 +101,14 @@ func TestGitHubExchange(t *testing.T) {
 			upstream, caFile := newLocalhostTLSServer(t, handler)
 			var logged bytes.Buffer
 			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", CAFile: caFile, APIURL: upstream.URL}
-			ctx := identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"})
+			user := &providers.UserInfo{ID: "alice", Issuer: "https://issuer.example.test", TokenSource: providers.TokenSourceSSO}
+			ctx := oauthhandler.ContextWithUserInfo(t.Context(), user)
 			switch scenario {
 			case "delegated actor":
-				ctx = identity.ContextWithToken(ctx, delegatedToken)
-			case "unparseable identity token":
-				ctx = identity.ContextWithToken(ctx, opaqueToken)
+				user.ActorIssuer, user.ActorSubject = "https://agents.example.test", "agent"
+				ctx = identity.ContextWithToken(ctx, personToken)
+			case "unvalidated identity token":
+				ctx = identity.ContextWithToken(t.Context(), personToken)
 			case "missing identity token":
 			default:
 				ctx = identity.ContextWithToken(ctx, personToken)
@@ -136,12 +136,12 @@ func TestGitHubExchange(t *testing.T) {
 				require.Equal(t, "manager-app", grant.App)
 			}
 			switch scenario {
-			case "missing identity token", "delegated actor", "unparseable identity token":
+			case "missing identity token", "delegated actor", "unvalidated identity token":
 				require.Zero(t, exchanges)
 				_, refused := errors.AsType[*tools.ErrRefused](err)
 				require.True(t, refused)
 			}
-			if scenario == "delegated actor" || scenario == "unparseable identity token" {
+			if scenario == "delegated actor" {
 				require.ErrorContains(t, err, "forbidden: commit mode opens the pull request as you, and only you, not an agent acting for you")
 			}
 			if scenario == "no grant" {
@@ -218,7 +218,7 @@ func TestGitHubExchangeTrustsOnlyItsCA(t *testing.T) {
 	upstream, _ := newLocalhostTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 	resolve, err := NewGitHubExchange(GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	ctx := identity.ContextWithToken(identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"}), personToken)
+	ctx := identity.ContextWithToken(oauthhandler.ContextWithUserInfo(t.Context(), &providers.UserInfo{ID: "alice", Issuer: "https://issuer.example.test"}), personToken)
 	_, err = resolve(ctx)
 	require.ErrorContains(t, err, "GitHub authorization service is unavailable")
 	_, isGrant := errors.AsType[*tools.ErrGrantRequired](err)
@@ -264,7 +264,7 @@ func TestGitHubExchangeRefusesIPLiteralEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, roots.AppendCertsFromPEM(pemBytes))
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}
-	ctx := identity.ContextWithToken(identity.ContextWith(t.Context(), &identity.Identity{Subject: "alice"}), personToken)
+	ctx := identity.ContextWithToken(oauthhandler.ContextWithUserInfo(t.Context(), &providers.UserInfo{ID: "alice", Issuer: "https://issuer.example.test"}), personToken)
 
 	for _, scenario := range []struct {
 		endpoint    string

@@ -8,7 +8,7 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/gitops-commit v0.11.10
-	github.com/giantswarm/mcp-oauth v1.15.1
+	github.com/giantswarm/mcp-oauth v1.17.0
 	github.com/giantswarm/mcp-toolkit v0.5.5
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/mark3labs/mcp-go v1.6.0
@@ -171,6 +171,7 @@ require (
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/valkey-io/valkey-go v1.0.80 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
