@@ -4,6 +4,8 @@ Run `go test ./...` and the repository's pre-commit checks before submitting cha
 
 Caller-client construction failures stop the operation and never select ServiceAccount clients.
 Expired caller tokens remain on Kubernetes requests so the API server's rejection is returned.
+Caller clients and their expiry-aware cache come from the independent `mcp-toolkit/k8s` module.
+Local cluster configuration and explicit application clients belong to cluster-manager.
 
 OAuth provider, storage and cleanup construction uses `mcp-oauth/oauthconfig` with
 resolved settings. Existing flags and environment precedence apply before setup.
