@@ -21,7 +21,7 @@ import (
 func serviceWithDiscovery(t *testing.T, disc discovery.DiscoveryInterface) *Service {
 	t.Helper()
 	dyn := newFake(t, "installation.yaml", ClusterGVR, MachinePoolGVR)
-	return New(func(context.Context) Clients { return Clients{Dynamic: dyn, Discovery: disc} }, nil, Config{Installation: "gazelle"})
+	return New(func(context.Context) (Clients, error) { return Clients{Dynamic: dyn, Discovery: disc}, nil }, nil, Config{Installation: "gazelle"})
 }
 
 func TestWithoutClusterAPI(t *testing.T) {

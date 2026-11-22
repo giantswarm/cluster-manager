@@ -57,7 +57,10 @@ func (s *Service) RemoveModelCache(ctx context.Context, in RemoveModelCacheInput
 	if err := s.checkMode(in.Mode, false); err != nil {
 		return nil, err
 	}
-	k := s.clients(ctx)
+	k, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
 	c, err := s.getCluster(ctx, k, in.Cluster, in.Namespace)
 	if err != nil {
 		return nil, err

@@ -283,7 +283,9 @@ func (l *lab) service(cfg Config, opts ...Option) *Service {
 		cfg.CertificateIssuer = compose.DefaultCertificateIssuer // and runs cert-manager with the fleet's ClusterIssuer
 	}
 	return New(
-		func(context.Context) Clients { return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)} },
+		func(context.Context) (Clients, error) {
+			return Clients{Dynamic: l.installation, Discovery: fakeDiscovery(true)}, nil
+		},
 		func(_ context.Context, apiServer string, _ []byte) (Clients, error) {
 			dyn, ok := l.targets[apiServer]
 			if !ok {

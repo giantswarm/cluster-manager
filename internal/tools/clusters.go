@@ -124,7 +124,10 @@ type ClusterList struct {
 // releases, sorted by namespace and name. On an installation without the
 // Cluster API the list is empty and ClusterAPI carries the note.
 func (s *Service) ListClusters(ctx context.Context) (*ClusterList, error) {
-	k := s.clients(ctx)
+	k, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
 	api := clusterAPI(k.Discovery)
 	switch api.State {
 	case ClusterAPIAbsent:

@@ -80,7 +80,11 @@ var releaseCRDAbsentNote = fmt.Sprintf("the Release CRD (%s) is not served on th
 // with the note saying why.
 func (s *Service) ListReleases(ctx context.Context, provider string) (*ReleasesResult, error) {
 	out := &ReleasesResult{Providers: compose.Providers(), Releases: []Release{}}
-	list, err := s.clients(ctx).Dynamic.Resource(ReleaseGVR).List(ctx, metav1.ListOptions{})
+	clients, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	list, err := clients.Dynamic.Resource(ReleaseGVR).List(ctx, metav1.ListOptions{})
 	if apierrors.IsNotFound(err) {
 		out.Note = releaseCRDAbsentNote
 		return out, nil
@@ -285,7 +289,10 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Wr
 	if err := spec.Validate(); err != nil {
 		return nil, &ErrRefused{Reason: err.Error()}
 	}
-	k := s.clients(ctx)
+	k, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err := requireClusterAPI(k.Discovery, spec.Name); err != nil {
 		return nil, err
 	}

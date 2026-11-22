@@ -103,7 +103,10 @@ type ReleaseRef struct {
 // (giantswarm/cluster-manager#34's pattern).
 func (s *Service) ListNodePools(ctx context.Context, cluster, namespace string) (*NodePools, error) {
 	defer timed(ctx, "list node pools", "cluster", cluster)()
-	k := s.clients(ctx)
+	k, err := s.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
 	c, err := s.getCluster(ctx, k, cluster, namespace)
 	if err != nil {
 		return nil, err
