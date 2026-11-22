@@ -24,7 +24,6 @@ import (
 	oauth "github.com/giantswarm/mcp-oauth"
 	"github.com/giantswarm/mcp-oauth/handler"
 	"github.com/giantswarm/mcp-oauth/providers"
-	"github.com/giantswarm/mcp-oauth/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -128,7 +127,7 @@ func TestOAuthConfigValidation(t *testing.T) {
 }
 
 func newTestOAuthRuntime(cfg OAuthConfig) *oauthRuntime {
-	return &oauthRuntime{cfg: cfg, store: memory.New(), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return &oauthRuntime{cfg: cfg, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
 // authenticated is a request mcp-oauth has validated: its user info is on the
@@ -154,31 +153,39 @@ var forwardedUser = &providers.UserInfo{
 // the platform client; the request carries the caller and, with downstream
 // OAuth, the caller's token.
 func TestAttachIdentityForwardedIDToken(t *testing.T) {
-	o := newTestOAuthRuntime(OAuthConfig{DownstreamOAuth: true})
+	identityProvider := newPrivateIdP(t, "")
+	configuration := identityProvider.config()
+	configuration.DownstreamOAuth = true
+	o, err := newOAuth(configuration, "/mcp", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { o.shutdown(context.WithoutCancel(t.Context())) })
+	forwardedToken := identityProvider.idToken(t, []string{"agent-platform"})
 	var seen struct {
 		id    *identity.Identity
 		token string
 		ok    bool
 	}
-	h := o.attachIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen.id, seen.ok = identity.FromContext(r.Context())
 		seen.token, _ = identity.TokenFromContext(r.Context())
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, authenticated("forwarded-id-token", forwardedUser))
+	request := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	request.Header.Set("Authorization", "bEaReR "+forwardedToken)
+	h.ServeHTTP(rec, request)
 	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
 	require.True(t, seen.ok, "the caller reaches the handler")
 	assert.Equal(t, "admin@lab.local", seen.id.Email)
 	assert.Equal(t, "sub-admin", seen.id.Subject)
 	assert.Equal(t, []string{"platform-admins"}, seen.id.Groups)
 	assert.Equal(t, identity.SourceSSO, seen.id.Source)
-	assert.Equal(t, "forwarded-id-token", seen.token, "downstream OAuth: the forwarded id_token is what the Kubernetes API will see")
+	assert.Equal(t, forwardedToken, seen.token, "downstream OAuth: the forwarded id_token is what the Kubernetes API will see")
 
 	seen.ok = false
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, authenticated("forwarded-id-token", nil))
+	h.ServeHTTP(rec, authenticated("untrusted-token", nil))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code, "no validated user, no caller")
 	assert.False(t, seen.ok)
 }
@@ -202,16 +209,17 @@ func TestAttachIdentityDownstreamOffKeepsTheServiceAccount(t *testing.T) {
 // issued, the provider's id_token stored next to it is what the Kubernetes API
 // sees; without one the request is refused.
 func TestAttachIdentityIssuedTokenNeedsStoredIDToken(t *testing.T) {
-	o := newTestOAuthRuntime(OAuthConfig{DownstreamOAuth: true})
-	o.server = &oauth.Server{Config: &oauth.ServerConfig{Issuer: "https://mm.example.com"}}
-	issued := &providers.UserInfo{ID: "sub-admin", Email: "admin@lab.local", TokenSource: providers.TokenSourceOAuth}
+	configuration := OAuthConfig{BaseURL: "https://manager.example.test", Provider: ProviderGoogle, GoogleClientID: "client", GoogleClientSecret: "test-secret", DownstreamOAuth: true}
+	o, err := newOAuth(configuration, "/mcp", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { o.shutdown(context.WithoutCancel(t.Context())) })
 	var token string
-	h := o.attachIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, _ = identity.TokenFromContext(r.Context())
 	}))
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, authenticated("issued-access-token", issued))
+	h.ServeHTTP(rec, authenticated("unknown-access-token", nil))
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Header().Get("WWW-Authenticate"), `error="invalid_token"`)
 	assert.Empty(t, token)
