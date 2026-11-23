@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/gitops-commit v0.11.10
 	github.com/giantswarm/mcp-oauth v1.17.0
-	github.com/giantswarm/mcp-toolkit v0.5.5
+	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.0
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/mark3labs/mcp-go v1.6.0
@@ -157,7 +157,7 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-github/v93 v93.0.0 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
