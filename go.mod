@@ -10,7 +10,7 @@ require (
 	github.com/giantswarm/gitops-commit v0.11.10
 	github.com/giantswarm/mcp-oauth v1.17.0
 	github.com/giantswarm/mcp-toolkit v0.7.0
-	github.com/giantswarm/mcp-toolkit/k8s v0.1.0
+	github.com/giantswarm/mcp-toolkit/k8s v0.1.1
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/mark3labs/mcp-go v1.6.0
 	github.com/mark3labs/mcp-go/otel v0.54.0
