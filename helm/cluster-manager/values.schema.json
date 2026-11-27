@@ -366,7 +366,7 @@
                         },
                         "issuer": {
                             "type": "string",
-                            "description": "Public base URL of this server, the issuer of its tokens and metadata (`OAUTH_ISSUER`; https, or http on loopback). Empty uses the deprecated `oauth.baseURL`, else `https://<fullname>.<global.domain>`."
+                            "description": "Public base URL of this server, the issuer of its tokens and metadata (`OAUTH_ISSUER`; https, or http on loopback). Empty uses the deprecated `oauth.baseURL`, else `https://<fullname>.<global.domain>`. Required also with this authorization server disabled: the library uses this public base URL for resource metadata; it does not advertise an active AS."
                         },
                         "storage": {
                             "type": "object",
@@ -552,7 +552,7 @@
                         },
                         "trustedIssuers": {
                             "type": "array",
-                            "description": "The issuers whose JWTs are accepted (`OAUTH_TRUSTED_ISSUERS`). A trust anchor: set it only from the release's own values or a GitOps-managed ConfigMap that only installation administrators write. Each entry: `issuer`, `jwksURI` and `audiences` (required), `subjectClaim` (`sub` or `email`), `acceptedTypHeaders`, `allowedClaims`, `allowPrivateIPJWKSHosts`, `openIDProvider` (true for the provider people sign in with, whose bearers are their ID tokens), and `certificateAuthority` with a `secretKeyRef` or `configMapKeyRef` (`name`, `key`). Empty trusts the provider people sign in with (`authorizationServer.upstream`) as `openIDProvider`: its ID tokens are accepted as bearer tokens, a deviation from MCP's audience rule until per-backend tokens (ID-JAG, giantswarm/giantswarm#39102). They are accepted for the client people sign in with (`authorizationServer.upstream.client.id`, or the deprecated `oauth.trustedAudiences`) and `muster.mcpServer.auth.requiredAudiences`, in that order and without duplicates.",
+                            "description": "The issuers whose JWTs are accepted (`OAUTH_TRUSTED_ISSUERS`). A trust anchor: set it only from the release's own values or a GitOps-managed ConfigMap that only installation administrators write. Each entry: `issuer`, `jwksURI` and `audiences` (required), `subjectClaim` (`sub` or `email`), `acceptedTypHeaders`, `allowedClaims`, `allowPrivateIPJWKSHosts`, `openIDProvider` (true for the provider whose accepted bearers are used as ID tokens), and `certificateAuthority` with a `secretKeyRef` or `configMapKeyRef` (`name`, `key`). Empty trusts the provider people sign in with (`authorizationServer.upstream`) as `openIDProvider`: its ID tokens are accepted as bearer tokens, a deviation from MCP's audience rule until per-backend tokens (ID-JAG, giantswarm/giantswarm#39102). They are accepted for `oauth.trustedAudiences`, else `global.identity.clientId`, else `authorizationServer.upstream.client.id`, together with `muster.mcpServer.auth.requiredAudiences`, in that order and without duplicates.",
                             "items": {
                                 "type": "object",
                                 "required": [

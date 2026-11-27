@@ -135,6 +135,9 @@ func creatorUsername(ctx context.Context, installation, values map[string]any) (
 	if user.Email == "" {
 		return "", fmt.Sprintf("your sign-in carries no email, the claim the cluster takes the username from, so you are not bound — add yourself through %s", valuesBindings)
 	}
+	if !user.EmailVerified {
+		return "", fmt.Sprintf("your sign-in does not verify your email, so you are not bound; verify it with your identity provider or add yourself through %s", valuesBindings)
+	}
 	prefix, _ := oidc["usernamePrefix"].(string)
 	if prefix == "-" { // the apiserver flag's "no prefix"
 		prefix = ""

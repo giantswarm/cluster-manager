@@ -15,6 +15,26 @@ set:
         certificateAuthority:
           secretKeyRef: {name: dex-ca, key: bundle.pem}
 tests:
+  - it: preserves the platform audience with a deprecated manager client ID
+    set:
+      oauth.authorizationServer.upstream.client.id: ""
+      oauth.dex.clientID: manager-client
+      global.identity.clientId: platform-client
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OAUTH_DEX_CLIENT_ID, value: manager-client}
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="OAUTH_TRUSTED_ISSUERS")].value
+          value: '[{"acceptedTypHeaders":["","JWT"],"allowPrivateIPJWKSHosts":["dex.example.test"],"audiences":["platform-client"],"caFile":"/etc/cluster-manager/idp-ca/bundle.pem","issuer":"https://dex.example.test","jwksURI":"https://dex.example.test/keys","openIDProvider":true}]'
+  - it: keeps explicit trusted audiences authoritative
+    set:
+      global.identity.clientId: platform-client
+      oauth.trustedAudiences: [explicit-client]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="OAUTH_TRUSTED_ISSUERS")].value
+          value: '[{"acceptedTypHeaders":["","JWT"],"allowPrivateIPJWKSHosts":["dex.example.test"],"audiences":["explicit-client"],"caFile":"/etc/cluster-manager/idp-ca/bundle.pem","issuer":"https://dex.example.test","jwksURI":"https://dex.example.test/keys","openIDProvider":true}]'
   - it: renders the upstream from the layout
     asserts:
       - contains:

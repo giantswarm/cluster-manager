@@ -156,15 +156,15 @@ oauth:
     # Each entry: `issuer`, `jwksURI` and `audiences` (required),
     # `subjectClaim` (`sub` or `email`), `acceptedTypHeaders`,
     # `allowedClaims`, `allowPrivateIPJWKSHosts`, `openIDProvider` (true for
-    # the provider people sign in with, whose bearers are their ID tokens),
+    # the provider whose accepted bearers are used as ID tokens),
     # and `certificateAuthority` with a `secretKeyRef` or `configMapKeyRef`
     # (`name`, `key`). Empty trusts the provider people sign in with
     # (`authorizationServer.upstream`) as `openIDProvider`: its ID tokens are
     # accepted as bearer tokens, a deviation from MCP's audience rule until
     # per-backend tokens (ID-JAG, giantswarm/giantswarm#39102). They are
-    # accepted for the client people sign in with
-    # (`authorizationServer.upstream.client.id`, or the deprecated
-    # `oauth.trustedAudiences`) and `muster.mcpServer.auth.requiredAudiences`,
+    # accepted for `oauth.trustedAudiences`, else `global.identity.clientId`,
+    # else `authorizationServer.upstream.client.id`, together with
+    # `muster.mcpServer.auth.requiredAudiences`,
     # in that order and without duplicates.
     trustedIssuers: []  # @schema item: object ; itemRequired: [issuer, jwksURI, audiences] ; itemProperties: {issuer: {type: string}, jwksURI: {type: string}, audiences: {type: array, minItems: 1, items: {type: string}}, subjectClaim: {type: string, enum: ['', sub, email]}, acceptedTypHeaders: {type: array, items: {type: string}}, allowedClaims: {type: object, additionalProperties: {type: string}}, allowPrivateIPJWKSHosts: {type: array, items: {type: string}}, openIDProvider: {type: boolean}, certificateAuthority: {type: object, additionalProperties: false, properties: {secretKeyRef: {type: object, additionalProperties: false, required: [name, key], properties: {name: {type: string}, key: {type: string}}}, configMapKeyRef: {type: object, additionalProperties: false, required: [name, key], properties: {name: {type: string}, key: {type: string}}}}}}
     # -- Accept only tokens whose audience names this server's resource
@@ -179,7 +179,9 @@ oauth:
     enabled: true
     # -- Public base URL of this server, the issuer of its tokens and metadata
     # (`OAUTH_ISSUER`; https, or http on loopback). Empty uses the deprecated
-    # `oauth.baseURL`, else `https://<fullname>.<global.domain>`.
+    # `oauth.baseURL`, else `https://<fullname>.<global.domain>`. Required also
+    # with this authorization server disabled: the library uses this public
+    # base URL for resource metadata; it does not advertise an active AS.
     issuer: ""
     upstream:
       # -- The OpenID Provider people sign in with: `dex` or `google`

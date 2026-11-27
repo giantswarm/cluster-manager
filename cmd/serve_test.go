@@ -19,6 +19,7 @@ import (
 )
 
 func TestValidateGitHubExchange(t *testing.T) {
+	dexSettings := oauthconfig.Settings{Dex: &dex.Config{IssuerURL: "https://dex.example.test"}}
 	exchange := func() *serveOptions {
 		return &serveOptions{ // #nosec G101 -- configuration fixture with a path, no secret value
 			oauthEnabled: true, downstreamOAuth: true,
@@ -27,24 +28,28 @@ func TestValidateGitHubExchange(t *testing.T) {
 			githubAPIURL: server.DefaultGitHubAPIURL,
 		}
 	}
-	require.NoError(t, validateGitHubExchange(&serveOptions{}, true), "no exchange configured")
-	require.NoError(t, validateGitHubExchange(exchange(), true))
-	require.ErrorContains(t, validateGitHubExchange(exchange(), false), "requires Dex OAuth and downstream OAuth", "the subject token must be a Dex token")
+	require.NoError(t, validateGitHubExchange(&serveOptions{}, dexSettings), "no exchange configured")
+	require.NoError(t, validateGitHubExchange(exchange(), dexSettings))
+	resourceOnly := oauthconfig.Settings{TrustedIssuers: []oauthserver.TrustedIssuer{{Issuer: "https://dex.example.test", OpenIDProvider: true}}}
+	require.NoError(t, validateGitHubExchange(exchange(), resourceOnly))
+	resourceOnly.TrustedIssuers = append(resourceOnly.TrustedIssuers, oauthserver.TrustedIssuer{Issuer: "https://other.example.test", OpenIDProvider: true})
+	require.ErrorContains(t, validateGitHubExchange(exchange(), resourceOnly), "exactly one openIDProvider")
+	require.ErrorContains(t, validateGitHubExchange(exchange(), oauthconfig.Settings{}), "requires OAuth, downstream OAuth and an OpenID Provider", "the subject token must be a Dex token")
 
 	for name, scenario := range map[string]struct {
 		change func(*serveOptions)
 		want   string
 	}{
 		"option without endpoint":  {func(o *serveOptions) { o.githubExchangeEndpoint = "" }, "require --github-token-exchange-endpoint"},
-		"without OAuth":            {func(o *serveOptions) { o.oauthEnabled = false }, "requires Dex OAuth and downstream OAuth"},
-		"without downstream OAuth": {func(o *serveOptions) { o.downstreamOAuth = false }, "requires Dex OAuth and downstream OAuth"},
+		"without OAuth":            {func(o *serveOptions) { o.oauthEnabled = false }, "requires OAuth, downstream OAuth and an OpenID Provider"},
+		"without downstream OAuth": {func(o *serveOptions) { o.downstreamOAuth = false }, "requires OAuth, downstream OAuth and an OpenID Provider"},
 		"plain HTTP endpoint":      {func(o *serveOptions) { o.githubExchangeEndpoint = "http://muster.example/oauth/token" }, "HTTPS token endpoint"},
 		"without audience":         {func(o *serveOptions) { o.githubExchangeAudience = "" }, "an audience"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			options := exchange()
 			scenario.change(options)
-			require.ErrorContains(t, validateGitHubExchange(options, true), scenario.want)
+			require.ErrorContains(t, validateGitHubExchange(options, dexSettings), scenario.want)
 		})
 	}
 }
@@ -93,6 +98,14 @@ func TestClusterOIDC(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want("https://idp.example.com"), got, "without Dex settings: the trusted issuer marked openIDProvider, with its caFile")
 	require.Empty(t, output.String())
+
+	for _, issuers := range [][]oauthserver.TrustedIssuer{
+		{{Issuer: "https://one.example.test", OpenIDProvider: true}, {Issuer: "https://two.example.test", OpenIDProvider: true}},
+		{{Issuer: "https://two.example.test", OpenIDProvider: true}, {Issuer: "https://one.example.test", OpenIDProvider: true}},
+	} {
+		_, err := options.clusterOIDC(oauthconfig.Settings{TrustedIssuers: issuers}, log)
+		require.ErrorContains(t, err, "exactly one openIDProvider")
+	}
 
 	got, err = options.clusterOIDC(oauthconfig.Settings{TrustedIssuers: openIDProvider[:1]}, log)
 	require.NoError(t, err)

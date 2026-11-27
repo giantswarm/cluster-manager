@@ -282,7 +282,7 @@ func TestCreateClusterBindsTheCreatorAndTheOrgAdmins(t *testing.T) {
 	oidc := &compose.ClusterOIDC{IssuerURL: "https://dex.gazelle.example", ClientID: "dex-k8s-authenticator", UsernameClaim: "email", GroupsClaim: "groups"}
 	l := newLab(t, "releases.yaml")
 	svc := l.service(Config{Installation: "gazelle", ClusterOIDC: oidc}, WithChartReader(releaseCharts(t)))
-	ctx := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example", TokenSource: providers.TokenSourceSSO})
+	ctx := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example", EmailVerified: true, TokenSource: providers.TokenSourceSSO})
 	in := dev01()
 	in.DryRun = true
 	got, err := svc.CreateCluster(ctx, in)
@@ -323,7 +323,7 @@ func TestCreateClusterBindsTheCreatorAndTheOrgAdmins(t *testing.T) {
 // cluster's usernamePrefix (the apiserver flag's "-" for none), the
 // installation's OIDC settings under the cluster's.
 func TestCreatorUsername(t *testing.T) {
-	ctx := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example"})
+	ctx := handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example", EmailVerified: true})
 	oidc := func(block map[string]any) map[string]any {
 		return map[string]any{"global": map[string]any{"controlPlane": map[string]any{"oidc": block}}}
 	}
@@ -349,6 +349,10 @@ func TestCreatorUsername(t *testing.T) {
 	got, note := creatorUsername(handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "CgVqYW5l"}), nil, oidc(map[string]any{"usernameClaim": "email"}))
 	assert.Empty(t, got)
 	assert.Contains(t, note, "your sign-in carries no email")
+	unverified := handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example"})
+	got, note = creatorUsername(unverified, nil, oidc(map[string]any{"usernameClaim": "email"}))
+	assert.Empty(t, got)
+	assert.Contains(t, note, "does not verify your email")
 }
 
 // TestCreateClusterRBACOverrides: the caller's own bindings win whole —
@@ -410,7 +414,7 @@ func TestCreateClusterRBACNotes(t *testing.T) {
 	assert.Empty(t, got.RBAC.Users)
 	assert.Contains(t, got.RBAC.Note, "without a signed-in person")
 
-	ctx := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example"})
+	ctx := handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{ID: "CgVqYW5l", Email: "jane@acme.example", EmailVerified: true})
 	got, err = plain.CreateCluster(ctx, in)
 	require.NoError(t, err)
 	assert.Empty(t, got.RBAC.Users)

@@ -153,7 +153,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			return fmt.Errorf("oauth: %w", err)
 		}
 	}
-	if err := validateGitHubExchange(o, oauthSettings.Dex != nil); err != nil {
+	if err := validateGitHubExchange(o, oauthSettings); err != nil {
 		return err
 	}
 
@@ -292,12 +292,19 @@ func (o *serveOptions) clusterOIDC(settings oauthconfig.Settings, log *slog.Logg
 		return nil, nil
 	}
 	var issuer, caFile string
-	switch provider, ok := openIDProvider(settings.TrustedIssuers); {
+	switch {
 	case settings.Dex != nil && settings.Dex.IssuerURL != "":
 		issuer, caFile = settings.Dex.IssuerURL, os.Getenv("OAUTH_DEX_CA_FILE")
-	case ok:
+	case settings.Google == nil:
+		provider, present, err := singleOpenIDProvider(settings.TrustedIssuers)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			log.Warn("created clusters trust no identity provider: configure a Dex provider or one trusted issuer marked openIDProvider")
+			return nil, nil
+		}
 		issuer = provider.Issuer
-		var err error
 		if caFile, err = trustedIssuerCAFile(os.Getenv("OAUTH_TRUSTED_ISSUERS"), issuer); err != nil {
 			return nil, err
 		}
@@ -316,14 +323,18 @@ func (o *serveOptions) clusterOIDC(settings oauthconfig.Settings, log *slog.Logg
 	return out, nil
 }
 
-// openIDProvider is the trusted issuer people sign in with, if one is marked.
-func openIDProvider(issuers []oauthserver.TrustedIssuer) (oauthserver.TrustedIssuer, bool) {
+func singleOpenIDProvider(issuers []oauthserver.TrustedIssuer) (oauthserver.TrustedIssuer, bool, error) {
+	var provider oauthserver.TrustedIssuer
+	present := false
 	for _, issuer := range issuers {
 		if issuer.OpenIDProvider {
-			return issuer, true
+			if present {
+				return oauthserver.TrustedIssuer{}, false, errors.New("OAUTH_TRUSTED_ISSUERS must mark exactly one openIDProvider to select the identity provider")
+			}
+			provider, present = issuer, true
 		}
 	}
-	return oauthserver.TrustedIssuer{}, false
+	return provider, present, nil
 }
 
 // trustedIssuerCAFile is the caFile of the OAUTH_TRUSTED_ISSUERS entry for
@@ -352,17 +363,24 @@ func (o *serveOptions) gitHubExchangeConfig() server.GitHubExchangeConfig {
 	return server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL}
 }
 
-// validateGitHubExchange checks the token exchange options: the exchange's
-// subject is the caller's ID token, so it needs Dex and downstream OAuth.
-func validateGitHubExchange(o *serveOptions, dex bool) error {
+// The exchange uses the caller's provider ID token and downstream authorization.
+func validateGitHubExchange(o *serveOptions, settings oauthconfig.Settings) error {
 	if o.githubExchangeEndpoint == "" {
 		if o.githubExchangeClient != "" || o.githubExchangeClientFile != "" || o.githubExchangeSecretFile != "" || o.githubExchangeAudience != "" || o.githubExchangeCAFile != "" {
 			return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
 		}
 		return nil
 	}
-	if !o.oauthEnabled || !o.downstreamOAuth || !dex {
-		return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
+	hasProvider := settings.Dex != nil && settings.Dex.IssuerURL != ""
+	if !hasProvider && settings.Google == nil {
+		_, present, err := singleOpenIDProvider(settings.TrustedIssuers)
+		if err != nil {
+			return err
+		}
+		hasProvider = present
+	}
+	if !o.oauthEnabled || !o.downstreamOAuth || !hasProvider {
+		return errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
 	}
 	return o.gitHubExchangeConfig().Validate()
 }
