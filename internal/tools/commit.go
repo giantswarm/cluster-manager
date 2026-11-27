@@ -16,8 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	sigsyaml "sigs.k8s.io/yaml"
-
-	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
 // The Flux objects commit mode follows from a cluster to the repository that
@@ -67,8 +65,18 @@ func WithGitHub(remote RemoteFor) Option {
 	return func(s *Service) { s.remote = remote }
 }
 
-// GitHubUser fetches the person's GitHub grant for one call.
-type GitHubUser func(context.Context) (*identity.GitHub, error)
+// GitHubUserAccessToken is the person's GitHub App user access token for one
+// call, obtained through muster's broker, with the login GET /user answered
+// for it. Commit mode opens the pull request with that token.
+type GitHubUserAccessToken struct {
+	Login string
+	Token string
+}
+
+// GitHubUser fetches the person's GitHub App user access token for one call.
+type GitHubUser func(context.Context) (*GitHubUserAccessToken, error)
+
+type gitHubKey struct{}
 
 // WithGitHubUser fetches the person's grant on demand for commit mode;
 // without it commit mode refuses every call.
@@ -216,14 +224,14 @@ func (s *Service) authorizeCommit(ctx context.Context, mode string) (context.Con
 	if gh == nil || gh.Token == "" {
 		return nil, errNoGitHub
 	}
-	return identity.ContextWithGitHub(ctx, gh), nil
+	return context.WithValue(ctx, gitHubKey{}, gh), nil
 }
 
 // gitHubFor is the caller's GitHub remote, or the refusal naming the
 // consent that gives one.
-func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
-	gh, ok := identity.GitHubFromContext(ctx)
-	if !ok {
+func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *GitHubUserAccessToken, error) {
+	gh, ok := ctx.Value(gitHubKey{}).(*GitHubUserAccessToken)
+	if !ok || gh == nil {
 		return nil, nil, errNoGitHub
 	}
 	remote, err := s.remote(gh.Token)
@@ -319,7 +327,7 @@ func (p *commitPlan) actions() []CommitFile {
 
 // open lands the plan as one pull request as the caller, or reports it on a
 // dry run. Nothing to change opens none.
-func (p *commitPlan) open(ctx context.Context, gh *identity.GitHub, branch, title, body string, dryRun bool) (*CommitResult, error) {
+func (p *commitPlan) open(ctx context.Context, gh *GitHubUserAccessToken, branch, title, body string, dryRun bool) (*CommitResult, error) {
 	out := &CommitResult{
 		Repository: p.target.Repository, Base: p.target.Branch, Directory: p.target.Path,
 		Kustomization: p.target.Kustomization, Prune: p.target.Prune, Branch: branch, Files: p.actions(), Author: gh.Login,

@@ -14,8 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
-
-	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
 var fleet = commit.Repository{Owner: "acme", Name: "workload-clusters-fleet"}
@@ -62,15 +60,15 @@ type personKey struct{}
 func withFake(fake *commit.Fake) Option {
 	return func(s *Service) {
 		WithGitHub(func(string) (GitHubRemote, error) { return fake, nil })(s)
-		WithGitHubUser(func(ctx context.Context) (*identity.GitHub, error) {
-			gh, _ := ctx.Value(personKey{}).(*identity.GitHub)
+		WithGitHubUser(func(ctx context.Context) (*GitHubUserAccessToken, error) {
+			gh, _ := ctx.Value(personKey{}).(*GitHubUserAccessToken)
 			return gh, nil
 		})(s)
 	}
 }
 
 func asPerson(ctx context.Context) context.Context {
-	return context.WithValue(ctx, personKey{}, &identity.GitHub{Login: "jane", Token: "the-persons-token"})
+	return context.WithValue(ctx, personKey{}, &GitHubUserAccessToken{Login: "jane", Token: "the-persons-token"})
 }
 
 func commitMode(in CreateNodePoolInput) CreateNodePoolInput {
@@ -219,11 +217,11 @@ func TestCreateNodePoolCommitRefusals(t *testing.T) {
 func TestCommitAsksForTheGrant(t *testing.T) {
 	l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
 	granted := false
-	user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+	user := WithGitHubUser(func(context.Context) (*GitHubUserAccessToken, error) {
 		if !granted {
 			return nil, &ErrGrantRequired{App: "github", Reason: "grant it"}
 		}
-		return &identity.GitHub{Login: "jane", Token: "the-persons-grant"}, nil
+		return &GitHubUserAccessToken{Login: "jane", Token: "the-persons-grant"}, nil
 	})
 	svc := l.service(Config{Installation: "gazelle"}, withFake(fake), user)
 	in := commitMode(l4("wc1", "gpu-l4", false))
@@ -265,7 +263,7 @@ func TestCommitFetchesTheGrantFirst(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
 			fetches := 0
-			user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+			user := WithGitHubUser(func(context.Context) (*GitHubUserAccessToken, error) {
 				fetches++
 				return nil, &ErrGrantRequired{App: "github", Reason: "grant it"}
 			})
@@ -289,7 +287,7 @@ func TestCommitFetchesTheGrantFirst(t *testing.T) {
 // TestApplyNeverFetchesTheGrant: mode apply needs no GitHub grant.
 func TestApplyNeverFetchesTheGrant(t *testing.T) {
 	l, fake := commitLab(t, map[string][]byte{".sops.yaml": sopsAge(t)})
-	user := WithGitHubUser(func(context.Context) (*identity.GitHub, error) {
+	user := WithGitHubUser(func(context.Context) (*GitHubUserAccessToken, error) {
 		t.Fatal("mode apply fetched the GitHub grant")
 		return nil, nil
 	})

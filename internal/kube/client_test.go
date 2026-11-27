@@ -17,7 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
-	"github.com/giantswarm/cluster-manager/internal/identity"
+	"github.com/giantswarm/cluster-manager/internal/idtoken"
 )
 
 func TestForSelectsExplicitClientsOrCaller(t *testing.T) {
@@ -26,14 +26,14 @@ func TestForSelectsExplicitClientsOrCaller(t *testing.T) {
 	application, err := clients.For(t.Context())
 	require.NoError(t, err)
 	require.Same(t, clients.Clients, application)
-	callerContext := identity.ContextWithToken(t.Context(), jwt(t, time.Now().Add(time.Hour)))
+	callerContext := idtoken.ContextWith(t.Context(), jwt(t, time.Now().Add(time.Hour)))
 	caller, err := clients.For(callerContext)
 	require.NoError(t, err)
 	require.NotSame(t, application, caller)
 	cached, err := clients.For(callerContext)
 	require.NoError(t, err)
 	require.Same(t, caller, cached)
-	expiredContext := identity.ContextWithToken(t.Context(), jwt(t, time.Now().Add(-time.Minute)))
+	expiredContext := idtoken.ContextWith(t.Context(), jwt(t, time.Now().Add(-time.Minute)))
 	expired, err := clients.For(expiredContext)
 	require.NoError(t, err)
 	require.NotSame(t, application, expired)
@@ -55,7 +55,7 @@ func TestForConstructionFailureSendsNoServiceAccountRequest(t *testing.T) {
 	clients, err := fromRESTConfig(&rest.Config{Host: api.URL, BearerToken: "application-token", TLSClientConfig: rest.TLSClientConfig{CAFile: caFile}})
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(caFile))
-	caller, err := clients.For(identity.ContextWithToken(t.Context(), "caller-token"))
+	caller, err := clients.For(idtoken.ContextWith(t.Context(), "caller-token"))
 	require.ErrorContains(t, err, "caller-token Kubernetes clients")
 	require.Nil(t, caller)
 	require.Zero(t, requests.Load())
@@ -73,7 +73,7 @@ func TestForExpiredTokenReachesAPIAsCaller(t *testing.T) {
 	t.Cleanup(api.Close)
 	clients, err := fromRESTConfig(&rest.Config{Host: api.URL, BearerToken: "application-token"})
 	require.NoError(t, err)
-	caller, err := clients.For(identity.ContextWithToken(t.Context(), token))
+	caller, err := clients.For(idtoken.ContextWith(t.Context(), token))
 	require.NoError(t, err)
 	_, err = caller.Clientset.CoreV1().ConfigMaps("default").List(t.Context(), metav1.ListOptions{})
 	require.True(t, apierrors.IsUnauthorized(err), "%v", err)

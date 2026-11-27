@@ -18,7 +18,7 @@ import (
 	"github.com/giantswarm/mcp-oauth/oauthconfig"
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 
-	"github.com/giantswarm/cluster-manager/internal/identity"
+	"github.com/giantswarm/cluster-manager/internal/idtoken"
 	"github.com/giantswarm/cluster-manager/internal/tools"
 )
 
@@ -104,9 +104,9 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client, 
 	grantRequired := func(reason string) error {
 		return &tools.ErrGrantRequired{App: configuration.Audience, Reason: fmt.Sprintf(reason, configuration.Audience, configuration.Audience)}
 	}
-	return func(ctx context.Context) (*identity.GitHub, error) {
+	return func(ctx context.Context) (*tools.GitHubUserAccessToken, error) {
 		validatedUser, ok := handler.UserInfoFromContext(ctx)
-		subjectToken, hasToken := identity.TokenFromContext(ctx)
+		subjectToken, hasToken := idtoken.FromContext(ctx)
 		if !ok || validatedUser == nil || validatedUser.Issuer == "" || validatedUser.ID == "" || !hasToken || subjectToken == "" {
 			return nil, &tools.ErrRefused{Reason: "commit mode needs your verified platform identity to fetch your GitHub authorization"}
 		}
@@ -169,7 +169,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client, 
 		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&user) != nil || user.Login == "" {
 			return nil, fmt.Errorf("GitHub user verification is unavailable (status %d)", response.StatusCode)
 		}
-		return &identity.GitHub{Login: user.Login, Token: result.AccessToken}, nil
+		return &tools.GitHubUserAccessToken{Login: user.Login, Token: result.AccessToken}, nil
 	}
 }
 

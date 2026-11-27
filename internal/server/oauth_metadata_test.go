@@ -12,7 +12,7 @@ import (
 )
 
 func TestResourceSpecificOAuthChallenge(t *testing.T) {
-	runtime, err := newOAuth(OAuthConfig{BaseURL: "https://manager.example.test", Provider: ProviderGoogle, GoogleClientID: "client", GoogleClientSecret: "test-secret"}, "/mcp", slog.New(slog.DiscardHandler))
+	runtime, err := newOAuth(OAuthConfig{Settings: googleSettings(t)}, "/mcp", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { runtime.shutdown(context.WithoutCancel(t.Context())) })
 	mux := http.NewServeMux()
