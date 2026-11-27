@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
-	"github.com/giantswarm/cluster-manager/internal/identity"
 )
 
 // poolCommit is a node-pool write in commit mode: the releases go into the
@@ -23,7 +22,7 @@ import (
 type poolCommit struct {
 	loc    commitLocation
 	remote GitHubRemote
-	gh     *identity.GitHub
+	gh     *GitHubUserAccessToken
 }
 
 // newPoolCommit resolves the cluster's repository and the caller's GitHub

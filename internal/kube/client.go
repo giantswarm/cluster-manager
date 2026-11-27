@@ -19,7 +19,7 @@ import (
 
 	toolkitk8s "github.com/giantswarm/mcp-toolkit/k8s"
 
-	"github.com/giantswarm/cluster-manager/internal/identity"
+	"github.com/giantswarm/cluster-manager/internal/idtoken"
 )
 
 // Factory selects explicitly configured application clients or caller clients.
@@ -95,7 +95,7 @@ func fromRESTConfig(restCfg *rest.Config) (*Factory, error) {
 // the installation's identity provider). Without a caller token there is no
 // identity to present and the target is not read.
 func (c *Factory) ForTarget(ctx context.Context, apiServer string, ca []byte) (*toolkitk8s.Clients, error) {
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("no caller token: a workload cluster is read as the caller only")
 	}
@@ -110,7 +110,7 @@ func (c *Factory) ForTarget(ctx context.Context, apiServer string, ca []byte) (*
 // For selects caller clients when a token is present, including after expiry.
 // Calls without a token use the explicitly configured base clients.
 func (c *Factory) For(ctx context.Context) (*toolkitk8s.Clients, error) {
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return c.Clients, nil
 	}

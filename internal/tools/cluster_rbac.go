@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/giantswarm/mcp-oauth/handler"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/cluster-manager/internal/compose"
-	"github.com/giantswarm/cluster-manager/internal/identity"
 	"github.com/giantswarm/cluster-manager/internal/registry"
 )
 
@@ -118,8 +118,8 @@ func orgAdmins(ctx context.Context, dyn dynamic.Interface, ns string) (compose.C
 // takes the username from the email claim — the claim cluster-manager
 // composes. Otherwise empty, with the note saying why.
 func creatorUsername(ctx context.Context, installation, values map[string]any) (string, string) {
-	id, ok := identity.FromContext(ctx)
-	if !ok {
+	user, ok := handler.UserInfoFromContext(ctx)
+	if !ok || user == nil {
 		return "", "this call runs without a signed-in person, so no creator is bound"
 	}
 	oidc := map[string]any{}
@@ -132,14 +132,14 @@ func creatorUsername(ctx context.Context, installation, values map[string]any) (
 	if claim != "email" {
 		return "", fmt.Sprintf("the cluster takes the username from the %q claim, not the email, so you are not bound — add yourself through %s", orDefault(claim, "sub"), valuesBindings)
 	}
-	if id.Email == "" {
+	if user.Email == "" {
 		return "", fmt.Sprintf("your sign-in carries no email, the claim the cluster takes the username from, so you are not bound — add yourself through %s", valuesBindings)
 	}
 	prefix, _ := oidc["usernamePrefix"].(string)
 	if prefix == "-" { // the apiserver flag's "no prefix"
 		prefix = ""
 	}
-	return prefix + id.Email, ""
+	return prefix + user.Email, ""
 }
 
 func unique(ss []string) []string {
