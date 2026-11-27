@@ -117,10 +117,19 @@ HelmRelease.
 cluster-manager serve --kubeconfig ~/.kube/config
 ```
 
-Every flag has an environment variable named next to it in `--help`; flags win. The chart in
+Every flag has an environment variable named next to it in `--help`; flags win. OAuth is
+configured by mcp-oauth's `OAUTH_*` variables (`OAUTH_ISSUER`, `OAUTH_PROVIDER`,
+`OAUTH_DEX_ISSUER_URL`, `OAUTH_DEX_CLIENT_ID`, `OAUTH_DEX_CLIENT_SECRET_FILE`, `OAUTH_DEX_CA_FILE`,
+`OAUTH_TRUSTED_ISSUERS`, …); the `--oauth-*`, `--dex-*`, `--google-*` flags and their variables
+still map onto them for one more release and log a deprecation warning. The chart in
 `helm/cluster-manager` renders the Deployment, the Service, the `MCPServer` CR for muster and,
-with `oauth.enabled`, the mcp-oauth resource-server flags from the platform identity contract
-(`global.identity`).
+with `oauth.enabled`, those variables from the platform identity contract (`global.identity`).
+It lists the IdP in `OAUTH_TRUSTED_ISSUERS` as the OpenID Provider people sign in with
+(`openIDProvider`), accepting its ID tokens for the platform's OAuth client plus the
+MCPServer's `requiredAudiences`; any other audience is refused with 401. The chart's values
+follow mcp-oauth's layout for MCP servers (`oauth.resourceServer`, `oauth.authorizationServer`);
+the earlier `oauth.*` keys still work for one more release and the release notes name each one
+that is set.
 
 Traces go out over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the chart's
 `observability.otel.endpoint`); the standard `OTEL_*` variables configure the exporter and the
