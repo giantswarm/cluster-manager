@@ -379,8 +379,11 @@ func validateGitHubExchange(o *serveOptions, settings oauthconfig.Settings) erro
 		}
 		hasProvider = present
 	}
-	if !o.oauthEnabled || !o.downstreamOAuth || !hasProvider {
-		return errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
+	if !o.oauthEnabled || !o.downstreamOAuth {
+		return errors.New("GitHub token exchange requires OAuth and downstream OAuth")
+	}
+	if !hasProvider {
+		return errors.New("GitHub token exchange requires a Dex upstream or exactly one trusted openIDProvider in resource-server-only mode")
 	}
 	return o.gitHubExchangeConfig().Validate()
 }

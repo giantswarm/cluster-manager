@@ -34,15 +34,16 @@ func TestValidateGitHubExchange(t *testing.T) {
 	require.NoError(t, validateGitHubExchange(exchange(), resourceOnly))
 	resourceOnly.TrustedIssuers = append(resourceOnly.TrustedIssuers, oauthserver.TrustedIssuer{Issuer: "https://other.example.test", OpenIDProvider: true})
 	require.ErrorContains(t, validateGitHubExchange(exchange(), resourceOnly), "exactly one openIDProvider")
-	require.ErrorContains(t, validateGitHubExchange(exchange(), oauthconfig.Settings{}), "requires OAuth, downstream OAuth and an OpenID Provider", "the subject token must be a Dex token")
+	require.ErrorContains(t, validateGitHubExchange(exchange(), oauthconfig.Settings{}), "requires a Dex upstream or exactly one trusted openIDProvider in resource-server-only mode")
+	require.ErrorContains(t, validateGitHubExchange(exchange(), oauthconfig.Settings{Google: &google.Config{}}), "requires a Dex upstream or exactly one trusted openIDProvider in resource-server-only mode")
 
 	for name, scenario := range map[string]struct {
 		change func(*serveOptions)
 		want   string
 	}{
 		"option without endpoint":  {func(o *serveOptions) { o.githubExchangeEndpoint = "" }, "require --github-token-exchange-endpoint"},
-		"without OAuth":            {func(o *serveOptions) { o.oauthEnabled = false }, "requires OAuth, downstream OAuth and an OpenID Provider"},
-		"without downstream OAuth": {func(o *serveOptions) { o.downstreamOAuth = false }, "requires OAuth, downstream OAuth and an OpenID Provider"},
+		"without OAuth":            {func(o *serveOptions) { o.oauthEnabled = false }, "requires OAuth and downstream OAuth"},
+		"without downstream OAuth": {func(o *serveOptions) { o.downstreamOAuth = false }, "requires OAuth and downstream OAuth"},
 		"plain HTTP endpoint":      {func(o *serveOptions) { o.githubExchangeEndpoint = "http://muster.example/oauth/token" }, "HTTPS token endpoint"},
 		"without audience":         {func(o *serveOptions) { o.githubExchangeAudience = "" }, "an audience"},
 	} {
