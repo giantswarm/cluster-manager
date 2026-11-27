@@ -256,6 +256,33 @@ muster:
     description: Clusters and GPU node pools of this installation (list, and the node-pool writes as the person) for the Agent Platform
     # -- Extra labels on the MCPServer CR.
     labels: {}  # @schema additionalProperties: true
+    # -- The connector's tool approval (the MCPServer's `spec.approval`). Every tool
+    # of this release is listed explicitly ("Allow all" preset: a platform management
+    # server), so the connector arrives reviewed. `rule` covers tools without their
+    # own entry, new ones included. Values: Allow | Ask | Block (Block hides and
+    # refuses). Override per tool in installation values; `null` renders none (`{}`
+    # does not: Helm merges it into the default) and the connector runs every tool,
+    # shown as not reviewed. On a governed platform muster asks an agent caller before
+    # every tool not on its safe list, whatever these settings say; on a trusted
+    # platform these settings apply.
+    # Needs a muster whose MCPServer CRD carries `spec.approval`. Details:
+    # https://github.com/giantswarm/agent-platform/blob/main/docs/tool-approval.md
+    approval:
+      # @schema enum: [Allow, Ask, Block]
+      rule: Allow
+      # @schema maxProperties: 512; additionalProperties: {type: string, enum: [Allow, Ask, Block]}
+      tools:
+        get_info: Allow  # @schema enum: [Allow, Ask, Block]
+        list_clusters: Allow  # @schema enum: [Allow, Ask, Block]
+        list_releases: Allow  # @schema enum: [Allow, Ask, Block]
+        create_cluster: Allow  # @schema enum: [Allow, Ask, Block]
+        delete_cluster: Allow  # @schema enum: [Allow, Ask, Block]
+        list_node_pools: Allow  # @schema enum: [Allow, Ask, Block]
+        create_node_pool: Allow  # @schema enum: [Allow, Ask, Block]
+        delete_node_pool: Allow  # @schema enum: [Allow, Ask, Block]
+        enable_model_serving: Allow  # @schema enum: [Allow, Ask, Block]
+        disable_model_serving: Allow  # @schema enum: [Allow, Ask, Block]
+        remove_model_cache: Allow  # @schema enum: [Allow, Ask, Block]
     # -- How muster authenticates to this server; rendered only with
     # `oauth.enabled`. `forwardToken` makes muster forward the session's IdP
     # id_token byte-identical (the SSO path this chart trusts through its
