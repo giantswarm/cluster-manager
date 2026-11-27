@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,11 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/giantswarm/gitops-commit/commit"
+	"github.com/giantswarm/mcp-oauth/oauthconfig"
+	oauthserver "github.com/giantswarm/mcp-oauth/server"
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
@@ -99,25 +101,25 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.operatorDCGMExporter, "gpu-operator-dcgm-exporter", envBool("CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER", false), "Run NVIDIA's DCGM exporter on the GPU pools' nodes through the composed <cluster>-gpu-operator release (its dcgmExporter.enabled), for an installation whose observability scrapes it; off by default — nothing scrapes it out of the box, and on a fresh pool node it is an image pull and a pod initialising DCGM on the GPU while the device plugin brings nvidia.com/gpu up (CLUSTER_MANAGER_GPU_OPERATOR_DCGM_EXPORTER)")
 	f.StringVar(&o.installation, "installation", envOr("CLUSTER_MANAGER_INSTALLATION", ""), "Name of the installation: the Cluster of that name is reported as the installation's own cluster by list_clusters (CLUSTER_MANAGER_INSTALLATION)")
 	f.DurationVar(&o.applyBudget, "apply-budget", envDuration("CLUSTER_MANAGER_APPLY_BUDGET", tools.DefaultApplyBudget), "How long a write call (create_node_pool, enable_model_serving, delete_node_pool, disable_model_serving) may take before it stops writing and answers with what it did, the rest pending for the re-run: the aggregator's deadline for an upstream tool call less the answer's way back; a deadline the request carries wins when earlier (CLUSTER_MANAGER_APPLY_BUDGET)")
-	f.StringVar(&o.clusterOIDCClientID, "cluster-oidc-client-id", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID", ""), "Audience a cluster create_cluster makes accepts in the person's id_token: the cross-client audience muster requests at login, the one the installation's own apiserver trusts (dex-k8s-authenticator on Giant Swarm installations). With the Dex issuer (--dex-issuer-url, its CA from --dex-ca-file) it is composed into the cluster's global.controlPlane.oidc; empty composes none and the cluster trusts no identity provider (CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID)")
+	f.StringVar(&o.clusterOIDCClientID, "cluster-oidc-client-id", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID", ""), "Audience a cluster create_cluster makes accepts in the person's id_token: the cross-client audience muster requests at login, the one the installation's own apiserver trusts (dex-k8s-authenticator on Giant Swarm installations). With the Dex issuer (OAUTH_DEX_ISSUER_URL, its CA from OAUTH_DEX_CA_FILE), else the OAUTH_TRUSTED_ISSUERS entry marked openIDProvider (its caFile), it is composed into the cluster's global.controlPlane.oidc; empty composes none and the cluster trusts no identity provider (CLUSTER_MANAGER_CLUSTER_OIDC_CLIENT_ID)")
 	f.StringVar(&o.clusterOIDCUsernameClaim, "cluster-oidc-username-claim", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_USERNAME_CLAIM", "email"), "id_token claim a created cluster's apiserver takes as the username (CLUSTER_MANAGER_CLUSTER_OIDC_USERNAME_CLAIM)")
 	f.StringVar(&o.clusterOIDCGroupsClaim, "cluster-oidc-groups-claim", envOr("CLUSTER_MANAGER_CLUSTER_OIDC_GROUPS_CLAIM", "groups"), "id_token claim a created cluster's apiserver takes as the groups (CLUSTER_MANAGER_CLUSTER_OIDC_GROUPS_CLAIM)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("CLUSTER_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (CLUSTER_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("CLUSTER_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (CLUSTER_MANAGER_MCP_PATH)")
-	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("CLUSTER_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (CLUSTER_MANAGER_OAUTH_ENABLED)")
-	f.StringVar(&o.oauthBaseURL, "oauth-base-url", envOr("CLUSTER_MANAGER_OAUTH_BASE_URL", ""), "Public base URL of this server: the issuer of its OAuth metadata, https or loopback http (CLUSTER_MANAGER_OAUTH_BASE_URL)")
-	f.StringVar(&o.oauthProvider, "oauth-provider", envOr("CLUSTER_MANAGER_OAUTH_PROVIDER", server.ProviderDex), "Identity provider: dex or google (CLUSTER_MANAGER_OAUTH_PROVIDER)")
-	f.StringVar(&o.dexIssuerURL, "dex-issuer-url", envOr("DEX_ISSUER_URL", ""), "Dex issuer URL (DEX_ISSUER_URL)")
-	f.StringVar(&o.dexClientID, "dex-client-id", envOr("DEX_CLIENT_ID", ""), "Dex client ID (DEX_CLIENT_ID)")
-	f.StringVar(&o.dexClientSecret, "dex-client-secret", envOr("DEX_CLIENT_SECRET", ""), "Dex client secret (DEX_CLIENT_SECRET)")
-	f.StringVar(&o.dexCAFile, "dex-ca-file", envOr("DEX_CA_FILE", ""), "PEM CA bundle of a Dex with a private certificate; verifies discovery, token and JWKS calls (DEX_CA_FILE)")
+	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("CLUSTER_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint (mcp-oauth, configured by the OAUTH_* variables); the caller's identity travels with every request (CLUSTER_MANAGER_OAUTH_ENABLED)")
+	f.StringVar(&o.oauthBaseURL, "oauth-base-url", envOr("CLUSTER_MANAGER_OAUTH_BASE_URL", ""), "Deprecated: set OAUTH_ISSUER, the public base URL of this server (CLUSTER_MANAGER_OAUTH_BASE_URL)")
+	f.StringVar(&o.oauthProvider, "oauth-provider", envOr("CLUSTER_MANAGER_OAUTH_PROVIDER", ""), "Deprecated: set OAUTH_PROVIDER (dex, the default, or google) (CLUSTER_MANAGER_OAUTH_PROVIDER)")
+	f.StringVar(&o.dexIssuerURL, "dex-issuer-url", envOr("DEX_ISSUER_URL", ""), "Deprecated: set OAUTH_DEX_ISSUER_URL (DEX_ISSUER_URL)")
+	f.StringVar(&o.dexClientID, "dex-client-id", envOr("DEX_CLIENT_ID", ""), "Deprecated: set OAUTH_DEX_CLIENT_ID (DEX_CLIENT_ID)")
+	f.StringVar(&o.dexClientSecret, "dex-client-secret", envOr("DEX_CLIENT_SECRET", ""), "Deprecated: set OAUTH_DEX_CLIENT_SECRET or OAUTH_DEX_CLIENT_SECRET_FILE (DEX_CLIENT_SECRET)")
+	f.StringVar(&o.dexCAFile, "dex-ca-file", envOr("DEX_CA_FILE", ""), "Deprecated: set OAUTH_DEX_CA_FILE, the PEM CA bundle of a Dex with a private certificate (DEX_CA_FILE)")
 	f.BoolVar(&o.dexAllowPrivateIP, "allow-private-oauth-urls", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PRIVATE_URLS", false), "Deprecated, no effect: the Dex client reaches private addresses and follows HTTP_PROXY, HTTPS_PROXY and NO_PROXY without it (CLUSTER_MANAGER_OAUTH_ALLOW_PRIVATE_URLS)")
-	f.StringVar(&o.googleClientID, "google-client-id", envOr("GOOGLE_CLIENT_ID", ""), "Google OAuth client ID (GOOGLE_CLIENT_ID)")
-	f.StringVar(&o.googleClientSecret, "google-client-secret", envOr("GOOGLE_CLIENT_SECRET", ""), "Google OAuth client secret (GOOGLE_CLIENT_SECRET)")
-	f.StringVar(&o.oauthTrustedAudiences, "oauth-trusted-audiences", envOr("OAUTH_TRUSTED_AUDIENCES", ""), "Comma-separated OAuth client IDs whose IdP id_tokens are accepted as bearer tokens — the platform client muster forwards tokens for and the portal logs in with (OAUTH_TRUSTED_AUDIENCES)")
+	f.StringVar(&o.googleClientID, "google-client-id", envOr("GOOGLE_CLIENT_ID", ""), "Deprecated: set OAUTH_GOOGLE_CLIENT_ID (GOOGLE_CLIENT_ID)")
+	f.StringVar(&o.googleClientSecret, "google-client-secret", envOr("GOOGLE_CLIENT_SECRET", ""), "Deprecated: set OAUTH_GOOGLE_CLIENT_SECRET or OAUTH_GOOGLE_CLIENT_SECRET_FILE (GOOGLE_CLIENT_SECRET)")
+	f.StringVar(&o.oauthTrustedAudiences, "oauth-trusted-audiences", envOr("OAUTH_TRUSTED_AUDIENCES", ""), "Deprecated flag: set OAUTH_TRUSTED_AUDIENCES, the comma-separated OAuth client IDs whose IdP id_tokens are accepted as bearer tokens")
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Deprecated, no effect: the issuer host's JWKS endpoint may resolve to a private address without it; list any other JWKS host in --sso-allow-private-ip-jwks-hosts (SSO_ALLOW_PRIVATE_IPS)")
-	f.StringVar(&o.ssoAllowPrivateIPJWKSHosts, "sso-allow-private-ip-jwks-hosts", envOr("SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS", ""), "Comma-separated hosts, other than the issuer's own, whose JWKS may resolve to an RFC 1918 or RFC 4193 address: a jwks_uri the IdP's discovery document puts on another host. Loopback and link-local stay refused (SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS)")
-	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
+	f.StringVar(&o.ssoAllowPrivateIPJWKSHosts, "sso-allow-private-ip-jwks-hosts", envOr("SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS", ""), "Deprecated: set OAUTH_ALLOW_PRIVATE_IP_JWKS_HOSTS (SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS)")
+	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Deprecated: set OAUTH_ALLOW_PUBLIC_CLIENT_REGISTRATION (CLUSTER_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("CLUSTER_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none). Needs --enable-oauth and an apiserver that trusts the IdP (CLUSTER_MANAGER_DOWNSTREAM_OAUTH)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("CLUSTER_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user on the fetched grant and commit mode's pull request (CLUSTER_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint (muster's broker) that releases the person's GitHub App user grant for commit mode, in place of the App-pinned registration (CLUSTER_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
@@ -144,7 +146,14 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
 	}
-	if err := validateGitHubExchange(o); err != nil {
+	var oauthSettings oauthconfig.Settings
+	if o.oauthEnabled {
+		var err error
+		if oauthSettings, err = loadOAuthSettings(o, log); err != nil {
+			return fmt.Errorf("oauth: %w", err)
+		}
+	}
+	if err := validateGitHubExchange(o, oauthSettings.Dex != nil); err != nil {
 		return err
 	}
 
@@ -200,7 +209,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return tools.Clients{Dynamic: target.Dynamic, Discovery: target.Discovery}, nil
 	}
 	toolsCfg := tools.Config{Installation: o.installation, ModelManagerNamespace: o.modelManagerNamespace, ServingNamespace: o.servingNamespace, CacheClaimName: o.servingCacheClaim, SliceChartVersion: o.sliceChartVersion, TenantServiceAccount: o.tenantServiceAccount, CertificateIssuer: o.certificateIssuer, OperatorDCGMExporter: o.operatorDCGMExporter, ApplyBudget: o.applyBudget}
-	if toolsCfg.ClusterOIDC, err = o.clusterOIDC(); err != nil {
+	if toolsCfg.ClusterOIDC, err = o.clusterOIDC(oauthSettings, log); err != nil {
 		return err
 	}
 	opts := []tools.Option{
@@ -228,20 +237,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	cfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
 	if o.oauthEnabled {
-		cfg.OAuth = &server.OAuthConfig{
-			BaseURL:                       o.oauthBaseURL,
-			Provider:                      o.oauthProvider,
-			DexIssuerURL:                  o.dexIssuerURL,
-			DexClientID:                   o.dexClientID,
-			DexClientSecret:               o.dexClientSecret,
-			DexCAFile:                     o.dexCAFile,
-			GoogleClientID:                o.googleClientID,
-			GoogleClientSecret:            o.googleClientSecret,
-			TrustedAudiences:              splitList(o.oauthTrustedAudiences),
-			AllowPrivateIPJWKSHosts:       splitList(o.ssoAllowPrivateIPJWKSHosts),
-			AllowPublicClientRegistration: o.allowPublicClientRegistration,
-			DownstreamOAuth:               o.downstreamOAuth,
-		}
+		cfg.OAuth = &server.OAuthConfig{Settings: oauthSettings, DownstreamOAuth: o.downstreamOAuth}
 	}
 	srv, err := server.New(cfg, api.NewMCPServer(svc, version), log)
 	if err != nil {
@@ -252,16 +248,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return srv.Run(ctx)
-}
-
-func splitList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func envOr(key, def string) string {
@@ -296,22 +282,70 @@ func envBool(key string, def bool) bool {
 }
 
 // clusterOIDC is the identity provider a created cluster is composed to
-// trust: the Dex this server validates the person's id_token against, with
-// the audience the installation's apiserver accepts. Nil without a Dex or an
-// audience.
-func (o *serveOptions) clusterOIDC() (*compose.ClusterOIDC, error) {
-	if !o.oauthEnabled || o.oauthProvider != server.ProviderDex || o.dexIssuerURL == "" || o.clusterOIDCClientID == "" {
+// trust: the Dex this server signs people in with, else the trusted issuer
+// marked as the OpenID Provider (its CA from its caFile), with the audience
+// the installation's apiserver accepts. Nil without an audience or such a
+// provider; the latter is logged, since the --cluster-oidc-* flags then have
+// no effect.
+func (o *serveOptions) clusterOIDC(settings oauthconfig.Settings, log *slog.Logger) (*compose.ClusterOIDC, error) {
+	if !o.oauthEnabled || o.clusterOIDCClientID == "" {
 		return nil, nil
 	}
-	out := &compose.ClusterOIDC{IssuerURL: o.dexIssuerURL, ClientID: o.clusterOIDCClientID, UsernameClaim: o.clusterOIDCUsernameClaim, GroupsClaim: o.clusterOIDCGroupsClaim}
-	if o.dexCAFile != "" {
-		ca, err := os.ReadFile(o.dexCAFile)
+	var issuer, caFile string
+	switch provider, ok := openIDProvider(settings.TrustedIssuers); {
+	case settings.Dex != nil && settings.Dex.IssuerURL != "":
+		issuer, caFile = settings.Dex.IssuerURL, os.Getenv("OAUTH_DEX_CA_FILE")
+	case ok:
+		issuer = provider.Issuer
+		var err error
+		if caFile, err = trustedIssuerCAFile(os.Getenv("OAUTH_TRUSTED_ISSUERS"), issuer); err != nil {
+			return nil, err
+		}
+	default:
+		log.Warn("created clusters trust no identity provider: --cluster-oidc-client-id is set, but there is neither a Dex provider (OAUTH_DEX_ISSUER_URL) nor a trusted issuer marked openIDProvider (OAUTH_TRUSTED_ISSUERS)")
+		return nil, nil
+	}
+	out := &compose.ClusterOIDC{IssuerURL: issuer, ClientID: o.clusterOIDCClientID, UsernameClaim: o.clusterOIDCUsernameClaim, GroupsClaim: o.clusterOIDCGroupsClaim}
+	if caFile != "" {
+		ca, err := os.ReadFile(caFile) // #nosec G304 G703 -- operator-provided path
 		if err != nil {
-			return nil, fmt.Errorf("read the Dex CA for the created clusters' OIDC: %w", err)
+			return nil, fmt.Errorf("read the identity provider's CA for the created clusters' OIDC: %w", err)
 		}
 		out.CAPem = string(ca)
 	}
 	return out, nil
+}
+
+// openIDProvider is the trusted issuer people sign in with, if one is marked.
+func openIDProvider(issuers []oauthserver.TrustedIssuer) (oauthserver.TrustedIssuer, bool) {
+	for _, issuer := range issuers {
+		if issuer.OpenIDProvider {
+			return issuer, true
+		}
+	}
+	return oauthserver.TrustedIssuer{}, false
+}
+
+// trustedIssuerCAFile is the caFile of the OAUTH_TRUSTED_ISSUERS entry for
+// issuer: mcp-oauth keeps only the loaded pool, and a created cluster needs
+// the PEM.
+func trustedIssuerCAFile(raw, issuer string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	var entries []struct {
+		Issuer string `json:"issuer"`
+		CAFile string `json:"caFile"`
+	}
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return "", fmt.Errorf("OAUTH_TRUSTED_ISSUERS: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Issuer == issuer {
+			return entry.CAFile, nil
+		}
+	}
+	return "", nil
 }
 
 func (o *serveOptions) gitHubExchangeConfig() server.GitHubExchangeConfig {
@@ -320,14 +354,14 @@ func (o *serveOptions) gitHubExchangeConfig() server.GitHubExchangeConfig {
 
 // validateGitHubExchange checks the token exchange options: the exchange's
 // subject is the caller's IdP token, so it needs Dex and downstream OAuth.
-func validateGitHubExchange(o *serveOptions) error {
+func validateGitHubExchange(o *serveOptions, dex bool) error {
 	if o.githubExchangeEndpoint == "" {
 		if o.githubExchangeClient != "" || o.githubExchangeClientFile != "" || o.githubExchangeSecretFile != "" || o.githubExchangeAudience != "" || o.githubExchangeCAFile != "" {
 			return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
 		}
 		return nil
 	}
-	if !o.oauthEnabled || !o.downstreamOAuth || o.oauthProvider != server.ProviderDex {
+	if !o.oauthEnabled || !o.downstreamOAuth || !dex {
 		return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
 	}
 	return o.gitHubExchangeConfig().Validate()
